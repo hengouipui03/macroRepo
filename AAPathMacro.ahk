@@ -16,7 +16,9 @@ global WINDOW_W := 1401
 global WINDOW_H := 975
 global ACTION_GAP_MS := 300,gLastInputFinishedAt := 0
 global ACTION_HOLD_MS := 300
-global UNIT_ACTION_MS := 200
+; Unit placement/selection key holds, click holds, gaps and cursor travel.
+; 150 ms (was 200): still a full held press for Roblox, about 25% faster.
+global UNIT_ACTION_MS := 150
 ; Manager-safe click-away (reference 800x600): empty world left of the open F
 ; unit manager, right of "Return to lobby", above the cards, outside the unit panel.
 global CLICK_AWAY_X := 497,CLICK_AWAY_Y := 168
@@ -707,9 +709,12 @@ HoldArrow(key, durationMs) {
     if !BeginInputAction()
         return false
     Send "{" key " down}"
-    try return ActionPause(durationMs)
+    held := [{key:key}]
+    ; A card releases the key before it is chosen (no walking during cards).
+    try return MovementHoldUntil(A_TickCount+durationMs,held)
     finally {
-        Send "{" key " up}"
+        if held.Length
+            Send "{" key " up}"
         EndInputAction()
     }
 }

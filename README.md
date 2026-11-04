@@ -174,7 +174,7 @@ not depend on old units staying on screen: upgrades select their purchase
 numbers in the F manager. At checkpoint 3, five misses refresh the local search
 and placement continues until the build is complete or the match ends.
 
-Unit selection and placement clicks, keys and cursor travel use 200 ms holds
+Unit selection and placement clicks, keys and cursor travel use 150 ms holds
 and action intervals, including F-manager navigation. Other UI actions, P,
 Vote Start and upgrade R retain their existing 300 ms timing. Redundant preview
 cancellations are skipped. Menu clicks no longer add multi-second fixed pauses.
@@ -432,7 +432,7 @@ Click-aways use (497,168), left of the open manager. See MACRO_BEHAVIOUR.md.
 Validation: CheckpointManagerTests.py exercises route quarters, purchase-order
 selection through twenty entries, odd counts, bottom reset, and one-notch upward scrolling.
 UnitManagerVisionTests.py checks the supplied screenshot at multiple sizes and
-rejects portrait click areas hidden by the viewport. ActionPacingTests.py covers 200 ms unit actions
+rejects portrait click areas hidden by the viewport. ActionPacingTests.py covers 150 ms unit actions
 and unchanged 300 ms general controls. PlacementConfirmationTests.py checks
 panel-only confirmation, placement caps and continued placement at checkpoint 3.
 CardPriorityTests.py checks green Speed and unreadable green ahead of Yen/Boss,

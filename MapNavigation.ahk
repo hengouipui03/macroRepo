@@ -11,6 +11,9 @@ global VISION_PYTHON := "pythonw.exe"
 global gVision := 0, gVisionFailed := false, gMoveKeys := 0, gPathLit := false,gPathToggleClicked := false
 global gVisionRetryAt := 0
 global PROBE_MS := 220, PROBE_SETTLE_MS := 140
+; A card that appears mid-walk pauses movement: keys are released first, the
+; card is chosen, then the walk resumes from the player's actual position.
+global gMovementInterrupted := false,gMovementCardMs := 0,gMovementCardTotalMs := 0
 OnExit(VisionClose)
 
 MiniMapBounds(cw,ch) {
@@ -853,7 +856,7 @@ MovePrediction(presses,keys) {
 }
 
 HoldKeys(presses) {
-    global gRunning
+    global gRunning,gCardAction,gCardInterruptEpoch,gMovementInterrupted
     if !gRunning || !presses.Length
         return false
     hwnd := FindRoblox()
@@ -862,8 +865,19 @@ HoldKeys(presses) {
     WinActivate "ahk_id " hwnd
     if !WinWaitActive("ahk_id " hwnd,,1)
         return false
-    if !BeginInputAction()
+    ; A card already on screen is chosen before any movement key goes down.
+    if gCardAction!="" && HasCardChoice() {
+        MovementCardPause()
+        return gRunning
+    }
+    epoch := gCardInterruptEpoch
+    if !BeginInputAction() {
+        if gRunning && epoch!=gCardInterruptEpoch {
+            gMovementInterrupted := true
+            return true
+        }
         return false
+    }
     held := [],started := A_TickCount,text := ""
     for press in presses
         text .= " " press.key " " press.ms "ms"
@@ -877,8 +891,11 @@ HoldKeys(presses) {
                 if press.ms<held[next].ms
                     next := index
             }
-            if !ActionPause(Max(0,started+held[next].ms-A_TickCount))
+            if !MovementHoldUntil(started+held[next].ms,held)
                 return false
+            ; A card released every key: this move ends here.
+            if !held.Length
+                break
             Send "{" held[next].key " up}"
             held.RemoveAt(next)
         }
@@ -890,14 +907,79 @@ HoldKeys(presses) {
     }
 }
 
+; Wait out a held move. A card appearing releases every held key BEFORE the
+; card is chosen, so the player never keeps walking during card selection.
+MovementHoldUntil(deadline,held) {
+    global gRunning,gCardAction
+    checkAt := 0
+    while gRunning && A_TickCount<deadline {
+        if gCardAction!="" && A_TickCount>=checkAt {
+            checkAt := A_TickCount+100
+            if HasCardChoice() {
+                for press in held
+                    Send "{" press.key " up}"
+                held.Length := 0
+                MovementCardPause()
+                return gRunning
+            }
+        }
+        Sleep Min(20,Max(1,deadline-A_TickCount))
+    }
+    return gRunning
+}
+
+; Choose the card with every movement key up; the walk resumes afterwards.
+MovementCardPause() {
+    global gMovementInterrupted,gMovementCardMs,gMovementCardTotalMs
+    started := A_TickCount
+    Log("Card appeared while moving; movement keys released and walking paused until the card is chosen.")
+    ClearCardChoice()
+    elapsed := A_TickCount-started
+    gMovementInterrupted := true,gMovementCardMs += elapsed,gMovementCardTotalMs += elapsed
+}
+
+; Short settle pause between moves. A card handled here (keys are already up)
+; marks the move as interrupted instead of abandoning the walk.
+MovementPause(ms) {
+    global gRunning,gCardInterruptEpoch,gMovementInterrupted,gMovementCardMs,gMovementCardTotalMs
+    epoch := gCardInterruptEpoch,started := A_TickCount
+    if ActionPause(ms)
+        return true
+    if gRunning && epoch!=gCardInterruptEpoch {
+        elapsed := A_TickCount-started
+        gMovementInterrupted := true,gMovementCardMs += elapsed,gMovementCardTotalMs += elapsed
+        return true
+    }
+    return false
+}
+
+; Card time does not count against a walk's time budget.
+TakeMovementCardMs() {
+    global gMovementCardMs,gPrepDeadline
+    ms := gMovementCardMs,gMovementCardMs := 0
+    if ms && gPrepDeadline
+        gPrepDeadline += ms
+    return ms
+}
+
 NavigateWithKeys() {
-    global gMapModel,gRunning,gMapWalking,gMoveKeys,gPathLit,MAP_GRID
+    global gMapModel,gRunning,gMapWalking,gMoveKeys,gPathLit,MAP_GRID,gMovementInterrupted
     if !gMapModel.player || gMapModel.target<0
         return false
+    gMovementInterrupted := false,TakeMovementCardMs()
     gMapWalking := true,deadline := A_TickCount+PrepTimeLeft(),drift := 0
     toTarget := MapDistances(gMapModel.nodes,gMapModel.target),escape := 0,escapeFrom := 0,joining := false
     try {
         while gRunning && A_TickCount<deadline {
+            if gMovementInterrupted {
+                ; Resume the same destination from where the player now stands.
+                gMovementInterrupted := false,escape := 0
+                Log("Card chosen; resume walking the route from the player's current position.")
+                if !RefreshMapPlayer() && !ProbeKeyPair("w","s").found {
+                    Log("Player arrow not found after the card; stopped.")
+                    return false
+                }
+            }
             p := gMapModel.player,target := gMapModel.target
             tx := Mod(target,MAP_GRID),ty := target//MAP_GRID
             if MapDistance(p.x,p.y,tx,ty)<2.2 {
@@ -939,8 +1021,11 @@ NavigateWithKeys() {
             if gPathLit
                 presses := FollowLitPath(presses)
             expected := MovePrediction(presses,gMoveKeys),before := {x:p.x,y:p.y}
-            if !HoldKeys(presses) || !ActionPause(90)
+            if !HoldKeys(presses) || !MovementPause(90)
                 return false
+            deadline += TakeMovementCardMs()
+            if gMovementInterrupted
+                continue
             predicted := {x:before.x+expected.x,y:before.y+expected.y}
             if !RefreshMapPlayer(predicted,4+MapDistance(0,0,expected.x,expected.y)*0.6) {
                 ; Lost under an icon or the frame: find it again by movement.
@@ -967,6 +1052,7 @@ NavigateWithKeys() {
                 }
                 if !EscapeObstacle(wx-before.x,wy-before.y,escape)
                     return false
+                deadline += TakeMovementCardMs()
                 continue
             }
             ; Sliding along an obstacle travels off-direction too; only a move
@@ -1011,7 +1097,7 @@ EscapeSteps(dx,dy,attempt) {
 }
 
 EscapeObstacle(dx,dy,attempt) {
-    global gMapModel,gMoveKeys
+    global gMapModel,gMoveKeys,gMovementInterrupted
     Log("Blocked; obstacle attempt " attempt (attempt=1?" (jump)":" (step around)") ".")
     for step in EscapeSteps(dx,dy,attempt) {
         presses := MoveDurations(step.x,step.y,gMoveKeys,1200,1.0)
@@ -1023,8 +1109,11 @@ EscapeObstacle(dx,dy,attempt) {
         if step.jump
             presses.Push({key:"space",ms:longest})
         before := gMapModel.player
-        if !HoldKeys(presses) || !ActionPause(90)
+        if !HoldKeys(presses) || !MovementPause(90)
             return false
+        ; A card stopped this escape; the walk resumes after re-reading the player.
+        if gMovementInterrupted
+            return true
         if !RefreshMapPlayer({x:before.x+expected.x,y:before.y+expected.y},4+MapDistance(0,0,expected.x,expected.y)*0.6) && !ProbeKeyPair("w","s").found {
             Log("Player arrow lost while getting around an obstacle; stopped.")
             return false

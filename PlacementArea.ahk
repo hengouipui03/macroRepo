@@ -2,11 +2,16 @@
 global gPlacementAreaFailures := Map(),gRunViewMoved := false
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
 global PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
+; Relocation walking (card time excluded) past 20 s without reaching the
+; checkpoint teleports back to spawn via Settings, then walks again from there.
+global RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0
 
 ResetPlacementArea() {
     global gPlacementAreaFailures,gRunViewMoved,gPlacementViewRecovery,gPlacementRelocateRetryAt
+    global gRelocationWalkMs,gRelocationWalkTarget,gRelocationTeleports
     gPlacementAreaFailures := Map(),gRunViewMoved := false
     gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
+    gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0
     ResetPlacementFailureStreak()
 }
 
@@ -192,6 +197,7 @@ RelocatePlacementArea(unit) {
     global gRunning,gPlacements,gPendingPlacement,gCardAction,gMapModel
     global gPrepDeadline,gNavigationTimedOut,gPlacementViewRecovery,gRunViewMoved,gPlacementProfile
     global gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
+    global RELOCATION_TELEPORT_MS,gRelocationWalkMs,gRelocationWalkTarget,gRelocationTeleports,gMovementCardTotalMs
     if !gRunning || IsEndGameBlocking() || !ClearCardChoice()
         return false
     if gPendingPlacement
@@ -213,11 +219,29 @@ RelocatePlacementArea(unit) {
         item.viewPending := true
     gPlacementViewRecovery := 0,gRunViewMoved := true,gPlacementProfile := ""
     previous := gCardAction,gCardAction := "relocating"
-    oldDeadline := gPrepDeadline,gPrepDeadline := A_TickCount+30000
+    if gRelocationWalkTarget!=next
+        gRelocationWalkTarget := next,gRelocationWalkMs := 0,gRelocationTeleports := 0
+    ; Walking time for this checkpoint accumulates across retries.
+    oldDeadline := gPrepDeadline,gPrepDeadline := A_TickCount+Max(3000,RELOCATION_TELEPORT_MS-gRelocationWalkMs)
     try {
         Log("Follow the drawn route to checkpoint " next "/3 (" (next*25) "% toward base).")
-        if !NavigateDrawing()
+        started := A_TickCount,cardsBefore := gMovementCardTotalMs
+        reached := NavigateDrawing()
+        gRelocationWalkMs += Max(0,A_TickCount-started-(gMovementCardTotalMs-cardsBefore))
+        if !reached && gRunning && !IsEndGameBlocking() && gRelocationWalkMs>=RELOCATION_TELEPORT_MS && gRelocationTeleports<2 {
+            gRelocationTeleports += 1,gRelocationWalkMs := 0
+            Log("Moving for 20 s without reaching checkpoint " next "; teleport back to spawn, then resume the route from there.")
+            if TeleportBackToSpawn() {
+                gPrepDeadline := A_TickCount+30000
+                if RefreshMapPlayer() || ProbePlayer()
+                    reached := NavigateDrawing()
+                else
+                    Log("Player marker not found after teleporting to spawn.")
+            }
+        }
+        if !reached
             return ContinuePlacementInCurrentView(unit,"Checkpoint " next " not reached yet; keep that destination and retry.")
+        gRelocationWalkTarget := 0,gRelocationWalkMs := 0,gRelocationTeleports := 0
         gMapModel.checkpointIndex := next
         gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
         ResetPlacementFailureStreak()
@@ -229,4 +253,59 @@ RelocatePlacementArea(unit) {
     } finally {
         gPrepDeadline := oldDeadline,gCardAction := previous
     }
+}
+
+; Settings gear (bottom left) -> "Teleport back to Spawn" -> close Settings.
+; The arrow button is clicked only on the row OCR confirms as "Teleport back to
+; Spawn"; "Return to Lobby" sits on the next row and is never clicked.
+TeleportBackToSpawn() {
+    global gRunning,REF_W,REF_H
+    if !gRunning || HasCardChoice() || IsEndGameBlocking() || !GetClient(&cx,&cy,&cw,&ch)
+        return false
+    ReleaseMovementKeys()
+    if !ButtonPosition("SettingsGear",&gx,&gy) || !ClickRef(gx,gy)
+        return false
+    row := 0,lobbyY := -1,opened := false
+    Loop 8 {
+        if !ActionPause(250)
+            break
+        for candidate in ReadOcrRows(215,190,640,470) {
+            text := NormalizeWords(candidate.text)
+            opened := opened || RegExMatch(text,"settings|gameplay|spawn|lobby")
+            if RegExMatch(text,"lobby")
+                lobbyY := (candidate.y+candidate.h/2)*REF_H/ch
+            else if !row && RegExMatch(text,"teleport\s*back|back\s*to\s*spawn")
+                row := candidate
+        }
+        if row
+            break
+    }
+    if !row {
+        Log("Settings did not show 'Teleport back to Spawn'; nothing clicked inside Settings.")
+        if opened
+            CloseSettingsAfterTeleport()
+        return false
+    }
+    ry := (row.y+row.h/2)*REF_H/ch+5
+    if lobbyY>=0 && Abs(lobbyY-ry)<25 {
+        Log("Teleport row is too close to Return to Lobby; not clicked.")
+        CloseSettingsAfterTeleport()
+        return false
+    }
+    Log("Settings: click Teleport back to Spawn.")
+    clicked := ClickRef(515,ry)
+    ActionPause(1500)
+    CloseSettingsAfterTeleport()
+    return clicked
+}
+
+; Settings' own red X at the panel's top right; the boss bar above is excluded.
+CloseSettingsAfterTeleport() {
+    global REF_W,REF_H
+    x := 570,y := 131
+    frame := RefPixels(540,104,605,165)
+    if frame.valid && FindCompactRedControl(frame,&nx,&ny) && GetClient(&cx,&cy,&cw,&ch)
+        x := nx*REF_W/cw,y := ny*REF_H/ch
+    ClickRef(x,y)
+    ActionPause(300)
 }

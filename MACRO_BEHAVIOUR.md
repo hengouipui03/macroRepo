@@ -105,6 +105,9 @@ F6 → StartMacro → RunMacro (loops on "replay")
 - **Purchase confirmation:** the side unit panel opening after the click confirms the purchase. Before buying, a selection-only click rejects spots that already hold a unit. Failed spots (14 px radius) are skipped for the rest of the game.
 - **Recovery:** a purchase hidden by cards is re-checked with selection-only clicks and never bought twice (`RecoverPendingPlacement`).
 - **Relocation:** 5 consecutive failed purchases move the player to the next route checkpoint (25% → 50% → 75%). At checkpoint 3 it keeps trying locally.
+  - **Cards while walking:** every movement key is released *before* the card is chosen (`MovementHoldUntil`, `MovementCardPause`), so the player stands still during card selection. Afterwards the walk resumes toward the same checkpoint from the player's actual position, and card time does not count against the walk.
+  - **20-second rule:** if relocation walking (card time excluded, added up across retries for the same checkpoint) passes 20 s without arriving, `TeleportBackToSpawn()` clicks the Settings gear (bottom left), then the arrow button on the row OCR confirms as "Teleport back to Spawn", then Settings' red X. It then re-finds the player and walks to the same checkpoint from spawn. "Return to Lobby" (the next row down) is never clicked. At most 2 teleports per checkpoint.
+- **Speed:** unit placement/selection holds, gaps and cursor travel are 150 ms (was 200 ms), and the pause after a confirmed placement is 100 ms (was 180 ms). Panel-confirmation waits are unchanged, so purchases are still verified.
 - **Blocked copies** wait 10 s (Hill) or 0.3–3 s while the other slots continue.
 - **No upgrades during placement.** Upgrades need the F manager, and F is only allowed once every unit is placed, so the build loop no longer calls `UpgradePriorityPass`. Consequence: if a unit can never be placed (for example a Hill-only unit with no Hill space), upgrades do not start for that match.
 - **Click-away after each confirmed placement** uses the same (497,168) point.
@@ -156,7 +159,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 | `BuildGui`, `AddReadableEdit` | Build the macro window (units, cards, learning, Discord tabs, activity log). |
 | `FindRoblox`, `GetClient`, `ToScreen`, `MoveRef`, `SmoothMoveTo` | Locate Roblox, its client rect, convert reference coordinates to screen, and move the cursor smoothly. |
 | `ClickRef`, `ButtonPosition`, `ClickButton` | Click a reference point (with optional re-check after moving), or a learned/static named button. |
-| `BeginInputAction`, `EndInputAction`, `ActionPause` | Input pacing (300 ms general, 200 ms unit actions), interruptible pauses that also poll for cards. |
+| `BeginInputAction`, `EndInputAction`, `ActionPause` | Input pacing (300 ms general, 150 ms unit actions), interruptible pauses that also poll for cards. |
 | `ResizeRoblox`, `AttachRoblox`, `OnMacroWindowMove`, `RefreshStatus` | Window size and docking. |
 | `RGB`, `IsUiGreen`, `IsUiRed`, `IsUiYellow`, `IsBubbleBlue/Red`, `IsMiniMapRouteGreen`, `IsMiniMapPlayerWhite`, `CountRef`, `FindUiGreenCentre` | Colour predicates and counting. |
 | `GetMiniMapRoutePoints`, `FindNearestRoutePoint`, `FindNextRouteWaypoint`, `FindMiniMapPlayer`, `ArrowPose`, `MapDistance`, `HoldArrow`, `NavigateAlongRoute` | AHK fallback minimap reading and route following. |
@@ -230,7 +233,8 @@ F6 → StartMacro → RunMacro (loops on "replay")
 |---|---|
 | `ResetPlacementArea`, `PlacementFailureLimitReached`, `ResetPlacementFailureStreak`, `RecordFailedPlacement`, `PlacementCopyFailures` | Five-consecutive-failure streak. |
 | `PlacementAnchorKnown`, `PlacementViewCanShift`, `ShiftRecordedPlacements`, `ContinuePlacementInCurrentView`, `RecoverPlacementView` | Keep recorded coordinates valid when the view moves. |
-| `PlacementRelocationDirection`, `PlacementFarthestUnit`, `PlacementRelocationRoom`, `CheckRelocationUnit`, `RelocatePlacementArea`, `RetryFinalCheckpointPlacement` | Move to the next checkpoint. Keep trying locally at checkpoint 3. |
+| `PlacementRelocationDirection`, `PlacementFarthestUnit`, `PlacementRelocationRoom`, `CheckRelocationUnit`, `RelocatePlacementArea`, `RetryFinalCheckpointPlacement` | Move to the next checkpoint (20 s walking rule, then teleport and resume). Keep trying locally at checkpoint 3. |
+| `TeleportBackToSpawn`, `CloseSettingsAfterTeleport` | Settings gear → OCR-confirmed "Teleport back to Spawn" arrow → close Settings with its red X. |
 
 ### Learning.ahk
 | Function | What it does |
@@ -259,7 +263,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 | `LogCardDecision` | Decision log. |
 
 ### MapNavigation.ahk
-Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `MapComponents`, `MapGreenMask`, `MapBits`, `MapFromBits`, `MapBridgeFragments`, `MapGapOccluded`, `MapThin`, `MapWhiteComponents`, `MapMarkers`, `MapNearest`, `MapDistances`, `MapShortestPath`), checkpoints (`MapPlacementCheckpoints`, `MapRecommendedTarget`), map variants (`ReadMapModel`, `BuildMapModel`, `ArchiveMapModel`, `OccludedShapeMatch`), the timed preparation (`PrepTimeLeft`, `BeginTimedPreparation`, `FinishNavigationTimeout`), movement (`NavigateDrawing`, `NavigateByHeading`, `MapLineFollowsRoute`, `ProbePlayer`, `ProbeKeyPair`, `MoveVectorsAgree`, `MoveDurations`, `MovePrediction`, `HoldKeys`, `NavigateWithKeys`, `LearnMoveKey`, `RouteProgress`), obstacles (`EscapeSteps`, `EscapeObstacle`: jump, then step around up to 18 cells, 7 attempts), the Python service (`VisionRequest`, `VisionOk`, `VisionClose`, `VisionSync`, `VisionMapModel`, `VisionModelFromScan`, `VisionSetPlayer`, `VisionRefreshPlayer`, `RefreshMapPlayer`, `WorldRequest`), and the lit path (`EnsurePathLit`, which clicks P at most once; `FollowLitPath`, `AimPresses`, `BesidePathCandidates`, `OnLitPath`).
+Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `MapComponents`, `MapGreenMask`, `MapBits`, `MapFromBits`, `MapBridgeFragments`, `MapGapOccluded`, `MapThin`, `MapWhiteComponents`, `MapMarkers`, `MapNearest`, `MapDistances`, `MapShortestPath`), checkpoints (`MapPlacementCheckpoints`, `MapRecommendedTarget`), map variants (`ReadMapModel`, `BuildMapModel`, `ArchiveMapModel`, `OccludedShapeMatch`), the timed preparation (`PrepTimeLeft`, `BeginTimedPreparation`, `FinishNavigationTimeout`), movement (`NavigateDrawing`, `NavigateByHeading`, `MapLineFollowsRoute`, `ProbePlayer`, `ProbeKeyPair`, `MoveVectorsAgree`, `MoveDurations`, `MovePrediction`, `HoldKeys`, `NavigateWithKeys`, `LearnMoveKey`, `RouteProgress`), obstacles (`EscapeSteps`, `EscapeObstacle`: jump, then step around up to 18 cells, 7 attempts), cards while walking (`MovementHoldUntil`, `MovementCardPause`, `MovementPause`, `TakeMovementCardMs`: keys up before the card, then resume from the actual position), the Python service (`VisionRequest`, `VisionOk`, `VisionClose`, `VisionSync`, `VisionMapModel`, `VisionModelFromScan`, `VisionSetPlayer`, `VisionRefreshPlayer`, `RefreshMapPlayer`, `WorldRequest`), and the lit path (`EnsurePathLit`, which clicks P at most once; `FollowLitPath`, `AimPresses`, `BesidePathCandidates`, `OnLitPath`).
 
 ### Endgame.ahk
 `ResetEndGameFlow`, `EndEmptyScreen`, `EndScreenColours`, `ParseEndScreenRows`, `ReadEndScreen` (300 ms cache), `IsEndGameBlocking`, `HasDefeatNext`, `HasReplayButton`, `EndGameButtonStillVisible`, `ClickEndGameButton`, `ReadEndOutcome`, `EndRewardClickAllowed`, `DismissEndRewards`, `TryEndState`, `WaitForReplayVoteStart`.

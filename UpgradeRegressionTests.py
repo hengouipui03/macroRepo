@@ -54,6 +54,7 @@ global moveCalls := 0,shiftReads := 0,trackingOkay := true,cameraShifts := [{dx:
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global relocationSceneOkay := true,rememberOkay := true,scaleMovement := false,lastDuration := 120,lastMovementKey := ""
 global gMapModel := 0,gMoveKeys := 0,MAP_GRID := 96,baseRoute := [101,102,103,104]
+global navWalkMs := 0,RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0,gMovementCardTotalMs := 0,teleports := 0
 
 try {
     a := Unit(1,7),b := Unit(2,2)
@@ -202,6 +203,12 @@ try {
     Loop 5
         PlacementCopyFailures(a,true)
     Assert(!RelocatePlacementArea(a) && gMapModel.checkpointIndex=1 && gMapModel.target=1020 && gRunning,"failed checkpoint travel advanced the index or stopped the macro")
+    ; 20 s of relocation walking without arrival teleports back to spawn, then walks again.
+    beforeMoves := moveCalls,teleports := 0,navWalkMs := 21000
+    Loop 5
+        PlacementCopyFailures(a,true)
+    Assert(!RelocatePlacementArea(a) && teleports=1 && moveCalls=beforeMoves+2,"20 s of failed relocation walking did not teleport to spawn and resume")
+    navWalkMs := 0
     navReached := true,gMapModel.checkpointIndex := 0
     ResetPlacementFailureStreak()
     Assert(PlacementFailureLimitReached() && RelocatePlacementArea(a) && gMapModel.checkpointIndex=1,"placement started before reaching the first checkpoint")
@@ -256,6 +263,12 @@ EndInputAction(*) => 0
 Log(*) => 0
 ClearCardChoice(*) => true
 SaveUpgradeDiagnostic(*) => 0
+TeleportBackToSpawn(*) {
+    global teleports
+    teleports += 1
+    return true
+}
+ProbePlayer(*) => true
 HasCardChoice(*) => false
 HasUnitPanel(*) => panel
 OpenRecordedUnit(item) {
@@ -405,8 +418,9 @@ BlockedPlacementEdge(*) => false
 SamePlacementEdge(*) => false
 RefreshMapPlayer(*) => true
 NavigateDrawing(*) {
-    global moveCalls
+    global moveCalls,testNow
     moveCalls += 1
+    testNow += navWalkMs
     return navReached
 }
 RefreshPlacementSearch(*) => 0

@@ -397,7 +397,7 @@ FinishPlacement(unit,point) {
     }
     gPendingPlacement := 0
     ClickAwayFromUnitPanel()
-    return ActionPause(180)
+    return ActionPause(100)
 }
 
 
