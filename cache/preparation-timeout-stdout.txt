@@ -1,0 +1,1 @@
+PASS: 50-second shared preparation budget; no separate 24-second cap; both navigation paths mark expiry; current location retained; placement resumes; marker errors/F7 still stop. No vote-to-lose input.

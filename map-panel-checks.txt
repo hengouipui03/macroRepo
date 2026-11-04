@@ -1,0 +1,4 @@
+﻿PASS: Map tab controls and drawing updated while hidden.
+PASS: Map tab controls and drawing updated while hidden.
+PASS: Map tab controls and drawing updated while hidden.
+PASS: Map tab controls and drawing updated while hidden.

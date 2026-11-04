@@ -1,0 +1,111 @@
+﻿PASS: 11 navigation checks
+PASS: 11 navigation checks; 56 learning/policy checks
+PASS: 11 navigation checks; 56 learning/policy checks
+PASS: 11 navigation checks; 56 learning/policy checks; 20 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 20 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 34 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 38 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 42 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 69 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 70 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1439 learning/policy checks; 43 minimap checks
+FAIL: Red artwork outweighed a green card border (C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk:6)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (6) : [AssertLearning] Throw Error(message)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (135) : [RunLearningTests] AssertLearning(CardBorderKind(CardRectangle(1),CardBorderFixture(true))="buff","Red artwork outweighed a green card border")
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.check.tmp.ahk (1352) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.check.tmp.ahk (74) : [] result := RunSelfTests()
+> Auto-execute
+
+PASS: 11 navigation checks; 1441 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1441 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1441 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1441 learning/policy checks; 43 minimap checks
+FAIL: Secret-rate card reward did not survive reload (C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk:6)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (6) : [AssertLearning] Throw Error(message)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (187) : [RunLearningTests] AssertLearning(rewardReloaded && rewardReloaded.secretPortal,"Secret-rate card reward did not survive reload")
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.cards-check.tmp.ahk (1438) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.cards-check.tmp.ahk (76) : [] result := RunSelfTests()
+> Auto-execute
+
+PASS: 11 navigation checks; 1884 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1886 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1894 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1894 learning/policy checks; 43 minimap checks
+FAIL: This value of type "String" has no method named "Call". (C:\Users\hengo\Downloads\trialspiral\Learning.ahk:447)
+C:\Users\hengo\Downloads\trialspiral\Learning.ahk (447) : [ReadResistanceAmounts] value := Number(RegExReplace(prefix?match[1]:match[2],"[%\s]")),wording := prefix?match[2]:match[1]
+C:\Users\hengo\Downloads\trialspiral\Learning.ahk (464) : [ParseResistanceEffects] before := ReadResistanceAmounts(text,true),after := ReadResistanceAmounts(text,false)
+C:\Users\hengo\Downloads\trialspiral\Learning.ahk (555) : [CardPolicy] Return {kind: kind, stat: stat, rank: rank, amount: amount, text: text, secretPortal:secretPortal, tier:tier,enemyReduction:enemyReduction,resistance:ParseResistanceEffects(text)}
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (16) : [RunLearningTests] card := CardPolicy("Enemy " stat " +20%")
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.resistance-check.tmp.ahk (1451) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.resistance-check.tmp.ahk (76) : [] result := RunSelfTests()
+> Auto-execute
+
+PASS: 11 navigation checks; 1894 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1916 learning/policy checks; 43 minimap checks
+FAIL: Screenshot right-panel values misread (C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk:7)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (7) : [AssertLearning] Throw Error(message)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (211) : [RunLearningTests] AssertLearning(modifiers.healthKnown && modifiers.health=100 && modifiers.physical=200 && modifiers.magical=50,"Screenshot right-panel values misread")
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (1448) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (77) : [] result := RunSelfTests()
+> Auto-execute
+
+FAIL: Screenshot right-panel values misread: health=100.0 known=1 physical=100.0 magic=200 (C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk:7)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (7) : [AssertLearning] Throw Error(message)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (211) : [RunLearningTests] AssertLearning(modifiers.healthKnown && modifiers.health=100 && modifiers.physical=200 && modifiers.magical=50,"Screenshot right-panel values misread: health=" modifiers.health " known=" modifiers.healthKnown " physical=" modifiers.physical " magic=" modifiers.magical)
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (1448) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (77) : [] result := RunSelfTests()
+> Auto-execute
+
+PASS: 11 navigation checks; 1926 learning/policy checks; 43 minimap checks
+FAIL: Actual attached screenshot OCR lost health/resistance context (C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk:7)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (7) : [AssertLearning] Throw Error(message)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (214) : [RunLearningTests] AssertLearning(actual.healthKnown && actual.health=100 && actual.physical=200 && actual.magical=50,"Actual attached screenshot OCR lost health/resistance context")
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (1489) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (118) : [] result := RunSelfTests()
+> Auto-execute
+
+FAIL: Actual attached screenshot OCR: health=100.0 known=1 physical=0 magical=0 (C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk:7)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (7) : [AssertLearning] Throw Error(message)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (214) : [RunLearningTests] AssertLearning(actual.healthKnown && actual.health=100 && actual.physical=200 && actual.magical=50,"Actual attached screenshot OCR: health=" actual.health " known=" actual.healthKnown " physical=" actual.physical " magical=" actual.magical)
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (1489) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.word-check.tmp.ahk (118) : [] result := RunSelfTests()
+> Auto-execute
+
+PASS: 11 navigation checks; 1932 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 1932 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 2961 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 2984 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 2987 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 3002 learning/policy checks; 43 minimap checks
+FAIL: Higher-tier Range did not win (C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk:7)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (7) : [AssertLearning] Throw Error(message)
+C:\Users\hengo\Downloads\trialspiral\LearningTests.ahk (100) : [RunLearningTests] AssertLearning(ChooseBestCard([cooldownII,rangeIII,attackI])=2,"Higher-tier Range did not win")
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.self-check.tmp.ahk (1451) : [RunSelfTests] learned := RunLearningTests()
+C:\Users\hengo\Downloads\trialspiral\AAPathMacro.self-check.tmp.ahk (77) : [] result := RunSelfTests()
+> Auto-execute
+
+PASS: 11 navigation checks; 3024 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 3024 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 3024 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 3024 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 3024 learning/policy checks; 43 minimap checks

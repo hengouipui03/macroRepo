@@ -1,0 +1,1 @@
+PASS: real installed-runtime recovery; dependency error preserved; failed default tries next runtime; failure latches per run; restarting retries.

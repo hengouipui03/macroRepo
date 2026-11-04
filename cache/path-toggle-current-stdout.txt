@@ -1,0 +1,1 @@
+PASS: delayed/grey/missing toolbar frames never cause a second P click; already enabled P stays enabled; stop respected.

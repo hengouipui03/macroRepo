@@ -1,0 +1,1 @@
+PASS: original card locked across delayed confirmation and flicker; no reranking to Yen; new dialog unlocks; closing dialog click guarded.

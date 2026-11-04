@@ -1,0 +1,29 @@
+﻿PASS: 11 navigation checks
+PASS: 11 navigation checks; 56 learning/policy checks
+PASS: 11 navigation checks; 56 learning/policy checks
+PASS: 11 navigation checks; 56 learning/policy checks; 20 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 20 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 34 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 38 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 56 learning/policy checks; 42 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 61 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 69 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 70 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks
+PASS: 11 navigation checks; 74 learning/policy checks; 43 minimap checks

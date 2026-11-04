@@ -1,0 +1,2 @@
+﻿FAIL: This value of type "Integer" has no property named "Value".
+Five Play clicks sent at application-window 161,562 (OCR label play); no movement or placement.

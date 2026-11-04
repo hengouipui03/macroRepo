@@ -1,0 +1,1 @@
+PASS: Hill-only and Hybrid defaults/save independently across six slots; cold reload preserves Hill/Hybrid/count/priority.
