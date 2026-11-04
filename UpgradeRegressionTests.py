@@ -29,7 +29,7 @@ logic += "\n" + function("Placement.ahk", "TryPlacementCandidateAction")
 logic += "\n" + function("Placement.ahk", "TrySelectUnitAt")
 logic += "\n" + function("Placement.ahk", "PlacementPurchaseReady")
 logic += "\n" + function("PlacementArea.ahk", "PlacementRelocationDirection").replace('PlacementRelocationDirection(', 'ActualRelocationDirection(', 1)
-for name in ["PlacementCopyFailures", "PlacementAnchorKnown", "ContinuePlacementInCurrentView", "RecoverPlacementView", "PlacementViewCanShift", "ShiftRecordedPlacements", "PlacementFarthestUnit", "PlacementRelocationRoom", "CheckRelocationUnit", "RelocatePlacementArea"]:
+for name in ["PlacementFailureLimitReached", "ResetPlacementFailureStreak", "RecordFailedPlacement", "PlacementCopyFailures", "PlacementAnchorKnown", "ContinuePlacementInCurrentView", "RecoverPlacementView", "PlacementViewCanShift", "ShiftRecordedPlacements", "PlacementFarthestUnit", "PlacementRelocationRoom", "CheckRelocationUnit", "RelocatePlacementArea"]:
     logic += "\n" + function("PlacementArea.ahk", name)
 logic += "\n" + function("Placement.ahk", "TryPlacementPoints")
 logic += "\n" + function("Placement.ahk", "PlaceConfiguredBuildAction")
@@ -50,7 +50,7 @@ global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := fal
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
 global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,layoutY := 210,hillBlocked := false
 global moveCalls := 0,shiftReads := 0,trackingOkay := true,cameraShifts := [{dx:0,dy:30},{dx:0,dy:0}]
-global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
+global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global relocationSceneOkay := true,rememberOkay := true,scaleMovement := false,lastDuration := 120,lastMovementKey := ""
 global gMapModel := 0,gMoveKeys := 0,MAP_GRID := 96,baseRoute := [101,102,103,104]
 
@@ -145,15 +145,28 @@ try {
 
     gPlacements := [],gPendingPlacement := 0,gPlacementAreaFailures := Map(),modelFails := 0
     a.count := 1
+    ResetPlacementFailureStreak()
     candidates := []
     Loop 12
         candidates.Push({x:450+A_Index,y:320})
     TryPlacementPoints(a,candidates)
-    Assert(modelFails=7 && PlacementCopyFailures(a)=7,"seven-copy failure limit allowed an eighth click")
+    Assert(modelFails=5 && PlacementFailureLimitReached(),"five consecutive failures allowed a sixth placement attempt")
     gPlacements.Push(a)
+    ResetPlacementFailureStreak()
     Assert(PlacementCopyFailures(a)=0,"success did not reset the next copy's failure count")
     PlacementCopyFailures(a,true)
     Assert(PlacementCopyFailures(b)=0,"failure count leaked into a different slot")
+
+    ResetPlacementFailureStreak()
+    Loop 2
+        PlacementCopyFailures(a,true)
+    Loop 3
+        PlacementCopyFailures(b,true)
+    Assert(PlacementFailureLimitReached(),"switching slots reset consecutive placement failures")
+    ContinuePlacementInCurrentView(a,"Simulate a declined relocation.")
+    Assert(PlacementFailureLimitReached(),"declined relocation silently reset the five-failure trigger")
+    ResetPlacementFailureStreak()
+    gPlacementRelocateRetryAt := 0
 
     a.x := 400,a.y := 320,a.selectX := 400,a.selectY := 300
     b.x := 480,b.y := 340,b.selectX := 480,b.selectY := 320
@@ -199,7 +212,7 @@ try {
     gPlacements := [a,b],gPlacementRelocateRetryAt := 0
     relocationSceneOkay := false,moveCalls := 0
     PlacementCopyFailures(a,true)
-    Assert(!RelocatePlacementArea(a) && moveCalls=0 && gRunning && PlacementCopyFailures(a)=0,"missing path view blocked placement or sent movement")
+    Assert(!RelocatePlacementArea(a) && moveCalls=0 && gRunning && PlacementCopyFailures(a)=1,"missing path view reset failures or sent movement")
     relocationSceneOkay := true,rememberOkay := false,gPlacementRelocateRetryAt := 0
     Assert(!RelocatePlacementArea(a) && moveCalls=0 && gRunning,"unsaved view sent movement or stopped the macro")
     rememberOkay := true
@@ -228,7 +241,7 @@ try {
     result := PlaceConfiguredBuildAction([a])
     Assert(result="stopped" && MissingBuildPlacements([a])!="","temporarily unavailable Hill unit was skipped and build marked complete")
     schedulerMode := false,gRunning := true,hillBlocked := false
-    FileAppend "PASS: baseward path direction; 140-pixel multi-pulse relocation; farthest-unit click checks each segment; shortened pulse stops before reserved margin; uncertain view continues placement; exact upgrade targets and guards; no duplicate purchases; cooldown and stop handling.`n","*"
+    FileAppend "PASS: five consecutive misses trigger relocation; slot switches/rescans/declined moves preserve streak; baseward path direction; 140-pixel multi-pulse relocation; farthest-unit click checks each segment; shortened pulse stops before reserved margin; uncertain view continues placement; exact upgrade targets and guards; no duplicate purchases; cooldown and stop handling.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message " (line " err.Line ")`n" err.Stack,"*"
@@ -243,6 +256,8 @@ Assert(condition,message) {
         throw Error(message)
 }
 SavePlacementRun(*) => 0
+BeginInputAction(*) => true
+EndInputAction(*) => 0
 Log(*) => 0
 ClearCardChoice(*) => true
 HasCardChoice(*) => false

@@ -14,10 +14,11 @@ global REF_W := 800
 global REF_H := 600
 global WINDOW_W := 1401
 global WINDOW_H := 975
-global STATIC_CLICK_MS := 2500
-global PREP_CLICK_MS := 1000
-global CLICK_HOLD_MS := 180
-global MOUSE_SETTLE_MS := 350
+global ACTION_GAP_MS := 300,gLastInputFinishedAt := 0
+global STATIC_CLICK_MS := 300
+global PREP_CLICK_MS := 300
+global CLICK_HOLD_MS := 60
+global MOUSE_SETTLE_MS := 0
 global gInputEpoch := 0
 global CAMERA_TILT_PIXELS := 420
 global BUTTONS_FILE := A_ScriptDir "\button_positions.ini"
@@ -220,9 +221,11 @@ SmoothMoveTo(sx, sy) {
     distance := Sqrt((sx-startX)**2 + (sy-startY)**2)
     if distance < 2
         return true
+    if !BeginInputAction(gRunning)
+        return false
     ; Interpolate an eased path over real time. A single MouseMove with a
     ; speed value is still instantaneous under AutoHotkey's SendInput mode.
-    duration := Min(650, Max(180, Round(180 + distance*0.25)))
+    duration := Min(120, Max(60, Round(distance*0.12)))
     started := A_TickCount, epoch := gInputEpoch, wasRunning := gRunning
     previousMode := A_SendMode
     SendMode "Event"
@@ -238,7 +241,10 @@ SmoothMoveTo(sx, sy) {
                 return true
             Sleep 20
         }
-    } finally SendMode previousMode
+    } finally {
+        SendMode previousMode
+        EndInputAction()
+    }
 }
 
 ClickRef(rx, ry,stillValid := 0) {
@@ -251,7 +257,7 @@ ClickRef(rx, ry,stillValid := 0) {
     WinActivate "ahk_id " hwnd
     if !WinWaitActive("ahk_id " hwnd,,2)
         return false
-    if !SmoothMoveTo(sx,sy) || !ActionPause(MOUSE_SETTLE_MS)
+    if !SmoothMoveTo(sx,sy) || !BeginInputAction()
         return false
     if stillValid && !stillValid.Call()
         return false
@@ -260,7 +266,10 @@ ClickRef(rx, ry,stillValid := 0) {
     try {
         if !ActionPause(CLICK_HOLD_MS,false)
             return false
-    } finally SendEvent "{LButton up}"
+    } finally {
+        SendEvent "{LButton up}"
+        EndInputAction()
+    }
     Log("Left click at client " rx ", " ry)
     return true
 }
@@ -284,6 +293,26 @@ ButtonPosition(name, &rx, &ry) {
 
 ClickButton(name, delayMs := -1, confirm := 0, forceDetect := false) {
     return ClickLearnedButton(name, delayMs, confirm, forceDetect)
+}
+
+BeginInputAction(requireRunning := true) {
+    global ACTION_GAP_MS,gLastInputFinishedAt,gRunning,gInputEpoch
+    epoch := gInputEpoch
+    loop {
+        if epoch!=gInputEpoch || (requireRunning && !gRunning)
+            return false
+        if requireRunning && CheckCardInterruption()
+            return false
+        remaining := ACTION_GAP_MS-(A_TickCount-gLastInputFinishedAt)
+        if remaining<=0
+            return true
+        Sleep Min(20,remaining)
+    }
+}
+
+EndInputAction() {
+    global gLastInputFinishedAt
+    gLastInputFinishedAt := A_TickCount
 }
 
 ActionPause(durationMs,interruptible := true) {
@@ -669,9 +698,14 @@ HoldArrow(key, durationMs) {
     if !WinWaitActive("ahk_id " hwnd,,1)
         return false
     Log("Hold " key " for " durationMs "ms")
+    if !BeginInputAction()
+        return false
     Send "{" key " down}"
     try return ActionPause(durationMs)
-    finally Send "{" key " up}"
+    finally {
+        Send "{" key " up}"
+        EndInputAction()
+    }
 }
 
 NavigateAlongRoute() {
@@ -720,9 +754,14 @@ InputPause(duration,epoch) {
 }
 
 HoldCameraKey(key,duration,epoch) {
+    if !BeginInputAction(false)
+        return false
     Send "{" key " down}"
     try return InputPause(duration,epoch)
-    finally Send "{" key " up}"
+    finally {
+        Send "{" key " up}"
+        EndInputAction()
+    }
 }
 
 EnsureRouteAndSpawn() {
@@ -1274,7 +1313,7 @@ RunMacro() {
 }
 
 StartMacro(*) {
-    global gRunning, WINDOW_W, WINDOW_H
+    global gRunning, WINDOW_W, WINDOW_H,gUnitPreviewActive
     if gRunning
         return
     if !GetClient(&cx, &cy, &cw, &ch) {
@@ -1292,6 +1331,7 @@ StartMacro(*) {
         return
     }
     gRunning := true
+    gUnitPreviewActive := true
     Notify("Running. F7 stops immediately.")
     SetTimer RunMacroSafely, -10
 }

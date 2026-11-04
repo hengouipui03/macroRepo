@@ -287,10 +287,15 @@ PressUnitUpgradeKey() {
     global gRunning,gUpgradeLastRAt
     if !gRunning || HasCardChoice() || !HasUnitPanel()
         return false
+    if !BeginInputAction()
+        return false
     gUpgradeLastRAt := A_TickCount
     SendEvent "{r down}"
     try return ActionPause(60,false)
-    finally SendEvent "{r up}"
+    finally {
+        SendEvent "{r up}"
+        EndInputAction()
+    }
 }
 
 UpgradeOnce(item) {
@@ -338,7 +343,7 @@ UpgradeOnceAction(item) {
         gUpgradeSelectedId := item.id
     }
     finite := item.target!=99
-    wantsInput := !gUpgradeLastRAt || A_TickCount-gUpgradeLastRAt>=1000
+    wantsInput := !gUpgradeLastRAt || A_TickCount-gUpgradeLastRAt>=300
     ; Every finite-target R needs its own fresh header read.
     if finite && (!wantsInput || (gUpgradeReadAt && A_TickCount<gUpgradeReadAt))
         return false

@@ -162,9 +162,10 @@ Temporarily unavailable Hill units remain pending too. The full upgrade phase
 starts only when every enabled slot has its configured number of confirmed
 copies; the status lists the exact missing counts during retries.
 All new placement points must lie within a circle of radius 180 reference pixels
-around the stopped player. The debug image shows that circle. Seven actual
-failed clicks for the same pending copy trigger a short move up the connected
-visible path. Successful copies do not add to the next copy's count.
+around the stopped player. The debug image shows that circle. Five consecutive failed purchase clicks, across slots, trigger DOWN/baseward
+relocation before another purchase. Recovery/selection clicks are not additional
+purchase attempts. A successful placement or an actual relocation resets the
+streak; rescans, switching slots, and declined relocation do not reset it.
 Relocation follows the connected path toward the base (downward when minimap
 calibration is unavailable), aiming for 140 reference pixels of net movement
 rather than stopping after one step. It uses repeated 60–120 ms movement pulses.
@@ -174,16 +175,18 @@ ground/model anchors retain an inset from the screen and HUD; the next pulse is
 shortened or cancelled before that clear-click margin is exhausted. Visibility
 can therefore limit travel below the requested distance. After moving,
 stationary scenery measures the camera shift and updates every ground/model
-click point. A refused relocation resets the seven-miss trigger so placement
+click point. A refused relocation resets the five-failure trigger so placement
 continues in the current area. Once a path step is taken, uncertain view matching
 does not reverse the move or stop the macro: placement rescans the current view.
 Earlier unit anchors are kept separately and their upgrades wait for coordinate
 recovery; new placements can still be recorded and upgraded normally. Recovery
 retries without another move, and rebases only the earlier units. Shifted views
 do not reuse the old view's saved placement layout.
-Confirmed placements pause 180ms before continuing. Slot/key holds and cursor
-settling are shorter; a missed attempt has only a 50ms extra pause after its
-confirmation window. Cursor movement remains smooth, and stale panels and
+All deliberate input actions share a 300 ms minimum interval from the previous
+action release. Mouse travel is smooth and capped at 120 ms; redundant preview
+cancellations are skipped. Menu clicks no longer add multi-second fixed pauses.
+Panel confirmation, OCR, loading, calibrated movement and camera holds retain
+their necessary observation/hold time. Stale panels and
 late purchase confirmations are still checked before another placement. Every missed neighbouring spot
 is followed by cancelling the old preview before pressing the slot again, so a rejected
 spot cannot toggle placement off and turn the following click into unit selection.
@@ -402,7 +405,10 @@ VisionRecoveryTests.py verifies black-frame fallback, the placement circle and
 camera translation. UnitPanelRegressionTests.py checks a second device layout.
 The shared screen reader rejects blank/wrong-size frames, falls back from DX
 capture to MSS, and recreates MSS once before reporting a capture failure.
-Capture failures never count as seven placement misses or authorize movement.
+Capture failures never count as five failed purchases or authorize movement.
 
 
 Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model and no panel has ever been seen. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
+
+
+Five-failure enforcement: once five consecutive purchase clicks fail, another purchase is blocked at both the placement dispatcher and final click guard until a purchase is confirmed or relocation moves to another area. If visibility prevents relocation, the log states the reason and retries relocation while existing units can upgrade; it does not erase the failure streak and keep purchasing. ActionPacingTests.py verifies the shared 300 ms input interval and immediate stop behavior. PlacementConfirmationTests.py verifies the real purchase/recovery path counts each failure once and blocks a sixth purchase.

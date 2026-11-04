@@ -202,11 +202,14 @@ ClickWindowOnce(point, geometry) {
         return false
     if !gRunning || !SmoothMoveTo(geometry.x + Round(point.x), geometry.y + Round(point.y))
         return false
-    if !ActionPause(MOUSE_SETTLE_MS)
+    if !BeginInputAction()
         return false
     Click "Down"
-    try return ActionPause(CLICK_HOLD_MS)
-    finally Click "Up"
+    try return ActionPause(CLICK_HOLD_MS,false)
+    finally {
+        Click "Up"
+        EndInputAction()
+    }
 }
 
 ClickLearnedButton(name, delayMs, confirm := 0, forceDetect := false) {

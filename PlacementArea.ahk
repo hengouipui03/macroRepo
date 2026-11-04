@@ -1,11 +1,32 @@
 ; One local circle, per-copy failure counts, and optional path relocation.
 global gPlacementAreaFailures := Map(),gRunViewMoved := false
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
+global PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 
 ResetPlacementArea() {
     global gPlacementAreaFailures,gRunViewMoved,gPlacementViewRecovery,gPlacementRelocateRetryAt
     gPlacementAreaFailures := Map(),gRunViewMoved := false
     gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
+    ResetPlacementFailureStreak()
+}
+
+PlacementFailureLimitReached() {
+    global PLACEMENT_FAILURE_LIMIT,gConsecutivePlacementFailures
+    return gConsecutivePlacementFailures>=PLACEMENT_FAILURE_LIMIT
+}
+
+ResetPlacementFailureStreak() {
+    global gConsecutivePlacementFailures,gPlacementAreaFailures
+    gConsecutivePlacementFailures := 0,gPlacementAreaFailures := Map()
+}
+
+RecordFailedPlacement(unit,point) {
+    if !point || !point.HasProp("pendingSlot") || point.pendingSlot!=unit.slot
+        || (point.HasProp("failureCounted") && point.failureCounted)
+        return false
+    point.failureCounted := true
+    PlacementCopyFailures(unit,true)
+    return true
 }
 
 PlacementAnchorKnown(item) {
@@ -14,12 +35,10 @@ PlacementAnchorKnown(item) {
 
 ContinuePlacementInCurrentView(unit,reason) {
     global gPlacementAreaFailures,gPlacementRelocateRetryAt
-    if gPlacementAreaFailures.Has(unit.slot)
-        gPlacementAreaFailures.Delete(unit.slot)
     if A_TickCount>=gPlacementRelocateRetryAt
-        gPlacementRelocateRetryAt := A_TickCount+15000
+        gPlacementRelocateRetryAt := A_TickCount+3000
     RefreshPlacementSearch()
-    Log(reason " Continue placement attempts here; relocation can retry later.")
+    Log(reason (PlacementFailureLimitReached()?" Five misses remain pending: retry DOWN relocation before another purchase; existing upgrades continue.":" Placement can continue here."))
     return false
 }
 
@@ -50,14 +69,17 @@ RecoverPlacementView() {
 }
 
 PlacementCopyFailures(unit,add := false) {
-    global gPlacementAreaFailures
+    global gPlacementAreaFailures,gConsecutivePlacementFailures,PLACEMENT_FAILURE_LIMIT
     copy := CountSlotPlacements(unit.slot)+1
     if !gPlacementAreaFailures.Has(unit.slot) || gPlacementAreaFailures[unit.slot].copy!=copy
         gPlacementAreaFailures[unit.slot] := {copy:copy,misses:0}
     state := gPlacementAreaFailures[unit.slot]
     if add {
         state.misses += 1
-        Log(unit.name " copy " copy ": " state.misses "/7 failed clicks in this placement area.")
+        gConsecutivePlacementFailures += 1
+        Log("Failed purchase " gConsecutivePlacementFailures "/" PLACEMENT_FAILURE_LIMIT " consecutive | slot " unit.slot " copy " copy)
+        if PlacementFailureLimitReached()
+            Log("Five consecutive failed purchases: relocate DOWN toward base before the next purchase.")
     }
     return state.misses
 }
@@ -216,7 +238,8 @@ RelocatePlacementArea(unit) {
                 gPlacementViewRecovery := oldItems.Length?{items:oldItems,cw:cw,ch:ch,retryAt:A_TickCount+1000}:0
                 gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
                 gPlacementAreaFailures := Map(),gRunViewMoved := true,gPlacementProfile := ""
-                gPlacementRelocateRetryAt := A_TickCount+15000
+                gPlacementRelocateRetryAt := A_TickCount+300
+                ResetPlacementFailureStreak()
                 RefreshPlacementSearch()
                 ResetUpgradeSelection()
                 SavePlacementRun()
@@ -242,8 +265,9 @@ RelocatePlacementArea(unit) {
                 break
             }
         }
-        gPlacementRelocateRetryAt := A_TickCount+15000
         if totalX*totalX+totalY*totalY>=8**2 {
+            gPlacementRelocateRetryAt := A_TickCount+300
+            ResetPlacementFailureStreak()
             Log("Relocation finished after " Round(Sqrt(totalX*totalX+totalY*totalY)) " pixels. " reason " Resume placement beside this path section.")
             return true
         }

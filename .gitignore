@@ -1,0 +1,39 @@
+# Local Python environments and bytecode
+/.venv/
+/venv/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+
+# Local credentials, preferences and learned/run state
+/.env
+/.env.*
+!/.env.example
+/settings.ini
+/unit_settings.ini
+/card_preferences.ini
+/learning.ini
+/placement_layouts.ini
+/placement_run.ini
+/placement_run.ini.tmp
+
+# Generated diagnostics and backups; keep source test fixtures tracked
+/cache/
+*.check.tmp.ahk
+*.before-*.ahk
+*.tmp
+/*-stdout.txt
+/*-stderr.txt
+/*-checks.txt
+/map-fixture-results.txt
+/*-debug.png
+/placement-search-debug.png
+/minimap-drawing-preview.*
+
+# Editor/OS state and distribution archives
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+*.zip
+*.7z

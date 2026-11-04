@@ -7,6 +7,7 @@ global gFailedPlacementSpots := []
 global gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
 global gUnitPanelClose := 0,gPendingPlacement := 0,gPlacementDebugAt := 0
 global gUnitPanelLayout := 0
+global gUnitPreviewActive := true
 
 ResetPlacementSearch() {
     global gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
@@ -180,7 +181,7 @@ PlacementClickRef(rx,ry,guardCards := false,purchase := 0) {
     }
     if !SmoothMoveTo(sx,sy)
         return false
-    if !ActionPause(90) || (guardCards && (HasCardChoice() || HasUnitPanel() || IsEndGameBlocking()))
+    if !BeginInputAction() || (guardCards && (HasCardChoice() || HasUnitPanel() || IsEndGameBlocking()))
         return false
     if purchase {
         ; Card handling during cursor movement may have confirmed this copy.
@@ -190,39 +191,54 @@ PlacementClickRef(rx,ry,guardCards := false,purchase := 0) {
     }
     SendEvent "{LButton down}"
     try return ActionPause(80,false)
-    finally SendEvent "{LButton up}"
+    finally {
+        SendEvent "{LButton up}"
+        EndInputAction()
+    }
 }
 
 PlacementPurchaseReady(purchase) {
     global gRunning,gPendingPlacement
     count := CountSlotPlacements(purchase.pendingSlot)
-    return gRunning && !gPendingPlacement && count<purchase.pendingTarget && count+1=purchase.pendingCopy
+    return gRunning && !gPendingPlacement && !PlacementFailureLimitReached() && count<purchase.pendingTarget && count+1=purchase.pendingCopy
 }
 
 
 SelectPlacementUnit(unit) {
-    global gRunning
-    if !gRunning
+    global gRunning,gUnitPreviewActive
+    if !gRunning || !BeginInputAction()
         return false
     SendEvent "{" unit.slot " down}"
     try {
         if !ActionPause(40,false)
             return false
-    } finally SendEvent "{" unit.slot " up}"
-    return ActionPause(45)
+    } finally {
+        SendEvent "{" unit.slot " up}"
+        gUnitPreviewActive := true
+        EndInputAction()
+    }
+    return gRunning
 }
 
 
 CancelUnitPreview() {
-    global gRunning
+    global gRunning,gUnitPreviewActive
     if !gRunning
+        return false
+    if !gUnitPreviewActive
+        return true
+    if !BeginInputAction()
         return false
     SendEvent "{q down}"
     try {
         if !ActionPause(30,false)
             return false
-    } finally SendEvent "{q up}"
-    return ActionPause(30,false)
+    } finally {
+        SendEvent "{q up}"
+        gUnitPreviewActive := false
+        EndInputAction()
+    }
+    return gRunning
 }
 
 
@@ -368,6 +384,7 @@ FinishPlacement(unit,point) {
     }
     if !RegisterPlacedUnit(unit,point)
         return false
+    ResetPlacementFailureStreak()
     ForgetFailedPlacementSpot(point)
     terrain := PlacementTerrain(point)
     if gPlacementEdgeMisses.Has(terrain)
@@ -425,6 +442,8 @@ TryPlacementCandidateAction(unit,candidate) {
         if CountSlotPlacements(unit.slot)>before
             return true
     }
+    if PlacementFailureLimitReached()
+        return false
     ; A rejected spot leaves the ghost active. Cancel it first so pressing
     ; the same slot cannot toggle placement OFF and select an existing unit.
     if !CloseUnitPanel() || !CancelUnitPreview() || !PlacementPanelClosedStable()
@@ -449,8 +468,10 @@ TryPlacementCandidateAction(unit,candidate) {
     purchase.pendingSlot := unit.slot,purchase.pendingCopy := before+1,purchase.pendingTarget := unit.count
     if !PlacementClickRef(candidate.x,candidate.y,true,purchase)
         return false
-    if WaitForUnitPanel(700)
+    if WaitForUnitPanel(300,false)
         return FinishPlacement(unit,gPendingPlacement)
+    if gRunning && !HasCardChoice() && !IsEndGameBlocking()
+        RecordFailedPlacement(unit,gPendingPlacement)
     return RecoverPendingPlacement(unit)
 }
 
@@ -479,7 +500,7 @@ RecoverPendingPlacement(unit) {
             return true
         if gPendingPlacement!=point || !PlacementClickRef(point.x,point.y,true)
             return false
-        if WaitForUnitPanel(900,true) {
+        if WaitForUnitPanel(300,A_Index=2) {
             point.panelSeen := true
             return FinishPlacement(unit,point)
         }
@@ -495,7 +516,7 @@ RecoverPendingPlacement(unit) {
     ; Two completed selection-only probes found no model after the purchase wait.
     gPendingPlacement := 0
     RememberFailedPlacementSpot(point)
-    PlacementCopyFailures(unit,true)
+    RecordFailedPlacement(unit,point)
     return false
 }
 
@@ -627,7 +648,7 @@ TryPlacementPoints(unit,points) {
     while queue.Length {
         if !gRunning || IsEndGameBlocking()
             return false
-        if PlacementCopyFailures(unit)>=7
+        if PlacementFailureLimitReached()
             return false
         if gPendingPlacement
             return RecoverPendingPlacement(unit)
@@ -841,10 +862,10 @@ PlaceConfiguredBuildAction(plan) {
                 if TryEndState()
                     return "replay"
                 before := CountSlotPlacements(unit.slot)
-                if PlacementCopyFailures(unit)>=7 {
+                if PlacementFailureLimitReached() {
                     if RelocatePlacementArea(unit)
                         continue
-                    retryAt[unit.slot] := A_TickCount+10000
+                    retryAt[unit.slot] := A_TickCount+3000
                     break
                 }
                 Log("Place slot " unit.slot " copy " (before+1) "/" unit.count "; confirmed " before "/" unit.count)
@@ -861,10 +882,10 @@ PlaceConfiguredBuildAction(plan) {
                     Log(unit.name ": Hill placement still pending; retry in 10 seconds.")
                     break
                 }
-                if PlacementCopyFailures(unit)>=7 && RelocatePlacementArea(unit)
+                if PlacementFailureLimitReached() && RelocatePlacementArea(unit)
                     continue
-                retryAt[unit.slot] := A_TickCount+10000
-                Log(unit.name ": placement pending; retry in 10 seconds while other placements/upgrades continue.")
+                retryAt[unit.slot] := A_TickCount+(PlacementFailureLimitReached()?3000:300)
+                Log(unit.name ": placement pending; keep confirmed units upgrading while the next attempt or DOWN relocation is prepared.")
                 RefreshPlacementSearch()
                 break
             }

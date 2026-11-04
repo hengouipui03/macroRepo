@@ -831,6 +831,8 @@ HoldKeys(presses) {
     WinActivate "ahk_id " hwnd
     if !WinWaitActive("ahk_id " hwnd,,1)
         return false
+    if !BeginInputAction()
+        return false
     held := [],started := A_TickCount,text := ""
     for press in presses
         text .= " " press.key " " press.ms "ms"
@@ -853,6 +855,7 @@ HoldKeys(presses) {
     } finally {
         for press in held
             Send "{" press.key " up}"
+        EndInputAction()
     }
 }
 

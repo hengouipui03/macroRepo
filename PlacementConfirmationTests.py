@@ -1,4 +1,4 @@
-"""Existing models and card overlays must never count as fresh purchases."""
+﻿"""Existing models and card overlays must never count as fresh purchases."""
 import subprocess
 from UpgradeRegressionTests import ROOT,RUNTIME,function
 
@@ -9,6 +9,8 @@ logic = '\n'.join(function(file,name) for file,name in [
     ('Placement.ahk','FinishPlacement'),('Placement.ahk','CountSlotPlacements'),
     ('Placement.ahk','MissingBuildPlacements'),('AAPathMacro.ahk','CheckCardInterruption')])
 logic += '\n' + function('PlacedUnits.ahk','OpenRecordedUnit')
+for name in ['PlacementFailureLimitReached','ResetPlacementFailureStreak','RecordFailedPlacement','PlacementCopyFailures']:
+    logic += '\n' + function('PlacementArea.ahk', name)
 logic = logic.replace('A_TickCount','testNow')
 
 fixture = r'''
@@ -19,7 +21,7 @@ global gRunning := true,gPlacements := [],gPendingPlacement := 0,gPlacementAttem
 global gLastPlacedIndex := 0,gPlacementPreferredSide := 0,gPlacementEdgeMisses := Map()
 global gCardHandling := false,gCardAction := "placement",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0,testNow := 10000
 global panel := false,preview := false,existingModel := false,purchased := false,cards := false,buys := 0,slots := 0,registrations := 0
-global gPlacementLine := [],gLayoutValidation := Map()
+global gPlacementLine := [],gLayoutValidation := Map(),gPlacementAreaFailures := Map(),PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global modelMode := false,models := Map(),hidePanels := false,delayPanel := false,rejectPurchase := false,failures := 0,cardDuringPurchase := false
 try {
     unit := {slot:1,name:"Unit 1",count:2,enabled:true},point := {x:400,y:330}
@@ -70,9 +72,20 @@ try {
 
     ; A rejected spot remains retryable elsewhere after two completed no-model probes.
     gPlacements := [],registrations := 0,buys := 0,models := Map(),rejectPurchase := true,failures := 0
-    Assert(!TryPlacementCandidateAction(unit,point) && !gPendingPlacement && failures=1,"confirmed empty spot stayed pending or failure was counted twice")
+    Assert(!TryPlacementCandidateAction(unit,point) && !gPendingPlacement && gConsecutivePlacementFailures=1,"confirmed empty spot stayed pending or failure was counted twice")
     rejectPurchase := false
     Assert(TryPlacementCandidateAction(unit,{x:450,y:330}) && CountSlotPlacements(1)=1,"a failed purchase prevented the next valid placement")
+
+    ; Five actual rejected purchase clicks, including their recovery probes,
+    ; count once each. A sixth buy must be blocked at the transaction boundary.
+    gPlacements := [],registrations := 0,buys := 0,models := Map(),rejectPurchase := true
+    ResetPlacementFailureStreak()
+    Loop 5
+        Assert(!TryPlacementCandidateAction(unit,{x:250+A_Index*30,y:330}),"rejected purchase was registered")
+    Assert(buys=5 && gConsecutivePlacementFailures=5,"recovery clicks double-counted or dropped failed purchases")
+    RefreshPlacementSearch()
+    Assert(!TryPlacementCandidateAction(unit,{x:500,y:330}) && buys=5,"rescan allowed a sixth purchase without relocation")
+    ResetPlacementFailureStreak(),rejectPurchase := false
 
     ; Reproduce the start-of-game setup in the user's log. All 16 purchases
     ; across six slots must advance on the panel alone, with OCR unavailable.
@@ -97,7 +110,7 @@ try {
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard overwrote an unresolved purchase")
     gPendingPlacement := 0,attempt.pendingCopy := 2
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard accepted the wrong copy number")
-    FileAppend "PASS: side panel alone confirms a bound purchase; no UPG OCR; all 16 startup purchases across six slots advance; target four never buys five; existing-model/card/duplicate guards; delayed panel recovery and interruptions.`n","*"
+    FileAppend "PASS: five actual rejected purchases counted once each; sixth buy blocked after rescan; side panel alone confirms a bound purchase; no UPG OCR; all 16 startup purchases across six slots advance; target four never buys five; existing-model/card/duplicate guards; delayed panel recovery and interruptions.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack,"*"
@@ -169,12 +182,6 @@ ClickAwayFromUnitPanel(*) => CloseUnitPanel()
 ActionPause(*) => true
 Log(*) => 0
 SavePlacementRun(*) => 0
-PlacementCopyFailures(unit,add := false) {
-    global failures
-    if add
-        failures += 1
-    return failures
-}
 UpgradeHeaderSignature(*) {
     throw Error("Placement must not read the upgrade heading")
 }
