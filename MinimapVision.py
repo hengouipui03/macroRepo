@@ -27,6 +27,7 @@ World requests read the whole client (positions in client pixels):
     follow dx dy                     path point ahead of the player in a screen direction
     beside count                     placement points just outside the lit path
     placementline count              adjacent spots along one local path edge
+    unitmanager cx cy cw ch           manager portrait rows and visible entries
     hillspots count cx cy cw ch       new green hill highlights nearest the path
     onpath x y                       whether a client point lies on the lit path
     worlddebug <path>                save the world capture with path and points
@@ -578,6 +579,53 @@ class World:
         dx,dy = transform[0,2]*2*800/w,transform[1,2]*2*600/h
         return {"dx":"%.3f"%dx,"dy":"%.3f"%dy}
 
+    def unit_manager(self, cx, cy, cw, ch):
+        """Locate manager portraits, avoiding sell X and upgrade/target buttons."""
+        image = self.grab(cx,cy,cw,ch)
+        h,w = image.shape[:2]
+        b,g,r = cv2.split(image.astype(np.int16))
+        title = ((r>160)&(g>125)&(b<110)).astype(np.uint8)
+        title[:int(h*.065)]=0;title[int(h*.17):]=0;title[:,:int(w*.66)]=0
+        title=cv2.morphologyEx(title,cv2.MORPH_CLOSE,np.ones((3,max(3,int(w*.025))),np.uint8))
+        _,_,stats,_=cv2.connectedComponentsWithStats(title,8)
+        headings=[s for s in stats[1:] if s[2]>w*.18 and s[3]>h*.015]
+        if not headings:return {"open":0}
+        heading=max(headings,key=lambda s:s[1])
+        top=int(heading[1]+heading[3]+h*.02);bottom=int(h*.735)
+        # Sell-X backgrounds anchor every cell even if Upgrade is disabled/MAX.
+        # These controls are detected only; the returned click is in the portrait.
+        icons=((r>140)&(r-g>45)&(r-b>30)).astype(np.uint8)
+        icons[:top]=0;icons[bottom:]=0;icons[:,:int(w*.66)]=0
+        kernel=max(3,int(round(h*.005)))|1
+        icons=cv2.morphologyEx(icons,cv2.MORPH_OPEN,np.ones((kernel,kernel),np.uint8))
+        icons=cv2.morphologyEx(icons,cv2.MORPH_CLOSE,np.ones((3,3),np.uint8))
+        _,_,stats,_=cv2.connectedComponentsWithStats(icons,8)
+        buttons=[s for s in stats[1:] if w*.012<s[2]<w*.05 and h*.016<s[3]<h*.065 and .6<s[2]/s[3]<1.7 and s[4]/(s[2]*s[3])>.4]
+        dark=np.max(image[top:bottom,int(w*.66):],axis=2)<85
+        if not buttons or not dark.size or dark.mean()<.35:return {"open":1,"ready":0}
+        bw=float(np.median([s[2] for s in buttons]));bh=float(np.median([s[3] for s in buttons]))
+        rows=[]
+        for s in sorted(buttons,key=lambda s:s[1]):
+            if not rows or abs(s[1]-np.mean([b[1] for b in rows[-1]]))>bh*.6:rows.append([])
+            rows[-1].append(s)
+        row_y=[float(np.median([s[1] for s in row])) for row in rows]
+        pitch=float(np.median(np.diff(row_y))) if len(row_y)>1 else h*.158
+        entries=[]
+        for ry,row in zip(row_y,rows):
+            for x,y,bwidth,bheight,_ in sorted(row,key=lambda s:s[0]):
+                px=float(x)+bw*1.4;py=float(y)+bh*2.3
+                if py-bh*.6<top or py+bh*.6>bottom:continue
+                column=int(x+bwidth/2>w*.76)
+                entries.append((column,px,py,ry))
+        signature="empty"
+        if entries:
+            col,px,py,_=entries[0]
+            patch=image[max(top,int(py-bh*.6)):min(bottom,int(py+bh*.6)),int(px-bw*.2):int(px+bw*.2)]
+            if patch.size:signature=str(hash((cv2.resize(patch,(12,12))//32).tobytes()))
+        return {"open":1,"ready":1,"top":top,"bottom":bottom,"pitch":"%.3f"%pitch,
+                "first":"%.3f"%row_y[0],"last":"%.3f"%row_y[-1],"signature":signature,
+                "entries":";".join("%d,%.2f,%.2f,%.2f"%e for e in entries)}
+
     def relocation(self, hint_x=0, hint_y=1):
         """A connected road waypoint downstream; AHK repeats it until relocated."""
         if self.area is None or not self.area.any():
@@ -1049,6 +1097,7 @@ def main():
                 "debug": vision.debug, "loadworld": world.load, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
                 "follow": world.follow, "beside": world.beside, "placementline": world.placement_line, "placementneighbours": world.placement_neighbours, "hillspots": world.hill_spots, "validateplacements": world.validate_placements, "placementvalid": world.placement_valid, "onpath": world.onpath, "worlddebug": world.debug,
                 "relocation": world.relocation, "rememberview": world.remember_view, "viewshift": world.view_shift,
+                "unitmanager": world.unit_manager,
                 "discord": lambda *args: discord(world, *args)}
     for line in sys.stdin:
         parts = line.strip().split(" ")

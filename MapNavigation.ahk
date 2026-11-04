@@ -324,6 +324,37 @@ MapShortestPath(nodes,start,target) {
     return result
 }
 
+MapPlacementCheckpoints(model) {
+    global MAP_GRID
+    if !model.baseMarker || !model.nodes.Count
+        return []
+    base := MapNearest(model.nodes,model.baseMarker.x,model.baseMarker.y)
+    tree := MapDistances(model.nodes,base),entrance := base,longest := -1
+    for node,distance in tree.distance
+        if distance>longest
+            entrance := node,longest := distance
+    route := MapShortestPath(model.nodes,entrance,base)
+    if route.Length<5
+        return []
+    lengths := [0],total := 0
+    Loop route.Length-1 {
+        a := route[A_Index],b := route[A_Index+1]
+        total += Sqrt((Mod(b,MAP_GRID)-Mod(a,MAP_GRID))**2+(b//MAP_GRID-a//MAP_GRID)**2)
+        lengths.Push(total)
+    }
+    points := []
+    for share in [.25,.5,.75] {
+        best := 1,error := 1.0e30
+        for index,length in lengths
+            if Abs(length-total*share)<error
+                best := index,error := Abs(length-total*share)
+        if points.Length && points[points.Length]=route[best]
+            return []
+        points.Push(route[best])
+    }
+    return points
+}
+
 MapRecommendedTarget(model) {
     global MAP_GRID
     start := MapNearest(model.nodes,model.player.x,model.player.y)

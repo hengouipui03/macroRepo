@@ -155,9 +155,9 @@ The next game's placement preparation clears this temporary list; it is never
 saved into reusable map profiles.
 
 Configured slots and copies are tried in order. A blocked copy waits ten seconds
-while later slots and already placed units continue; it stays pending rather
-than reporting a partial build as complete. Placement and upgrades share the
-existing priority dispatcher, so an unfinished build cannot starve upgrades.
+while later slots continue; it stays pending rather than reporting a partial
+build as complete. Upgrades use the F manager, and F is only pressed once every
+unit is placed, so no upgrades run while the build is incomplete.
 Temporarily unavailable Hill units remain pending too. The full upgrade phase
 starts only when every enabled slot has its configured number of confirmed
 copies; the status lists the exact missing counts during retries.
@@ -166,24 +166,17 @@ around the stopped player. The debug image shows that circle. Five consecutive f
 relocation before another purchase. Recovery/selection clicks are not additional
 purchase attempts. A successful placement or an actual relocation resets the
 streak; rescans, switching slots, and declined relocation do not reset it.
-Relocation follows the connected path toward the base (downward when minimap
-calibration is unavailable), aiming for 140 reference pixels of net movement
-rather than stopping after one step. It uses repeated 60–120 ms movement pulses.
-Before and after every pulse it re-evaluates the farthest placed unit, selects
-that model to confirm a working click point, and closes the panel. All recorded
-ground/model anchors retain an inset from the screen and HUD; the next pulse is
-shortened or cancelled before that clear-click margin is exhausted. Visibility
-can therefore limit travel below the requested distance. After moving,
-stationary scenery measures the camera shift and updates every ground/model
-click point. A refused relocation resets the five-failure trigger so placement
-continues in the current area. Once a path step is taken, uncertain view matching
-does not reverse the move or stop the macro: placement rescans the current view.
-Earlier unit anchors are kept separately and their upgrades wait for coordinate
-recovery; new placements can still be recorded and upgraded normally. Recovery
-retries without another move, and rebases only the earlier units. Shifted views
-do not reuse the old view's saved placement layout.
-All deliberate input actions share a 300 ms minimum interval from the previous
-action release. Mouse travel is smooth and capped at 120 ms; redundant preview
+The connected minimap route is divided by route length into three checkpoints
+at 25%, 50%, and 75%, from its entrance toward the base. The first placement
+destination is checkpoint 1. Five consecutive failed purchase attempts advance
+to checkpoint 2, then checkpoint 3 along the drawn path. Checkpoint travel does
+not depend on old units staying on screen: upgrades select their purchase
+numbers in the F manager. At checkpoint 3, five misses refresh the local search
+and placement continues until the build is complete or the match ends.
+
+Unit selection and placement clicks, keys and cursor travel use 200 ms holds
+and action intervals, including F-manager navigation. Other UI actions, P,
+Vote Start and upgrade R retain their existing 300 ms timing. Redundant preview
 cancellations are skipped. Menu clicks no longer add multi-second fixed pauses.
 Panel confirmation, OCR, loading, calibrated movement and camera holds retain
 their necessary observation/hold time. Stale panels and
@@ -250,12 +243,14 @@ header OCR and upgrade readiness reuse those regions.
 
 Every confirmed purchase receives a number (#1, #2, ...), its exact position,
 slot, priority and upgrade target. The current numbered build is written to
-placement_run.ini. Upgrades open those recorded units, learn a working model
-click point if the ground anchor misses, and process the lowest unfinished
+placement_run.ini. Upgrades select each recorded purchase number through the F unit manager
+and process the lowest unfinished
 priority first; equal priorities follow placement number. The selected unit
 stays open while R is pressed once per second until MAX or its configured
-target is confirmed. Waiting for Yen keeps that panel open. Cards cause a
-click-away, card selection, then reopening that same recorded unit. Counts advance only
+target is confirmed. Waiting for Yen keeps that panel open. Cards are the only
+time the F manager is closed (one F, only when it is confirmed open); the unit
+panel is not clicked away. After the card the manager is reopened and the
+top-priority unit is reselected through it before any R. Counts advance only
 when the visible UPG level increases or MAX is confirmed. Unaffordable clicks
 stay pending at the same priority.
 
@@ -309,14 +304,20 @@ classification. OCR enlarges text before recognition and returns original-size
 coordinates. Ambiguous red/unknown text is retried rather than clicked blindly.
 
 - Buffs: Random Blessings first, then Double Attack. Ordinary buffs always
-  prefer Attack, then Range, then Cooldown, then Yen. Tiers break ties within
+  prefer Attack, then Range, then Cooldown. Green Speed and unreadable green-word
+  buffs remain eligible and beat Yen. Yen is second-last and Boss Damage is last
+  among all buffs. Tiers break ties within
   the same stat; Range I beats Cooldown II and every higher Cooldown tier.
   Boss Damage is always the last buff, including behind
   unreadable green-word buffs. Random Blessings and Boss Damage recognize I/II
   titles; II beats I within the same type. Boss-only damage is never classified
   as general Attack or physical/magical resistance.
   Green Health buffs remain ahead of every red debuff.
-- Debuffs: shield, explosive death, health, 0.5 regen, resistance cards.
+- Green first above everything: a single card with green words is chosen
+  immediately from its pixels, before OCR.
+- Debuffs: shield, explosive death, health, 0.5 regen, resistance cards. With
+  balanced preferences a shared physical+magical resist debuff (e.g. 50+50)
+  always beats a sole physical or sole magical one (75, 100, ...).
   At 250% displayed enemy Health, prefer other safe debuffs before adding more
   Health. The right panel is read only as match context and is never selectable.
 - Physical/magical resistance amounts are parsed independently, including
@@ -339,8 +340,10 @@ resumes the same unfinished slot/copy/spot. Upgrade interruptions click a safe
 empty point to close the panel, select the card, then reopen the same recorded
 unit with its priority and target intact. A pending purchase hidden by cards
 is checked with a selection-only click before another copy is bought. A card decision is locked
-for the current choice screen. Confirmation retries click only that same card;
-OCR changes cannot switch Cooldown to Yen after the first choice. The decision
+for the current choice screen. Confirmation retries preserve ordinary green
+choices, but newly verified green words override a previous red choice. A locked
+Yen or Boss Damage choice yields to a better green buff, including unreadable
+green words or green Speed. OCR changes cannot switch Cooldown to Yen. The decision
 resets only after the screen has been absent continuously, or a fresh match begins. An open unit preview is closed
 first (Q), and the chosen card remains locked until the choice closes.
 Shared reward lines (such as "+30% SummerPearls") are ignored; common effect
@@ -411,4 +414,26 @@ Capture failures never count as five failed purchases or authorize movement.
 Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model and no panel has ever been seen. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
 
 
-Five-failure enforcement: once five consecutive purchase clicks fail, another purchase is blocked at both the placement dispatcher and final click guard until a purchase is confirmed or relocation moves to another area. If visibility prevents relocation, the log states the reason and retries relocation while existing units can upgrade; it does not erase the failure streak and keep purchasing. ActionPacingTests.py verifies the shared 300 ms input interval and immediate stop behavior. PlacementConfirmationTests.py verifies the real purchase/recovery path counts each failure once and blocks a sixth purchase.
+## Unit manager selection
+
+F opens Unit Overview. Entries use confirmed purchase order: #1 bottom right,
+#2 bottom left, #3 row above right, #4 row above left, continuing upward two per row.
+Before selecting a recorded unit, the macro scrolls downward to the list bottom and
+confirms it is stationary. Upward scrolling uses one wheel notch at a time,
+checks the new row positions, and stops as soon as that unit's portrait has a clear,
+visible click area. Only the portrait is clicked; Sell X, Upgrade and targeting buttons
+are excluded. The side unit GUI confirms selection. Existing upgrade priorities,
+levels, targets, R guards and card recovery remain in place. F is pressed only
+after every unit is placed, then the manager stays open until the match ends,
+except while a card is chosen: it is closed for the card, then reopened. F is sent only after three consecutive "closed"
+readings, never twice within 2.5 s, and two unconfirmed presses lock F for 20 s.
+Click-aways use (497,168), left of the open manager. See MACRO_BEHAVIOUR.md.
+
+Validation: CheckpointManagerTests.py exercises route quarters, purchase-order
+selection through twenty entries, odd counts, bottom reset, and one-notch upward scrolling.
+UnitManagerVisionTests.py checks the supplied screenshot at multiple sizes and
+rejects portrait click areas hidden by the viewport. ActionPacingTests.py covers 200 ms unit actions
+and unchanged 300 ms general controls. PlacementConfirmationTests.py checks
+panel-only confirmation, placement caps and continued placement at checkpoint 3.
+CardPriorityTests.py checks green Speed and unreadable green ahead of Yen/Boss,
+all offer positions, and confirmation retries with fresh effect colours.

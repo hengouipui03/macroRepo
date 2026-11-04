@@ -1,4 +1,4 @@
-; One local circle, per-copy failure counts, and optional path relocation.
+﻿; Quarter-path checkpoints and consecutive placement failures.
 global gPlacementAreaFailures := Map(),gRunViewMoved := false
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
 global PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
@@ -11,7 +11,13 @@ ResetPlacementArea() {
 }
 
 PlacementFailureLimitReached() {
-    global PLACEMENT_FAILURE_LIMIT,gConsecutivePlacementFailures
+    global PLACEMENT_FAILURE_LIMIT,gConsecutivePlacementFailures,gMapModel
+    if gMapModel && gMapModel.HasProp("checkpointIndex") {
+        if gMapModel.checkpointIndex=0
+            return true
+        if gMapModel.checkpointIndex>=3
+            return false
+    }
     return gConsecutivePlacementFailures>=PLACEMENT_FAILURE_LIMIT
 }
 
@@ -38,7 +44,7 @@ ContinuePlacementInCurrentView(unit,reason) {
     if A_TickCount>=gPlacementRelocateRetryAt
         gPlacementRelocateRetryAt := A_TickCount+3000
     RefreshPlacementSearch()
-    Log(reason (PlacementFailureLimitReached()?" Five misses remain pending: retry DOWN relocation before another purchase; existing upgrades continue.":" Placement can continue here."))
+    Log(reason (PlacementFailureLimitReached()?" Checkpoint travel remains pending before another purchase; existing upgrades continue.":" Placement can continue here."))
     return false
 }
 
@@ -79,7 +85,9 @@ PlacementCopyFailures(unit,add := false) {
         gConsecutivePlacementFailures += 1
         Log("Failed purchase " gConsecutivePlacementFailures "/" PLACEMENT_FAILURE_LIMIT " consecutive | slot " unit.slot " copy " copy)
         if PlacementFailureLimitReached()
-            Log("Five consecutive failed purchases: relocate DOWN toward base before the next purchase.")
+            Log("Five consecutive failed purchases: travel to the next baseward checkpoint before another purchase.")
+        else if gConsecutivePlacementFailures=PLACEMENT_FAILURE_LIMIT
+            Log("Final checkpoint: keep retrying placement until the build is complete or the match ends.")
     }
     return state.misses
 }
@@ -169,108 +177,56 @@ CheckRelocationUnit(item) {
     return OpenRecordedUnit(item) && CloseUnitPanel()
 }
 
+RetryFinalCheckpointPlacement() {
+    global gMapModel,gConsecutivePlacementFailures,PLACEMENT_FAILURE_LIMIT
+    global gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
+    if !gMapModel || !gMapModel.HasProp("checkpointIndex") || gMapModel.checkpointIndex<3 || gConsecutivePlacementFailures<PLACEMENT_FAILURE_LIMIT
+        return
+    ResetPlacementFailureStreak()
+    gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
+    RefreshPlacementSearch()
+    Log("Checkpoint 3: refresh local placement attempts and keep trying; no further relocation.")
+}
+
 RelocatePlacementArea(unit) {
-    global gRunning,gPlacements,gPendingPlacement,gFailedPlacementSpots,gCardAction
-    global gPlacementViewRecovery,gPlacementRelocateRetryAt,gPlacementAreaFailures
-    global gPlacementBlockedEdges,gPlacementEdgeMisses,gRunViewMoved,gPlacementProfile
+    global gRunning,gPlacements,gPendingPlacement,gCardAction,gMapModel
+    global gPrepDeadline,gNavigationTimedOut,gPlacementViewRecovery,gRunViewMoved,gPlacementProfile
+    global gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
     if !gRunning || IsEndGameBlocking() || !ClearCardChoice()
         return false
     if gPendingPlacement
         return RecoverPendingPlacement(unit)
-    if !RecoverPlacementView()
-        return ContinuePlacementInCurrentView(unit,"Earlier unit coordinates are still being recovered.")
-    if A_TickCount<gPlacementRelocateRetryAt
-        return ContinuePlacementInCurrentView(unit,"Relocation is cooling down.")
-    if !CloseUnitPanel() || !CancelUnitPreview() || !GetClient(&cx,&cy,&cw,&ch)
-        return ContinuePlacementInCurrentView(unit,"The game view is not ready for relocation.")
+    if !gMapModel || !gMapModel.HasProp("checkpoints") || gMapModel.checkpoints.Length!=3
+        return ContinuePlacementInCurrentView(unit,"The three route checkpoints are unavailable.")
+    if gMapModel.checkpointIndex>=3 {
+        RetryFinalCheckpointPlacement()
+        return false
+    }
+    if !CloseUnitPanel() || !CancelUnitPreview()
+        return false
+    next := gMapModel.checkpointIndex+1
+    gMapModel.target := gMapModel.checkpoints[next]
+    if !RefreshMapPlayer()
+        return ContinuePlacementInCurrentView(unit,"Player marker unavailable; retain checkpoint " next " as the destination.")
+    ; Upgrade selection now uses purchase order in F, not old world coordinates.
+    for item in gPlacements
+        item.viewPending := true
+    gPlacementViewRecovery := 0,gRunViewMoved := true,gPlacementProfile := ""
     previous := gCardAction,gCardAction := "relocating"
-    totalX := 0,totalY := 0,speed := 0,reason := "No useful downstream path movement was available."
+    oldDeadline := gPrepDeadline,gPrepDeadline := A_TickCount+30000
     try {
-        Log("Follow the connected path toward base, aiming to leave this area by 140 pixels; check the farthest unit after every movement segment.")
-        Loop 18 {
-            if !gRunning || IsEndGameBlocking() || !ClearCardChoice()
-                break
-            farthest := PlacementFarthestUnit()
-            if !PlacementRelocationRoom(0,0) || !CheckRelocationUnit(farthest) {
-                reason := "The farthest unit needs its current clear click margin."
-                break
-            }
-            scene := VisionRequest("world " cx " " cy " " cw " " ch)
-            if !VisionOk(scene) || scene["path"]="0"
-                break
-            direction := PlacementRelocationDirection()
-            if direction.x*direction.x+direction.y*direction.y<1 {
-                reason := "Reached the baseward end of the mapped path."
-                break
-            }
-            next := VisionRequest("relocation " direction.x " " direction.y)
-            if !VisionOk(next)
-                break
-            dx := Number(next["dx"]),dy := Number(next["dy"]),length := Sqrt(dx*dx+dy*dy)
-            if length<1
-                break
-            duration := 120,forecast := Max(16,speed*duration*1.5)
-            if !PlacementRelocationRoom(-dx/length*forecast,-dy/length*forecast) {
-                duration := 60,forecast := Max(8,forecast/2)
-                if !PlacementRelocationRoom(-dx/length*forecast,-dy/length*forecast) {
-                    reason := "Stop before the farthest unit reaches the screen or HUD margin."
-                    break
-                }
-            }
-            remembered := VisionRequest("rememberview")
-            if !VisionOk(remembered) || !remembered.Has("saved") || remembered["saved"]!="1"
-                break
-            presses := AimPresses([],duration,dx*cw/800,dy*ch/600)
-            if !presses.Length
-                break
-            uninterrupted := HoldKeys(presses)
-            if !gRunning
-                return false
-            ActionPause(250)
-            if !gRunning
-                return false
-            shift := VisionRequest("viewshift " cx " " cy " " cw " " ch)
-            if !VisionOk(shift) {
-                ; Stop taking further segments until the last view is measured.
-                oldItems := gPlacements.Clone()
-                for item in oldItems
-                    item.viewPending := true
-                gPlacementViewRecovery := oldItems.Length?{items:oldItems,cw:cw,ch:ch,retryAt:A_TickCount+1000}:0
-                gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
-                gPlacementAreaFailures := Map(),gRunViewMoved := true,gPlacementProfile := ""
-                gPlacementRelocateRetryAt := A_TickCount+300
-                ResetPlacementFailureStreak()
-                RefreshPlacementSearch()
-                ResetUpgradeSelection()
-                SavePlacementRun()
-                Log("Pause walking: the farthest unit's position needs recovery. Continue placement here without retreating.")
-                return true
-            }
-            sx := Number(shift["dx"]),sy := Number(shift["dy"])
-            ShiftRecordedPlacements(sx,sy)
-            totalX += sx,totalY += sy,speed := Sqrt(sx*sx+sy*sy)/duration
-            farthest := PlacementFarthestUnit()
-            if !PlacementRelocationRoom(0,0) || !CheckRelocationUnit(farthest) {
-                reason := "Stop walking to preserve the farthest unit's click visibility."
-                break
-            }
-            distance := Sqrt(totalX*totalX+totalY*totalY)
-            Log("Downstream relocation " Round(distance) "/140 pixels; farthest unit " (farthest?"#" farthest.id:"none") " remains selectable.")
-            if distance>=140 {
-                reason := "Reached the new downstream placement area."
-                break
-            }
-            if speed*duration<2 || !uninterrupted {
-                reason := "Movement paused; keep placement running in the current view."
-                break
-            }
-        }
-        if totalX*totalX+totalY*totalY>=8**2 {
-            gPlacementRelocateRetryAt := A_TickCount+300
-            ResetPlacementFailureStreak()
-            Log("Relocation finished after " Round(Sqrt(totalX*totalX+totalY*totalY)) " pixels. " reason " Resume placement beside this path section.")
-            return true
-        }
-        return ContinuePlacementInCurrentView(unit,reason)
-    } finally gCardAction := previous
+        Log("Follow the drawn route to checkpoint " next "/3 (" (next*25) "% toward base).")
+        if !NavigateDrawing()
+            return ContinuePlacementInCurrentView(unit,"Checkpoint " next " not reached yet; keep that destination and retry.")
+        gMapModel.checkpointIndex := next
+        gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
+        ResetPlacementFailureStreak()
+        RefreshPlacementSearch()
+        ResetUpgradeSelection()
+        SavePlacementRun()
+        Log("Reached checkpoint " next "/3. Resume placement; recorded units remain accessible through F.")
+        return true
+    } finally {
+        gPrepDeadline := oldDeadline,gCardAction := previous
+    }
 }

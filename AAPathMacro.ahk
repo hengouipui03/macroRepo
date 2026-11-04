@@ -15,9 +15,14 @@ global REF_H := 600
 global WINDOW_W := 1401
 global WINDOW_H := 975
 global ACTION_GAP_MS := 300,gLastInputFinishedAt := 0
+global ACTION_HOLD_MS := 300
+global UNIT_ACTION_MS := 200
+; Manager-safe click-away (reference 800x600): empty world left of the open F
+; unit manager, right of "Return to lobby", above the cards, outside the unit panel.
+global CLICK_AWAY_X := 497,CLICK_AWAY_Y := 168
 global STATIC_CLICK_MS := 300
 global PREP_CLICK_MS := 300
-global CLICK_HOLD_MS := 60
+global CLICK_HOLD_MS := ACTION_HOLD_MS
 global MOUSE_SETTLE_MS := 0
 global gInputEpoch := 0
 global CAMERA_TILT_PIXELS := 420
@@ -37,6 +42,7 @@ global gActivityLog := 0
 #Include UnitSettings.ahk
 #Include Placement.ahk
 #Include PlacementArea.ahk
+#Include UnitManager.ahk
 #Include PlacedUnits.ahk
 #Include Learning.ahk
 #Include CardContext.ahk
@@ -215,17 +221,17 @@ MoveRef(rx, ry) {
     return false
 }
 
-SmoothMoveTo(sx, sy) {
-    global gRunning, gInputEpoch
+SmoothMoveTo(sx, sy,gapMs := 0,travelMs := 0) {
+    global gRunning, gInputEpoch,ACTION_HOLD_MS
     MouseGetPos(&startX, &startY)
     distance := Sqrt((sx-startX)**2 + (sy-startY)**2)
     if distance < 2
         return true
-    if !BeginInputAction(gRunning)
+    if !BeginInputAction(gRunning,gapMs)
         return false
     ; Interpolate an eased path over real time. A single MouseMove with a
     ; speed value is still instantaneous under AutoHotkey's SendInput mode.
-    duration := Min(120, Max(60, Round(distance*0.12)))
+    duration := travelMs>0?travelMs:ACTION_HOLD_MS
     started := A_TickCount, epoch := gInputEpoch, wasRunning := gRunning
     previousMode := A_SendMode
     SendMode "Event"
@@ -295,7 +301,7 @@ ClickButton(name, delayMs := -1, confirm := 0, forceDetect := false) {
     return ClickLearnedButton(name, delayMs, confirm, forceDetect)
 }
 
-BeginInputAction(requireRunning := true) {
+BeginInputAction(requireRunning := true,gapMs := 0) {
     global ACTION_GAP_MS,gLastInputFinishedAt,gRunning,gInputEpoch
     epoch := gInputEpoch
     loop {
@@ -303,7 +309,7 @@ BeginInputAction(requireRunning := true) {
             return false
         if requireRunning && CheckCardInterruption()
             return false
-        remaining := ACTION_GAP_MS-(A_TickCount-gLastInputFinishedAt)
+        remaining := (gapMs>0?gapMs:ACTION_GAP_MS)-(A_TickCount-gLastInputFinishedAt)
         if remaining<=0
             return true
         Sleep Min(20,remaining)
@@ -766,6 +772,11 @@ HoldCameraKey(key,duration,epoch) {
 
 EnsureRouteAndSpawn() {
     global gMapModel,gCameraOverheadReady,gPathToggleClicked
+    ; F belongs to the upgrade phase only: never pressed before every unit is placed.
+    EndUnitManagerPhase()
+    leftover := ReadUnitManager()
+    if leftover && leftover["open"]="1"
+        Log("Unit manager is visible before placement; F is not pressed until all units are placed.")
     gCameraOverheadReady := false,gPathToggleClicked := false
     gMapModel := VisionMapModel()
     if !gMapModel {
@@ -793,12 +804,18 @@ EnsureRouteAndSpawn() {
     }
     if !CameraReset()
         return false
-    if gMapModel.source!="vision"
-        return RefreshMapPlayer()
-    if !ProbePlayer()
+    if gMapModel.source!="vision" {
+        if !RefreshMapPlayer()
+            return false
+    } else if !ProbePlayer()
         return false
-    if gMapModel.target<0
-        gMapModel.target := MapRecommendedTarget(gMapModel)
+    gMapModel.checkpoints := MapPlacementCheckpoints(gMapModel)
+    if gMapModel.checkpoints.Length!=3 {
+        Log("Cannot divide the connected minimap route into three baseward checkpoints.")
+        return false
+    }
+    gMapModel.checkpointIndex := 0,gMapModel.target := gMapModel.checkpoints[1]
+    Log("Route divided at 25%, 50%, and 75%; travel to checkpoint 1 before placement.")
     return true
 }
 
@@ -967,17 +984,29 @@ ClearCardChoice() {
 }
 
 ClearCardChoiceAction() {
-    global gRunning,gCardSelection
+    global gRunning,gCardSelection,gUnitManagerPhase,gUnitManagerClosedForCards
     if !HasCardChoice() {
-        if !gCardSelection
+        if !gCardSelection {
+            if gUnitManagerClosedForCards && WaitForCardChoiceClosed()
+                ReopenUnitManagerAfterCards()
             return true
+        }
         if WaitForCardChoiceClosed() {
             ResetCardSelection()
+            ReopenUnitManagerAfterCards()
             return true
         }
         return false
     }
-    if !ClickAwayFromUnitPanel()
+    ; A placement preview is dropped (Q) so a card click cannot buy a unit.
+    ; During upgrades the unit panel is left open, and the F unit manager is
+    ; closed for the card (the only time it is closed). It is reopened once the
+    ; cards are gone, and the top-priority unit is reselected before any R.
+    if !CancelUnitPreview()
+        return false
+    if !gUnitManagerPhase && HasUnitPanel() && !ClickAwayFromUnitPanel()
+        return false
+    if !CloseUnitManagerForCards()
         return false
     Log("Card choice is open; choosing before continuing.")
     deadline := A_TickCount+20000
@@ -986,6 +1015,7 @@ ClearCardChoiceAction() {
             TryChooseCard()
         else if WaitForCardChoiceClosed() {
             ResetCardSelection()
+            ReopenUnitManagerAfterCards()
             return true
         }
         ActionPause(150)
@@ -1014,7 +1044,7 @@ WaitForCardChoiceClosed() {
     return false
 }
 
-ConfirmLockedCardSelection() {
+ConfirmLockedCardSelection(cards := 0) {
     global gCardSelection,gCardRetryAt,gRunning
     if !gRunning || !gCardSelection
         return false
@@ -1025,6 +1055,20 @@ ConfirmLockedCardSelection() {
         return true
     }
     choice := gCardSelection
+    if !cards {
+        geometry := WindowGeometry()
+        if geometry {
+            words := ReadOcrRows(125,175,690,445,true)
+            frame := RefPixels(120,175,690,445)
+            cards := ReadWordColourCards(words,frame,geometry)
+        }
+    }
+    if cards {
+        choice := PreferVerifiedGreenChoice(cards,choice)
+        if choice.index!=gCardSelection.index
+            Log("Verified green effect takes priority over the previous card choice; select card " choice.index ".")
+        gCardSelection := choice
+    }
     if CardIsSpeed(choice) {
         Log("Blocked forbidden positive Speed selection.")
         ResetCardSelection()
@@ -1032,8 +1076,11 @@ ConfirmLockedCardSelection() {
     }
     rect := CardRectangle(choice.index)
     Log("Keep card " choice.index ": " choice.kind " / " choice.stat "; awaiting confirmation.")
+    ; The left card shares screen space with the side unit panel; click its
+    ; lower part when that panel is still showing so Upgrade is never hit.
+    clickY := choice.index=1 && HasUnitPanel()?405:330
     ; Recheck after moving: a closing dialog must not receive another click.
-    if !ClickRef((rect[1]+rect[3])//2,330,HasCardChoice)
+    if !ClickRef((rect[1]+rect[3])//2,clickY,HasCardChoice)
         return true
     gCardRetryAt := A_TickCount+1000
     if WaitForCardChoiceClosed() {
@@ -1054,11 +1101,22 @@ TryChooseCard() {
         ActionPause(100)
         return true
     }
+    ; GREEN FIRST, above everything else: one card with green words is chosen
+    ; at once from its pixels, before OCR (votes can end within seconds).
+    frame := RefPixels(120,175,690,445)
+    green := PixelGreenCards(frame)
+    if green.Length=1 {
+        cards := PixelInkCards(green)
+        Log("Card " green[1] " is the only card with green words; choose it immediately.")
+        gCardUnread := 0
+        gCardSelection := cards[green[1]].Clone()
+        gCardSelection.index := green[1]
+        return ConfirmLockedCardSelection(cards)
+    }
     geometry := WindowGeometry()
     if !geometry
         return false
     words := ReadOcrRows(125,175,690,445,true)
-    frame := RefPixels(120,175,690,445)
     cards := ReadWordColourCards(words,frame,geometry)
     for index,card in cards
         if card.stat!="unknown" && card.kind!="unknown" && !CardIsSpeed(card)
@@ -1085,7 +1143,7 @@ TryChooseCard() {
     LogCardDecision(cards,best)
     gCardSelection := cards[best].Clone()
     gCardSelection.index := best
-    return ConfirmLockedCardSelection()
+    return ConfirmLockedCardSelection(cards)
 }
 
 HasValue(list,value) {
@@ -1180,7 +1238,7 @@ IdleKeepAliveAllowed() {
 }
 
 IdleKeepAliveTick() {
-    global gRunning,gPlacements,gIdleKeepAliveAt,IDLE_KEEPALIVE_MS
+    global gRunning,gPlacements,gIdleKeepAliveAt,IDLE_KEEPALIVE_MS,CLICK_AWAY_X,CLICK_AWAY_Y
     if !gRunning || !gPlacements.Length || UpgradeQueue().Length {
         ResetIdleKeepAlive()
         return false
@@ -1204,7 +1262,7 @@ IdleKeepAliveTick() {
         return false
     ; The existing click-away point is above/outside the card area. Recheck
     ; state after smooth movement so a newly opened dialog takes priority.
-    if !ClickRef(740,150,IdleKeepAliveAllowed)
+    if !ClickRef(CLICK_AWAY_X,CLICK_AWAY_Y,IdleKeepAliveAllowed)
         return false
     gIdleKeepAliveAt := A_TickCount
     Log("Idle keep-alive: clicked Roblox after five minutes without upgrades.")
@@ -1212,8 +1270,10 @@ IdleKeepAliveTick() {
 }
 
 NavigateForPlacement() {
-    global gRunning,gNavigationTimedOut
+    global gRunning,gNavigationTimedOut,gMapModel
     if NavigateAlongRoute() {
+        if gMapModel && gMapModel.HasProp("checkpoints")
+            gMapModel.checkpointIndex := 1
         Log("Mapped destination reached; continuing into placement preparation.")
         return true
     }
@@ -1234,6 +1294,7 @@ RunMacro() {
     global gRunning, gPlacements, gMatchReported,gAwaitingReplayMap,gEndHandling
     SaveUnitSettings()
     ResetIdleKeepAlive()
+    EndUnitManagerPhase()
     plan := ReadUnitPlan()
     if gAwaitingReplayMap {
         if !WaitForReplayVoteStart()
@@ -1290,6 +1351,10 @@ RunMacro() {
     if buildResult!="complete"
         return buildResult="replay"?"replay":""
     Notify("Build placed: " gPlacements.Length " units. Watching upgrades/end screen.")
+    ; Only now may F be pressed; the manager then stays open until the match ends.
+    BeginUnitManagerPhase()
+    if !HasCardChoice() && !IsEndGameBlocking()
+        EnsureUnitManagerOpen()
     while gRunning {
         if HasCardChoice() {
             ResetIdleKeepAlive()
@@ -1306,6 +1371,7 @@ RunMacro() {
             continue
         }
         RefreshMatchModifiers()
+        MaintainUnitManager()
         UpgradePriorityPass()
         IdleKeepAliveTick()
         ActionPause(100)
@@ -1388,6 +1454,7 @@ StopMacro(*) {
     gInputEpoch += 1
     gRunning := false
     ResetIdleKeepAlive()
+    EndUnitManagerPhase()
     if gOcrPid && ProcessExist(gOcrPid) {
         try ProcessClose gOcrPid
     }

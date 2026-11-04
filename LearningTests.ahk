@@ -7,7 +7,7 @@
             throw Error(message)
     }
     buffs := ["attack", "range", "cooldown", "yen"]
-    debuffs := ["shield","explosive death","health","0.5 regen","physical resist","magical resist","physical and magical resist","speed"]
+    debuffs := ["shield","explosive death","health","0.5 regen","physical and magical resist","physical resist","magical resist","speed"]
     for index, stat in buffs {
         card := CardPolicy("Buff " stat " +20%")
         AssertLearning(card.kind="buff" && card.stat=stat && card.rank=index,"Buff priority misread: " stat)
@@ -42,7 +42,7 @@
     count += 1
     AssertLearning(CardPolicy("Cooldown +15%").kind="debuff","Cooldown increase incorrectly classified")
     count += 1
-    AssertLearning(CardPolicy("Enemy Physical AND Magical Resist +30%").rank=7,"Combined resistance must not be physical-only")
+    AssertLearning(CardPolicy("Enemy Physical AND Magical Resist +30%").rank=5,"Combined resistance must not be physical-only")
     count += 1
     AssertLearning(ChooseBestCard([CardPolicy("unknown unreadable"),CardPolicy("Enemy shield")])=0,"Unknown card must not be discarded as a possible buff")
     count += 1
@@ -159,7 +159,28 @@
     AssertLearning(resistMix.resistance.known && resistMix.resistance.total=100 && resistMix.resistance.peak=50,"Combined resistance amounts were not added")
     AssertLearning(ChooseBestCard([resistMagic150,resistMix])=2 && ChooseBestCard([resistMix,resistMagic150])=1,"50+50 resistance did not beat 150 magical in both positions")
     AssertLearning(ChooseBestCard([CardPolicy("100% magical resist",false,"debuff"),resistMix])=2,"Equal totals did not prefer the lower highest individual increase")
-    AssertLearning(ChooseBestCard([resistMix,CardPolicy("25% magical resist",false,"debuff")])=2,"Lower single resistance lost to combined resistance")
+    AssertLearning(ChooseBestCard([resistMix,CardPolicy("25% magical resist",false,"debuff")])=1,"Shared resistance lost to a smaller sole resistance")
+    ; Reported rule: shared 50 physical + 50 magic beats any sole resist debuff.
+    sharedShot := CardPolicy("+ Resistant Enemies I +50 Enemy Physical Resist +50 Enemy Magic Resist",false,"debuff")
+    for sole in ["+100 Enemy Physical Resist","+75 Enemy Physical Resist","+75 Enemy Magic Resist","+25 Enemy Magic Resist"] {
+        soleCard := CardPolicy(sole,false,"debuff")
+        AssertLearning(ChooseBestCard([soleCard,sharedShot])=2 && ChooseBestCard([sharedShot,soleCard])=1,"Sole resistance beat shared physical+magic: " sole)
+        count += 1
+    }
+    ; The reported offer: red Enemy Health, green Range, red shared resist.
+    shotHealth := CardPolicy("+ Enemy Health I +50% Enemy Health",false,"debuff"),shotHealth.effectInk := "debuff"
+    shotRange := CardPolicy("+ Range I +15% Range",true,"buff"),shotRange.effectInk := "buff"
+    shotResist := sharedShot.Clone(),shotResist.effectInk := "debuff"
+    AssertLearning(ChooseBestCard([shotHealth,shotRange,shotResist])=2 && FallbackCardChoice([shotHealth,shotRange,shotResist])=2,"Green Range lost to a red card")
+    ; Green pixels alone (OCR unreadable) still mark the only green card.
+    for greenIndex in [1,2,3] {
+        pixels := PixelOnlyInkFixture(greenIndex)
+        AssertLearning(PixelGreenCards(pixels).Length=1 && PixelGreenCards(pixels)[1]=greenIndex,"Pixel green card not found at " greenIndex)
+        offer := ReadWordColourCards([],pixels,{cw:800,ch:600})
+        AssertLearning(ChooseBestCard(offer)=greenIndex,"Unreadable green card lost at " greenIndex)
+        count += 2
+    }
+    AssertLearning(PixelGreenCards(PixelOnlyInkFixture(0)).Length=0,"Red-only cards were read as green")
     AssertLearning(ChooseBestCard([CardPolicy("150% physical resist",false,"debuff"),CardPolicy("50% magical resist",false,"debuff")])=2,"Fixed physical/magical order overrode resistance amount")
     for wording in ["50% physical and magical resist","Physical and Magical Resist III +50%","Physical Resist +50% Magical Resist +50%","+50 Enemy Physical Resist +50 Enemy Magic Resist","Resistant Enemies I +50% physical resist and +50% magical resist"] {
         combined := CardPolicy(wording,false,"debuff")
@@ -286,6 +307,20 @@
     count += 1
     greenRandom := blessingsI.Clone(),greenRandom.effectInk := "buff"
     AssertLearning(ChooseBestCard([greenBoss,greenRandom,soleGreen])=2,"Random Blessings did not rank first within the green-only set")
+    greenYen := CardPolicy("Yen II +30% Unit Yen",true,"buff"),greenYen.effectInk := "buff"
+    greenUnknown := unreadableGreen.Clone(),greenUnknown.effectInk := "buff"
+    for offer in [[greenYen,greenUnknown,greenBoss],[greenBoss,greenYen,greenUnknown],[greenUnknown,greenBoss,greenYen]] {
+        selected := ChooseBestCard(offer)
+        AssertLearning(offer[selected].stat="unknown" && FallbackCardChoice(offer)=selected,"Unreadable green lost to Yen or Boss Damage")
+    }
+    AssertLearning(ChooseBestCard([soleGreen,greenYen,greenBoss])=1,"Green Speed lost to Yen or Boss Damage")
+    AssertLearning(ChooseBestCard([greenBoss,greenYen])=2,"Boss Damage was not the last green buff")
+    locked := greenYen.Clone(),locked.index := 1
+    promoted := PreferVerifiedGreenChoice([greenYen,greenUnknown,greenBoss],locked)
+    AssertLearning(promoted.index=2,"A locked Yen card blocked newly verified unreadable green words")
+    locked := greenBoss.Clone(),locked.index := 1
+    promoted := PreferVerifiedGreenChoice([greenBoss,soleGreen,fakeRedBuff],locked)
+    AssertLearning(promoted.index=2,"A locked Boss card blocked a verified green Speed buff")
     count += 3
     gMatchModifiers := {health:250,healthKnown:true,physical:200,magical:50}
     gResistancePreference := "balanced"
@@ -433,6 +468,18 @@ class WordInkFixture {
             if x>=word.x && x<=word.x+word.w && y>=word.y && y<=word.y+word.h
                 return word.x=340 || word.y=220 || word.y=400?0x20E020:0xE02020
         }
+        return 0x181818
+    }
+}
+class PixelOnlyInkFixture {
+    valid := true
+    __New(greenIndex) {
+        this.greenIndex := greenIndex
+    }
+    AtRef(x,y) {
+        for index,left in [129,320,512]
+            if x>=left+30 && x<=left+130 && y>=205 && y<=250
+                return index=this.greenIndex?0x10F010:0xF01818
         return 0x181818
     }
 }

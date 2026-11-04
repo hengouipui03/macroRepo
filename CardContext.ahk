@@ -192,6 +192,9 @@ ReadWordColourCards(words,frame,geometry) {
                 redSpeed := true
         }
         kind := green?"buff":red?"debuff":"unknown"
+        ; OCR missed the words' colour: bright green glyph pixels still mean green.
+        if kind="unknown" && CardPixelIsGreen(CardPixelInk(frame,index))
+            kind := "buff"
         card := CardPolicy(fullText,kind="buff",kind)
         if kind!="unknown"
             card.kind := kind,card.rank := CardRank(kind,card.stat)
@@ -200,6 +203,51 @@ ReadWordColourCards(words,frame,geometry) {
         card.redSpeedEffect := redSpeed
         card.effectInk := kind
         cards.Push(card)
+    }
+    return cards
+}
+
+; Bright title/effect glyph pixels inside one card, inset from its frame.
+; Shared white reward lines and the dark interior count as neither colour.
+CardPixelInk(frame,index) {
+    ink := {green:0,red:0}
+    if !frame || !frame.valid
+        return ink
+    bounds := CardEffectBounds(index)
+    y := bounds[2]+10
+    while y<=bounds[2]+122 {
+        x := bounds[1]+10
+        while x<=bounds[3]-10 {
+            RGB(frame.AtRef(x,y),&r,&g,&b)
+            if g>170 && g-r>80 && g-b>60
+                ink.green += 1
+            else if r>170 && r-g>80 && r-b>60
+                ink.red += 1
+            x += 3
+        }
+        y += 3
+    }
+    return ink
+}
+
+CardPixelIsGreen(ink) => ink.green>=24 && ink.green>ink.red*3
+
+PixelGreenCards(frame) {
+    green := []
+    Loop 3
+        if CardPixelIsGreen(CardPixelInk(frame,A_Index))
+            green.Push(A_Index)
+    return green
+}
+
+; Minimal card records for the pixel-only green decision (no OCR yet).
+PixelInkCards(greenIndices) {
+    cards := []
+    Loop 3 {
+        ink := HasValue(greenIndices,A_Index)?"buff":"unknown"
+        cards.Push({kind:ink,stat:"unknown",rank:99,amount:0,amountSigned:0,amountKnown:false,text:"green words (pixel read)",
+            secretPortal:false,tier:1,effectInk:ink,forbiddenSpeed:false,redSpeedEffect:false,
+            resistance:{physical:0,magical:0,physicalRead:false,magicalRead:false,known:false,total:0,peak:0}})
     }
     return cards
 }

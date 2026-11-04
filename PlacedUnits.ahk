@@ -110,13 +110,9 @@ CachedPlacementCandidates(unit) {
 }
 
 UpgradeQueue(readyOnly := false) {
-    global gPlacements,gRunViewMoved
-    if readyOnly
-        RecoverPlacementView()
+    global gPlacements
     queue := []
     for item in gPlacements {
-        if readyOnly && (!PlacementAnchorKnown(item) || (gRunViewMoved && (item.x<50 || item.x>745 || item.y<140 || item.y>475)))
-            continue
         if item.complete || (readyOnly && item.HasProp("upgradeRetryAt") && A_TickCount<item.upgradeRetryAt)
             continue
         at := queue.Length+1
@@ -228,8 +224,13 @@ ReadUnitUpgradeState(finite := false) {
         state.raw .= " | " full.raw
     }
     state.signature := finite?UpgradeHeaderSignature():""
-    if finite && (before="" || before!=state.signature)
+    ; Why a finite read failed, for the Activity log (diagnostic only).
+    state.unread := ""
+    if finite && (before="" || before!=state.signature) {
+        state.unread := before=""?"no gold UPG heading pixels":"UPG heading pixels changed during OCR (OCR level " state.level ")"
         state.level := -1,state.signature := ""
+    } else if finite && state.level<0
+        state.unread := "OCR found no UPG number"
     return state
 }
 
@@ -250,6 +251,14 @@ UpgradeHeaderSignature() {
     return hits>=8?signature:""
 }
 
+; Evidence for an unreadable UPG heading: the client area exactly as it was.
+SaveUpgradeDiagnostic(item) {
+    path := A_ScriptDir "\cache\upg-unreadable-" item.id ".bmp"
+    frame := RefPixels(0,0,800,600)
+    if frame.valid && SaveFrameBmp(frame,path)
+        Log("#" item.id ": saved " path " for diagnosis.")
+}
+
 DeferUnitUpgrade(item,message) {
     ; Unreadable pending targets remain unfinished and return to their priority.
     item.upgradeRetryAt := A_TickCount+10000
@@ -260,38 +269,18 @@ DeferUnitUpgrade(item,message) {
 }
 
 OpenRecordedUnit(item) {
-    if !CloseUnitPanel() || !CancelUnitPreview()
-        return false
-    ; Ground placement and the selectable model may differ in screen height.
-    ; Remember the first working model click for all later upgrade passes.
-    targets := [{x:item.selectX,y:item.selectY}]
-    for offset in [[0,-15],[0,-30],[0,-50]]
-        targets.Push({x:item.x+offset[1],y:item.y+offset[2]})
-    for index,point in targets {
-        if HasCardChoice() {
-            if !ClearCardChoice()
-                return false
-        }
-        if TrySelectUnitAt(point,650,index=1) {
-            item.selectX := point.x,item.selectY := point.y
-            SavePlacementRun()
-            return true
-        }
-    }
-    if gRunning
-        Log("#" item.id " " item.name ": unit panel did not open near recorded " item.x "," item.y ".")
-    return false
+    return SelectManagedUnit(item.id)
 }
 
 PressUnitUpgradeKey() {
-    global gRunning,gUpgradeLastRAt
+    global gRunning,gUpgradeLastRAt,ACTION_HOLD_MS
     if !gRunning || HasCardChoice() || !HasUnitPanel()
         return false
     if !BeginInputAction()
         return false
     gUpgradeLastRAt := A_TickCount
     SendEvent "{r down}"
-    try return ActionPause(60,false)
+    try return ActionPause(ACTION_HOLD_MS,false)
     finally {
         SendEvent "{r up}"
         EndInputAction()
@@ -322,7 +311,7 @@ UpgradeWarning(item,message) {
 }
 
 UpgradeOnceAction(item) {
-    global gRunning,gUpgradeSelectedId,gUpgradeLastRAt,gUpgradeReadAt
+    global gRunning,gUpgradeSelectedId,gUpgradeLastRAt,gUpgradeReadAt,gUnitManagerFailure
     RefreshRecordedUpgradeTarget(item)
     if item.complete
         return true
@@ -334,12 +323,28 @@ UpgradeOnceAction(item) {
         ResetFiniteUpgradeGuard(item)
     if gUpgradeSelectedId!=item.id || !HasUnitPanel() {
         ResetUpgradeSelection()
-        Log("Open upgrade #" item.id " " item.name " | priority " item.priority " | target " item.target " | recorded " item.x "," item.y)
+        Log("Open upgrade #" item.id " " item.name " | priority " item.priority " | target " item.target " | select purchase #" item.id " through F manager")
         if !OpenRecordedUnit(item) {
-            if gRunning
-                return DeferUnitUpgrade(item,"Unit panel did not open; let the other units upgrade.")
-            return false
+            if !gRunning
+                return false
+            reason := IsSet(gUnitManagerFailure)?gUnitManagerFailure:""
+            if reason="card" || HasCardChoice() {
+                ; A card interrupted the selection: choose it (manager stays open),
+                ; then reselect this same top-priority unit. Never a skip.
+                ClearCardChoice()
+                return false
+            }
+            item.openFailures := (item.HasProp("openFailures")?item.openFailures:0)+1
+            ; Manager visibility is not this unit's fault, and a single missed
+            ; portrait click is retried at the same priority instead of skipped.
+            if reason="manager" || item.openFailures<3 {
+                UpgradeWarning(item,"selection through the unit manager did not finish" (reason=""?"":" (" reason ")") "; retry the same priority.")
+                return false
+            }
+            item.openFailures := 0
+            return DeferUnitUpgrade(item,"Unit panel did not open after three tries; let the other units upgrade.")
         }
+        item.openFailures := 0
         gUpgradeSelectedId := item.id
     }
     finite := item.target!=99
@@ -380,9 +385,12 @@ UpgradeOnceAction(item) {
     if finite {
         if !state || state.level<0 {
             item.upgradeUnreadCount += 1
-            if item.upgradeUnreadCount>=3
-                return DeferUnitUpgrade(item,"UPG header unreadable; target " item.target " remains pending. No R sent.")
-            UpgradeWarning(item,"UPG number unreadable; target " item.target ". No R sent until a level is confirmed.")
+            detail := state && state.HasProp("unread") && state.unread!=""?" [" state.unread " | OCR: " SubStr(state.raw,1,90) "]":""
+            if item.upgradeUnreadCount>=3 {
+                SaveUpgradeDiagnostic(item)
+                return DeferUnitUpgrade(item,"UPG header unreadable" detail "; target " item.target " remains pending. No R sent.")
+            }
+            UpgradeWarning(item,"UPG number unreadable" detail "; target " item.target ". No R sent until a level is confirmed.")
             return false
         }
         item.upgradeUnreadCount := 0

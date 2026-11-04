@@ -514,12 +514,20 @@ CardIsResistance(card) {
 }
 
 ResistancePreferred(a,b) {
+    global gResistancePreference,gMatchModifiers
     left := a.HasProp("resistance")?a.resistance:ParseResistanceEffects(a.HasProp("text")?a.text:"")
     right := b.HasProp("resistance")?b.resistance:ParseResistanceEffects(b.HasProp("text")?b.text:"")
+    ; Balanced team: a shared physical+magical debuff (e.g. 50+50) always beats
+    ; a sole one (75 or 100 physical), even if its amounts were partly unread.
+    ; A ticked Magic/Physical team checkbox still decides by the avoided stat.
+    if gResistancePreference="balanced" {
+        leftShared := ResistanceIsShared(a,left),rightShared := ResistanceIsShared(b,right)
+        if leftShared!=rightShared
+            return leftShared
+    }
     if left.known!=right.known
         return left.known
     if left.known {
-        global gResistancePreference,gMatchModifiers
         if gResistancePreference!="balanced" {
             name := gResistancePreference="magic"?"magical":"physical"
             if Max(0,left.%name%)!=Max(0,right.%name%)
@@ -536,6 +544,11 @@ ResistancePreferred(a,b) {
             return lp<rp
     }
     return CardRank(a.kind,a.stat)<CardRank(b.kind,b.stat)
+}
+
+ResistanceIsShared(card,effects) {
+    return card.stat="physical and magical resist"
+        || (effects.physicalRead && effects.magicalRead && effects.physical>0 && effects.magical>0)
 }
 
 CardPolicy(text, greenHint := false, colourKind := "") {
@@ -641,7 +654,9 @@ CardRank(kind, stat) {
         return 100
     if kind="buff" && stat="double attack"
         return 0
-    priorities := kind="buff"?["attack","range","cooldown","yen"]:["shield","explosive death","health","0.5 regen","physical resist","magical resist","physical and magical resist","speed"]
+    ; A shared physical+magical resist debuff ranks above any sole physical or
+    ; sole magical resist debuff, whatever the amounts.
+    priorities := kind="buff"?["attack","range","cooldown","yen"]:["shield","explosive death","health","0.5 regen","physical and magical resist","physical resist","magical resist","speed"]
     for index,name in priorities
         if stat=name
             return index
@@ -682,6 +697,8 @@ CardPreferenceScore(card) {
             return -100000000
         if card.stat="boss damage"
             return 200000000-tier*10000-Min(9,card.amount/100)
+        if card.stat="yen"
+            return 150000000-tier*10000-Min(9,card.amount/100)
         ; Stat preference is absolute; tiers only compare the same stat.
         return CardRank("buff",card.stat)*1000000-tier*10000-Min(9,card.amount/100)
     }
@@ -741,6 +758,27 @@ ChooseBestCard(cards) {
             bestScore := score,best := index
     }
     return unknown && !hasBuff?0:best
+}
+
+PreferVerifiedGreenChoice(cards,choice) {
+    best := ChooseBestCard(cards)
+    if best && CardHasGreenEffect(cards[best]) {
+        currentGreen := choice.index<=cards.Length && CardHasGreenEffect(cards[choice.index])
+        betterTier := (choice.stat="yen" || choice.stat="boss damage")
+            && CardPreferenceScore(CardSelectionView(cards[best]))<CardPreferenceScore(CardSelectionView(choice))
+        if !CardHasGreenEffect(choice) || !currentGreen || betterTier {
+            promoted := cards[best].Clone()
+            promoted.index := best
+            return promoted
+        }
+    }
+    ; A fresh harmful-Speed reading cannot inherit an older safe classification.
+    if choice.index<=cards.Length && CardIsSpeed(cards[choice.index]) {
+        blocked := cards[choice.index].Clone()
+        blocked.index := choice.index
+        return blocked
+    }
+    return choice
 }
 
 FallbackCardChoice(cards) {

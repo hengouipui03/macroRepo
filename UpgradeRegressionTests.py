@@ -29,7 +29,7 @@ logic += "\n" + function("Placement.ahk", "TryPlacementCandidateAction")
 logic += "\n" + function("Placement.ahk", "TrySelectUnitAt")
 logic += "\n" + function("Placement.ahk", "PlacementPurchaseReady")
 logic += "\n" + function("PlacementArea.ahk", "PlacementRelocationDirection").replace('PlacementRelocationDirection(', 'ActualRelocationDirection(', 1)
-for name in ["PlacementFailureLimitReached", "ResetPlacementFailureStreak", "RecordFailedPlacement", "PlacementCopyFailures", "PlacementAnchorKnown", "ContinuePlacementInCurrentView", "RecoverPlacementView", "PlacementViewCanShift", "ShiftRecordedPlacements", "PlacementFarthestUnit", "PlacementRelocationRoom", "CheckRelocationUnit", "RelocatePlacementArea"]:
+for name in ["PlacementFailureLimitReached", "ResetPlacementFailureStreak", "RecordFailedPlacement", "RetryFinalCheckpointPlacement", "PlacementCopyFailures", "PlacementAnchorKnown", "ContinuePlacementInCurrentView", "RecoverPlacementView", "PlacementViewCanShift", "ShiftRecordedPlacements", "PlacementFarthestUnit", "PlacementRelocationRoom", "CheckRelocationUnit", "RelocatePlacementArea"]:
     logic += "\n" + function("PlacementArea.ahk", name)
 logic += "\n" + function("Placement.ahk", "TryPlacementPoints")
 logic += "\n" + function("Placement.ahk", "PlaceConfiguredBuildAction")
@@ -41,6 +41,7 @@ fixture = r'''
 #SingleInstance Off
 #Warn All, Off
 global testNow := 10000,gRunning := true,REF_W := 800,REF_H := 600
+global ACTION_HOLD_MS := 300,gPrepDeadline := 0,gNavigationTimedOut := false,navReached := true,endState := false
 global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUpgradeLastRAt := 0,gUpgradeReadAt := 0
 global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
 global levels := Map(),presses := 0,ignored := 0,ocrOverride := -1,unreadable := false,ready := true
@@ -136,6 +137,10 @@ try {
     a := Unit(1,1),b := Unit(2,1),gPlacements := [a,b],levels[1] := 0,levels[2] := 0
     blockedUnit := 1,presses := 0,gPendingPlacement := 0
     ResetUpgradeSelection()
+    ; A missed selection is retried at the same priority twice before deferral.
+    UpgradePriorityPass()
+    Assert(!a.upgradeRetryAt && !a.complete && presses=0,"one missed selection skipped the top-priority unit")
+    UpgradePriorityPass()
     UpgradePriorityPass()
     Assert(a.upgradeRetryAt>testNow && !a.complete,"unselectable unit was not deferred")
     testNow += 1100
@@ -176,52 +181,42 @@ try {
     Assert(a.x=360 && a.selectY=325 && b.x=440 && gFailedPlacementSpots[1].x=470,"camera shift did not update recorded/select/rejected coordinates")
     Assert(gRunViewMoved && PlacementCopyFailures(a)=0,"new area did not reset per-copy failures")
 
-    ; Multiple downstream segments; farthest model remains clear and selectable.
-    gMapModel := {nodes:Map(),player:{x:10,y:10},baseMarker:{x:20,y:20}},gMoveKeys := {}
-    heading := ActualRelocationDirection()
-    Assert(heading.x>0 && heading.y=0,"baseward direction ignored the calibrated route on a bend")
-    baseRoute := [20],heading := ActualRelocationDirection()
-    Assert(heading.x=0 && heading.y=0,"relocation continued past the mapped base")
-    gMapModel := 0,heading := ActualRelocationDirection()
-    Assert(heading.y>0,"missing minimap calibration reverted to an upward step")
-    a.x := 400,a.y := 350,a.selectX := 400,a.selectY := 335
-    b.x := 480,b.y := 370,b.selectX := 480,b.selectY := 355
-    moveCalls := 0,shiftReads := 0,gPendingPlacement := 0,opened := [],scaleMovement := true
-    cameraShifts := [{dx:0,dy:-20}],gPlacementRelocateRetryAt := 0
-    Assert(RelocatePlacementArea(a) && moveCalls>=7 && a.y<=210 && b.y<=230,"relocation stopped after one step instead of leaving the old area")
-    Assert(lastMovementKey="s" && opened.Length>=moveCalls*2,"downstream movement did not repeatedly check farthest-unit selection")
-    Assert(PlacementRelocationRoom(0,0),"substantial movement lost a clear unit click margin")
-    a.y := 190,a.selectY := 175,b.y := 240,b.selectY := 225
-    moveCalls := 0,shiftReads := 0,gPlacementRelocateRetryAt := 0
-    Assert(RelocatePlacementArea(a) && moveCalls=1 && a.selectY>=165 && gRunning,"boundary approach walked until the farthest unit was no longer clear")
-    Assert(!PlacementRelocationRoom(0,-8),"boundary fixture did not reserve room before the next movement")
-    a.y := 350,a.selectY := 335,b.y := 370,b.selectY := 355
-    blockedUnit := 2,moveCalls := 0,gPlacementRelocateRetryAt := 0
-    Assert(!RelocatePlacementArea(a) && moveCalls=0 && gRunning,"walking started when the farthest unit could not be selected")
-    blockedUnit := 0
-    moveCalls := 0,shiftReads := 0,trackingOkay := false,gPlacementRelocateRetryAt := 0
-    Assert(RelocatePlacementArea(a) && moveCalls=1 && gRunning,"uncertain view caused retreat or further unchecked walking")
-    Assert(!PlacementAnchorKnown(a) && !PlacementAnchorKnown(b) && CountSlotPlacements(a.slot)=1,"uncertain view lost counts or trusted stale anchors")
-    Assert(!RelocatePlacementArea(a) && moveCalls=1 && PlacementCopyFailures(a)=0,"uncertain view sent another move or blocked placement")
-    c := Unit(3,2),levels[3] := 0,gPlacements.Push(c),presses := 0
-    ResetUpgradeSelection()
-    UpgradePriorityPass()
-    Assert(levels[3]=1 && presses=1,"unverified old anchors blocked current-view upgrades")
-    trackingOkay := true,testNow += 3100,shiftReads := 0,cameraShifts := [{dx:0,dy:20}],scaleMovement := false
-    Assert(RecoverPlacementView() && PlacementAnchorKnown(a) && a.y=370 && b.y=390 && c.y=350,"late recovery shifted new units or lost earlier anchors")
-    gPlacements := [a,b],gPlacementRelocateRetryAt := 0
-    relocationSceneOkay := false,moveCalls := 0
-    PlacementCopyFailures(a,true)
-    Assert(!RelocatePlacementArea(a) && moveCalls=0 && gRunning && PlacementCopyFailures(a)=1,"missing path view reset failures or sent movement")
-    relocationSceneOkay := true,rememberOkay := false,gPlacementRelocateRetryAt := 0
-    Assert(!RelocatePlacementArea(a) && moveCalls=0 && gRunning,"unsaved view sent movement or stopped the macro")
-    rememberOkay := true
-    deadline := gPlacementRelocateRetryAt,testNow += 1000
-    RelocatePlacementArea(a)
-    Assert(gPlacementRelocateRetryAt=deadline,"retries extended the relocation cooldown forever")
-    gRunning := false
-    Assert(!RelocatePlacementArea(a) && moveCalls=0,"relocation ignored an explicit stop")
-    gRunning := true,gPlacementRelocateRetryAt := 0
+    ; Five misses advance only to the next quarter-path checkpoint.
+    gMapModel := {checkpoints:[1010,1020,1030],checkpointIndex:1,target:1010},moveCalls := 0
+    ResetPlacementFailureStreak()
+    Loop 5
+        PlacementCopyFailures(a,true)
+    Assert(RelocatePlacementArea(a) && gMapModel.checkpointIndex=2 && gMapModel.target=1020 && moveCalls=1,"five failures did not reach checkpoint 2")
+    Assert(!PlacementAnchorKnown(a) && CountSlotPlacements(a.slot)=1,"checkpoint movement lost earlier purchase counts")
+    a.complete := false,a.upgradeRetryAt := 0,b.complete := false,b.upgradeRetryAt := 0
+    Assert(UpgradeQueue(true).Length=2,"manager upgrades still depended on old world coordinates")
+    Loop 5
+        PlacementCopyFailures(a,true)
+    Assert(RelocatePlacementArea(a) && gMapModel.checkpointIndex=3 && gMapModel.target=1030,"five failures did not reach checkpoint 3")
+    Loop 5
+        PlacementCopyFailures(a,true)
+    Assert(!PlacementFailureLimitReached(),"checkpoint 3 blocked continuing placement")
+    beforeMoves := moveCalls
+    Assert(!RelocatePlacementArea(a) && moveCalls=beforeMoves && gRunning,"final checkpoint relocated again or stopped")
+    gMapModel.checkpointIndex := 1,navReached := false
+    Loop 5
+        PlacementCopyFailures(a,true)
+    Assert(!RelocatePlacementArea(a) && gMapModel.checkpointIndex=1 && gMapModel.target=1020 && gRunning,"failed checkpoint travel advanced the index or stopped the macro")
+    navReached := true,gMapModel.checkpointIndex := 0
+    ResetPlacementFailureStreak()
+    Assert(PlacementFailureLimitReached() && RelocatePlacementArea(a) && gMapModel.checkpointIndex=1,"placement started before reaching the first checkpoint")
+    gRunning := false,beforeMoves := moveCalls
+    Assert(!RelocatePlacementArea(a) && moveCalls=beforeMoves,"checkpoint travel ignored explicit stop")
+    gRunning := true,gMapModel := 0
+    ResetPlacementFailureStreak()
+
+    gMapModel := {checkpointIndex:3,checkpoints:[1010,1020,1030]},gConsecutivePlacementFailures := 5,gPlacements := []
+    b.count := 2,b.enabled := true,beforeMoves := moveCalls
+    Assert(PlaceConfiguredBuildAction([b])="complete" && CountSlotPlacements(2)=2 && moveCalls=beforeMoves,"final checkpoint did not continue until all placements were down")
+    gPlacements := [],endState := true
+    Assert(PlaceConfiguredBuildAction([b])="replay" && gPlacements.Length=0,"final checkpoint ignored the end-game handler")
+    endState := false,gMapModel := 0
+    ResetPlacementFailureStreak()
 
     layoutY := 300
     state := ParseUpgradeState([{x:140,y:305,w:60,h:15,text:"UPG [7]"}],WindowGeometry())
@@ -235,13 +230,13 @@ try {
     levels[2] := 0
     ResetUpgradeSelection()
     PlaceConfiguredBuildAction([a,b])
-    Assert(CountSlotPlacements(2)=1 && levels[2]=1,"blocked placement starved later placement/upgrade")
+    Assert(CountSlotPlacements(2)=1 && levels[2]=0,"blocked placement starved later placement, or upgrades/F started before every unit was placed")
     schedulerMode := false,gRunning := true
     a.hill := true,hillBlocked := true,gPlacements := [],schedulerMode := true,stopAt := testNow+15000
     result := PlaceConfiguredBuildAction([a])
     Assert(result="stopped" && MissingBuildPlacements([a])!="","temporarily unavailable Hill unit was skipped and build marked complete")
     schedulerMode := false,gRunning := true,hillBlocked := false
-    FileAppend "PASS: five consecutive misses trigger relocation; slot switches/rescans/declined moves preserve streak; baseward path direction; 140-pixel multi-pulse relocation; farthest-unit click checks each segment; shortened pulse stops before reserved margin; uncertain view continues placement; exact upgrade targets and guards; no duplicate purchases; cooldown and stop handling.`n","*"
+    FileAppend "PASS: checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; exact upgrade targets/input guards; no duplicate purchases; stop handling.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message " (line " err.Line ")`n" err.Stack,"*"
@@ -260,6 +255,7 @@ BeginInputAction(*) => true
 EndInputAction(*) => 0
 Log(*) => 0
 ClearCardChoice(*) => true
+SaveUpgradeDiagnostic(*) => 0
 HasCardChoice(*) => false
 HasUnitPanel(*) => panel
 OpenRecordedUnit(item) {
@@ -354,7 +350,7 @@ VisionRequest(command) {
     }
     return Map("status","ok","path","100")
 }
-ClickRef(x,y) {
+ClickRef(x,y,stillValid := 0) {
     global pClicks,pOn
     Assert(x=715 && y=21,"P click missed the fixed coordinate")
     pClicks += 1,pOn := true
@@ -407,9 +403,15 @@ CandidateOccupied(*) => false
 FailedPlacementSpot(*) => false
 BlockedPlacementEdge(*) => false
 SamePlacementEdge(*) => false
+RefreshMapPlayer(*) => true
+NavigateDrawing(*) {
+    global moveCalls
+    moveCalls += 1
+    return navReached
+}
 RefreshPlacementSearch(*) => 0
 ResetPlacementArea(*) => 0
-TryEndState(*) => false
+TryEndState(*) => endState
 PlacementRelocationDirection(*) => {x:0,y:1}
 VisionRefreshPlayer(*) => true
 MapNearest(nodes,x,y) => Round(x)

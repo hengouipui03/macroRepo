@@ -167,8 +167,8 @@ PlacementSearchDiagnostic(reason) {
 }
 
 
-PlacementClickRef(rx,ry,guardCards := false,purchase := 0) {
-    global gRunning,gPendingPlacement,gPlacementAttemptClicked
+PlacementClickRef(rx,ry,guardCards := false,purchase := 0,allowUnitPanel := false) {
+    global gRunning,gPendingPlacement,gPlacementAttemptClicked,UNIT_ACTION_MS
     if !gRunning || !ToScreen(rx,ry,&sx,&sy)
         return false
     hwnd := FindRoblox()
@@ -179,9 +179,9 @@ PlacementClickRef(rx,ry,guardCards := false,purchase := 0) {
         if !WinWaitActive("ahk_id " hwnd,,1)
             return false
     }
-    if !SmoothMoveTo(sx,sy)
+    if !SmoothMoveTo(sx,sy,UNIT_ACTION_MS,UNIT_ACTION_MS)
         return false
-    if !BeginInputAction() || (guardCards && (HasCardChoice() || HasUnitPanel() || IsEndGameBlocking()))
+    if !BeginInputAction(true,UNIT_ACTION_MS) || (guardCards && (HasCardChoice() || (!allowUnitPanel && HasUnitPanel()) || IsEndGameBlocking()))
         return false
     if purchase {
         ; Card handling during cursor movement may have confirmed this copy.
@@ -190,7 +190,7 @@ PlacementClickRef(rx,ry,guardCards := false,purchase := 0) {
         gPendingPlacement := purchase,gPlacementAttemptClicked := true
     }
     SendEvent "{LButton down}"
-    try return ActionPause(80,false)
+    try return ActionPause(UNIT_ACTION_MS,false)
     finally {
         SendEvent "{LButton up}"
         EndInputAction()
@@ -205,12 +205,12 @@ PlacementPurchaseReady(purchase) {
 
 
 SelectPlacementUnit(unit) {
-    global gRunning,gUnitPreviewActive
-    if !gRunning || !BeginInputAction()
+    global gRunning,gUnitPreviewActive,UNIT_ACTION_MS
+    if !gRunning || !BeginInputAction(true,UNIT_ACTION_MS)
         return false
     SendEvent "{" unit.slot " down}"
     try {
-        if !ActionPause(40,false)
+        if !ActionPause(UNIT_ACTION_MS,false)
             return false
     } finally {
         SendEvent "{" unit.slot " up}"
@@ -222,16 +222,16 @@ SelectPlacementUnit(unit) {
 
 
 CancelUnitPreview() {
-    global gRunning,gUnitPreviewActive
+    global gRunning,gUnitPreviewActive,UNIT_ACTION_MS
     if !gRunning
         return false
     if !gUnitPreviewActive
         return true
-    if !BeginInputAction()
+    if !BeginInputAction(true,UNIT_ACTION_MS)
         return false
     SendEvent "{q down}"
     try {
-        if !ActionPause(30,false)
+        if !ActionPause(UNIT_ACTION_MS,false)
             return false
     } finally {
         SendEvent "{q up}"
@@ -337,11 +337,13 @@ WaitForUnitPanel(timeout := 700,learn := true) {
 
 
 ClickAwayFromUnitPanel() {
-    global gUpgradeSelectedId
-    ; Above the cards, outside the unit panel and below the P/i toolbar.
+    global gUpgradeSelectedId,CLICK_AWAY_X,CLICK_AWAY_Y
+    ; Empty world between "Return to lobby" and the open F manager, above the
+    ; cards and outside the unit panel. It never touches the manager, so the
+    ; manager stays open; F is never pressed here.
     ; Drop any preview first so this click can never purchase a unit.
     gUpgradeSelectedId := 0
-    if !CancelUnitPreview() || !PlacementClickRef(740,150)
+    if !CancelUnitPreview() || !PlacementClickRef(CLICK_AWAY_X,CLICK_AWAY_Y)
         return false
     return WaitFor(() => !HasUnitPanel(),550,40)
 }
@@ -771,6 +773,7 @@ PlaceUnit(unit) {
 PlaceUnitAction(unit) {
     global gRunning,gPendingPlacement,gHillPlacementUnavailable
     gHillPlacementUnavailable := false
+    ; No F here: the unit manager is only opened after every unit is placed.
     if !gRunning || IsEndGameBlocking()
         return false
     hwnd := FindRoblox()
@@ -853,6 +856,7 @@ PlaceConfiguredBuildAction(plan) {
     global gRunning,gHillPlacementUnavailable
     retryAt := Map(),pendingLogAt := 0
     while gRunning {
+        RetryFinalCheckpointPlacement()
         for unit in plan {
             if !unit.enabled
                 continue
@@ -896,12 +900,13 @@ PlaceConfiguredBuildAction(plan) {
         if missing=""
             return "complete"
         if !pendingLogAt || A_TickCount>=pendingLogAt {
-            Notify("Placement pending: " missing ". Upgrades run between placement retries.")
+            Notify("Placement pending: " missing ". Upgrades (F manager) start once every unit is placed.")
             pendingLogAt := A_TickCount+10000
         }
         if TryEndState()
             return "replay"
-        UpgradePriorityPass()
+        ; Upgrades go through the F manager, which may only open after the
+        ; whole build is placed, so none run between placement retries.
         ActionPause(250)
     }
     return "stopped"

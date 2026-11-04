@@ -1,4 +1,4 @@
-"""Run actual input helpers against a simulated clock and mocked input only."""
+﻿"""Run actual input helpers against a simulated clock and mocked input only."""
 import subprocess
 from UpgradeRegressionTests import ROOT, RUNTIME, function
 
@@ -6,6 +6,8 @@ logic = '\n'.join(function(file, name) for file, name in [
     ('AAPathMacro.ahk', 'BeginInputAction'),
     ('AAPathMacro.ahk', 'EndInputAction'),
     ('AAPathMacro.ahk', 'ClickRef'),
+    ('AAPathMacro.ahk', 'TryVoteStart'),
+    ('AAPathMacro.ahk', 'VoteStartClosed'),
     ('AAPathMacro.ahk', 'HoldCameraKey'),
     ('Placement.ahk', 'SelectPlacementUnit'),
     ('Placement.ahk', 'CancelUnitPreview'),
@@ -20,7 +22,8 @@ fixture = r'''
 #Warn All, Off
 global gRunning := true,gInputEpoch := 0,ACTION_GAP_MS := 300,gLastInputFinishedAt := 0
 global gUnitPreviewActive := true,gUpgradeLastRAt := 0,gPendingPlacement := 0,gPlacementAttemptClicked := false
-global testNow := 10000,events := [],CLICK_HOLD_MS := 60,MOUSE_SETTLE_MS := 0,stopAfter := 0
+global testNow := 10000,events := [],ACTION_HOLD_MS := 300,UNIT_ACTION_MS := 200,CLICK_HOLD_MS := 300,MOUSE_SETTLE_MS := 0,stopAfter := 0
+global voteMode := false,voteVisible := true,mouseDownAt := 0
 try {
     Assert(SelectPlacementUnit({slot:1}),"slot key failed")
     Assert(PlacementClickRef(400,330),"placement click failed")
@@ -30,24 +33,38 @@ try {
     Assert(PressUnitUpgradeKey(),"upgrade key failed")
     Assert(ClickRef(400,330),"standard click failed")
     Assert(ClickWindowOnce({x:400,y:330},{x:0,y:0}),"menu click failed")
-    lastUp := 0,actions := 0
+    lastUp := 0,actions := 0,downAt := 0,expected := [200,200,200,300,300,300]
     for event in events {
         if InStr(event.key,"down") {
-            if lastUp
-                Assert(event.at-lastUp>=300,"less than 300ms between input actions")
             actions += 1
-        } else
+            if lastUp
+                Assert(event.at-lastUp>=expected[actions],"input action gap did not match its placement/general category")
+            downAt := event.at
+        } else {
+            Assert(event.at-downAt=expected[actions],"UI press did not match 200ms placement or 300ms general timing")
             lastUp := event.at
+        }
     }
     Assert(actions=6,"input coverage incomplete")
+    before := events.Length
+    Assert(ClickRef(715,21),"P toggle click failed")
+    Assert(events[before+2].at-events[before+1].at=300,"P toggle did not use the shared 300ms press")
+    Assert(events[before+1].at-lastUp>=300,"P-specific hold bypassed 300ms action spacing")
+    voteMode := true,voteVisible := true,before := events.Length
+    Assert(TryVoteStart() && !voteVisible && events.Length=before+2,"Vote Start did not receive a single complete 300ms press")
+    Assert(events[before+2].at-events[before+1].at=300,"Vote Start used a different hold duration")
+    voteMode := false
+    before := events.Length
+    Assert(PlacementClickRef(570,170,true,0,true) && events.Length=before+2,"manager portrait selection was blocked by an already open unit panel")
+    Assert(events[before+2].at-events[before+1].at=200,"manager portrait did not use 200ms unit selection timing")
     testNow += 800,before := testNow
-    Assert(SelectPlacementUnit({slot:2}) && testNow-before=40,"calculation time was followed by an unnecessary second action delay")
+    Assert(SelectPlacementUnit({slot:2}) && testNow-before=200,"calculation time was followed by an unnecessary extra delay")
     gRunning := false,count := events.Length
     Assert(!SelectPlacementUnit({slot:1}) && events.Length=count,"stopped macro emitted a key")
     Assert(HoldCameraKey("i",120,gInputEpoch),"manual camera hold no longer works outside a run")
     gRunning := true,gUnitPreviewActive := true,stopAfter := testNow+100,count := events.Length
     Assert(!CancelUnitPreview() && events.Length=count,"F7 during the action interval still emitted input")
-    FileAppend "PASS: 300ms key/mouse/menu gaps; no duplicate Q; calculation time counts toward gap; precise holds retained; manual camera works; stop interrupts immediately.`n","*","UTF-8"
+    FileAppend "PASS: 200ms placement/selection and 300ms general UI holds/gaps; P has no exception; Vote Start receives one full 300ms press; no duplicate Q; no extra delay after calculation; manual camera works; stop interrupts immediately.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -73,10 +90,25 @@ InputPause(ms,epoch) {
     testNow += ms
     return epoch=gInputEpoch
 }
-SendEvent(key) => events.Push({key:key,at:testNow})
+SendEvent(key) {
+    global mouseDownAt,voteVisible
+    events.Push({key:key,at:testNow})
+    if InStr(key,"LButton") {
+        if InStr(key,"down")
+            mouseDownAt := testNow
+        else if voteMode && testNow-mouseDownAt>=300
+            voteVisible := false
+    }
+}
 Send(key) => SendEvent(key)
 Click(key) => SendEvent("LButton " StrLower(key))
 CheckCardInterruption(*) => false
+HasVoteStart(*) => voteMode && voteVisible
+WaitFor(test,*) => test.Call()
+FindUiGreenCentre(x1,y1,x2,y2,&x,&y) {
+    x := 358,y := 102
+    return true
+}
 HasCardChoice(*) => false
 HasUnitPanel(*) => true
 IsEndGameBlocking(*) => false

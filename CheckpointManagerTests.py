@@ -1,0 +1,199 @@
+﻿"""Actual checkpoint calculation and manager selection with simulated input."""
+import subprocess
+from UpgradeRegressionTests import ROOT,RUNTIME,function
+
+route_logic='\n'.join(function('MapNavigation.ahk',n) for n in ['MapNeighbours','MapNearest','MapDistances','MapShortestPath','MapPlacementCheckpoints'])
+route_fixture=r'''
+#Requires AutoHotkey v2.0
+#SingleInstance Off
+#Warn All, Off
+global MAP_GRID := 96
+try {
+    nodes := Map()
+    Loop 81
+        nodes[40*96+A_Index-1] := true
+    model := {nodes:nodes,baseMarker:{x:80,y:40}}
+    points := MapPlacementCheckpoints(model)
+    Assert(points.Length=3 && points[1]=40*96+20 && points[2]=40*96+40 && points[3]=40*96+60,"straight route was not quartered from entrance toward base")
+    nodes := Map()
+    Loop 41
+        nodes[10*96+9+A_Index] := true
+    Loop 40
+        nodes[(10+A_Index)*96+50] := true
+    model := {nodes:nodes,baseMarker:{x:50,y:50}}
+    points := MapPlacementCheckpoints(model)
+    tree := MapDistances(nodes,50*96+50)
+    Assert(points.Length=3 && tree.distance[points[1]]>tree.distance[points[2]] && tree.distance[points[2]]>tree.distance[points[3]],"bent route checkpoints did not progress toward base")
+    Assert(Mod(points[1],96)<50 && points[3]//96>20,"bent route used straight screen distance instead of route order")
+    model.baseMarker := false
+    Assert(MapPlacementCheckpoints(model).Length=0,"missing base silently invented route direction")
+    FileAppend "PASS: quarter-path checkpoints on straight/bent routes; entrance-to-base order; missing-base rejection.`n","*","UTF-8"
+    ExitApp 0
+} catch as err {
+    FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
+    ExitApp 1
+}
+Assert(value,message) {
+    if !value
+        throw Error(message)
+}
+'''
+
+manager_logic=(ROOT/'UnitManager.ahk').read_text(encoding='utf-8-sig')
+manager_logic += '\n'+function('AAPathMacro.ahk','BeginInputAction')+'\n'+function('AAPathMacro.ahk','EndInputAction')
+manager_logic=manager_logic.replace('A_TickCount','testNow')
+manager_fixture=r'''
+#Requires AutoHotkey v2.0
+#SingleInstance Off
+#Warn All, Off
+global gRunning := true,UNIT_ACTION_MS := 200,REF_W := 800,REF_H := 600,gPendingPlacement := 0
+global windowFocused := false
+global ACTION_GAP_MS := 300,gLastInputFinishedAt := 0,gInputEpoch := 0,testNow := 10000
+global gPlacements := [],managerVisible := false,scroll := 180,panel := false,wantedNumber := 0,selected := [],downs := 0,ups := 0,managerReads := 0,readFailure := false
+global gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerPhase := true,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
+global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := "",UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
+global fPresses := 0,blindVision := false
+try {
+    for total in [20,19,1] {
+        gPlacements := []
+        Loop total
+            gPlacements.Push({id:A_Index})
+        for purchaseId in [1,2,3,4,9,10,17,18,20,1] {
+            if purchaseId>total
+                continue
+            if purchaseId=17
+                windowFocused := false
+            wantedNumber := purchaseId
+            Assert(SelectManagedUnit(purchaseId),"manager could not select purchase " purchaseId " from " total)
+            Assert(selected[selected.Length]=purchaseId && panel,"wrong reverse-order purchase selected for " purchaseId)
+        }
+        Assert(scroll=Max(0,(Ceil(total/2)-3)*100+20),"returning to #1 did not anchor at the manager bottom")
+    }
+    Assert(ups>0 && downs>=30,"bottom reset or incremental upward scrolling was not exercised")
+    ; F was pressed exactly once for every selection above, and never closed.
+    Assert(managerVisible && fPresses=1,"unit manager was toggled during unit switches (" fPresses " F presses)")
+    gPendingPlacement := {pendingSlot:1},count := selected.Length
+    Assert(!SelectManagedUnit(1) && selected.Length=count,"manager selection interfered with an unresolved purchase")
+    gPendingPlacement := 0
+    ; Before every unit is placed, F is never pressed.
+    EndUnitManagerPhase(),managerVisible := false,before := fPresses,count := selected.Length
+    Assert(!SelectManagedUnit(1) && fPresses=before && !managerVisible && selected.Length=count,"F was pressed before all units were placed")
+    BeginUnitManagerPhase()
+    readFailure := true,count := selected.Length,before := fPresses
+    Assert(!SelectManagedUnit(1) && selected.Length=count && fPresses=before,"missing manager vision caused F or an unverified portrait click")
+    Assert(gUnitManagerFailure="manager","manager read failure was not reported as a manager problem")
+    readFailure := false
+    ; The game closed the manager: exactly one F reopens it.
+    managerVisible := false,testNow += 5000,before := fPresses
+    Assert(SelectManagedUnit(1) && managerVisible && fPresses=before+1,"closed manager was not reopened with exactly one F")
+    ; Vision that keeps misreading an open manager as closed cannot toggle it repeatedly.
+    blindVision := true,before := fPresses
+    Loop 6 {
+        testNow += 3000
+        EnsureUnitManagerOpen()
+    }
+    Assert(fPresses-before<=2 && managerVisible,"misread manager state toggled F repeatedly")
+    blindVision := false
+    FileAppend "PASS: bottom-right #1, bottom-left #2, then upward by row; bottom reset; one-notch upward scrolling; 20/19/1-unit layouts; no skipped purchases; one F for the whole match; no F before placement; reopen once; misread F guard.`n","*","UTF-8"
+    ExitApp 0
+} catch as err {
+    FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
+    ExitApp 1
+}
+Assert(value,message) {
+    if !value
+        throw Error(message)
+}
+GetClient(&cx,&cy,&cw,&ch) {
+    cx := 0,cy := 0,cw := 800,ch := 600
+    return true
+}
+VisionOk(state) => state && state["status"]="ok"
+VisionRequest(command) {
+    global managerReads
+    managerReads += 1
+    if readFailure
+        return false
+    if !managerVisible || blindVision
+        return Map("status","ok","open","0")
+    entries := "",first := -1,last := -1,totalRows := Ceil(gPlacements.Length/2)
+    Loop totalRows {
+        row := A_Index-1,y := 140+row*100-scroll
+        if y>=110 && y<450 {
+            if first<0
+                first := y
+            last := y
+            if y+30-30>=100 && y+30+30<=450 {
+                Loop 2 {
+                    col := A_Index-1
+                    candidateId := (totalRows-1-row)*2+(col=1?1:2)
+                    if candidateId<=gPlacements.Length
+                        entries .= (entries=""?"":";") col "," (col=0?570:710) "," (y+30) "," y
+                }
+            }
+        }
+    }
+    return Map("status","ok","open","1","pitch","100","first",first,"last",last,"signature",managerReads,"entries",entries,"top","100","bottom","450")
+}
+SendEvent(key) {
+    global managerVisible,scroll,downs,ups
+    Assert(windowFocused,"manager input was sent without focusing Roblox")
+    if key="{f up}"
+        managerVisible := !managerVisible,fPresses += 1
+    if RegExMatch(key,"Wheel(Up|Down)\s+(\d+)",&match) {
+        count := Integer(match[2])
+        if match[1]="Down" {
+            downs += 1,scroll := Min(Max(0,(Ceil(gPlacements.Length/2)-3)*100+20),scroll+30*count)
+        } else {
+            Assert(count=1,"upward selection scrolling skipped more than one notch")
+            ups += 1,scroll := Max(0,scroll-30)
+        }
+    }
+}
+PlacementClickRef(x,y,*) {
+    global panel
+    row := Round((y-170+scroll)/100),column := x>650?1:0
+    purchaseId := (Ceil(gPlacements.Length/2)-1-row)*2+(column=1?1:2)
+    Assert(purchaseId=wantedNumber,"scroll/index mapping clicked purchase " purchaseId " instead of " wantedNumber)
+    selected.Push(purchaseId),panel := true
+    return true
+}
+CloseUnitPanel(*) {
+    global panel
+    panel := false
+    return true
+}
+WaitForUnitPanel(*) => panel
+CancelUnitPreview(*) => true
+HasCardChoice(*) => false
+IsEndGameBlocking(*) => false
+ResetUpgradeSelection(*) => 0
+CheckCardInterruption(*) => false
+SmoothMoveTo(*) => true
+FindRoblox(*) => 1
+WinActive(*) => windowFocused
+WinWaitActive(*) => windowFocused
+WinActivate(*) {
+    global windowFocused
+    windowFocused := true
+}
+Log(*) => 0
+Sleep(ms) {
+    global testNow
+    testNow += ms
+}
+ActionPause(ms,*) {
+    global testNow
+    testNow += ms
+    return gRunning
+}
+'''
+
+if __name__=='__main__':
+    for name,fixture,logic in [('route-checkpoints',route_fixture,route_logic),('manager-selection',manager_fixture,manager_logic)]:
+        target=ROOT/'cache'/f'{name}-regression.ahk'
+        target.write_text(fixture+'\n'+logic,encoding='utf-8-sig')
+        result=subprocess.run([str(RUNTIME),'/ErrorStdOut=UTF-8',str(target)],capture_output=True,timeout=30)
+        print(result.stdout.decode('utf-8-sig'),end='')
+        print(result.stderr.decode('utf-8-sig'),end='')
+        if result.returncode:raise SystemExit(result.returncode)

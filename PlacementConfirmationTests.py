@@ -17,6 +17,7 @@ fixture = r'''
 #Requires AutoHotkey v2.0
 #SingleInstance Off
 #Warn All, Off
+global gMapModel := 0
 global gRunning := true,gPlacements := [],gPendingPlacement := 0,gPlacementAttemptClicked := false
 global gLastPlacedIndex := 0,gPlacementPreferredSide := 0,gPlacementEdgeMisses := Map()
 global gCardHandling := false,gCardAction := "placement",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0,testNow := 10000
@@ -104,6 +105,11 @@ try {
     recorded := {id:1,name:"Unit 1",x:400,y:330,selectX:400,selectY:330}
     Assert(OpenRecordedUnit(recorded) && panel && buys=16,"side panel did not confirm selection for upgrading without UPG OCR")
 
+    gMapModel := {checkpointIndex:3},gPlacements := [],registrations := 0,buys := 0,models := Map(),panel := false
+    unit := {slot:1,name:"Unit 1",count:1,enabled:true},gConsecutivePlacementFailures := 5
+    Assert(!PlacementFailureLimitReached() && TryPlacementCandidateAction(unit,point) && buys=1,"checkpoint 3 did not keep placing after five misses")
+    gMapModel := 0
+
     attempt := {pendingSlot:1,pendingCopy:1,pendingTarget:1}
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard ignored the completed target")
     gPlacements := [],gPendingPlacement := Pending(1,1)
@@ -182,6 +188,11 @@ ClickAwayFromUnitPanel(*) => CloseUnitPanel()
 ActionPause(*) => true
 Log(*) => 0
 SavePlacementRun(*) => 0
+SelectManagedUnit(number) {
+    global panel
+    panel := number>=1 && number<=gPlacements.Length
+    return panel
+}
 UpgradeHeaderSignature(*) {
     throw Error("Placement must not read the upgrade heading")
 }
