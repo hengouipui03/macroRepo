@@ -170,6 +170,54 @@ def path_crossings(image, route, purple):
     return [grid_point(image, float(np.mean([p[0] for p in c])), float(np.mean([p[1] for p in c]))) for c in clusters]
 
 
+def card_boxes(image):
+    """Interiors of the three choice cards as 800-wide reference X spans.
+
+    The cards are dark panels with bright frames between them. The middle card
+    is the dark run containing the screen centre, the left card the next run to
+    its left. The right card is placed one pitch right of the middle card and
+    is never measured, because the Level Modifiers panel can touch it."""
+    h, w = image.shape[:2]
+    y0, y1 = int(h * .40), int(h * .62)
+    cols = (image[y0:y1].max(axis=2) < 45).mean(axis=0) > .55
+    raw = []
+    start = None
+    for x, v in enumerate(list(cols) + [False]):
+        if v and start is None:
+            start = x
+        elif not v and start is not None:
+            raw.append([start, x])
+            start = None
+    # Bright text columns split a card interior by a pixel or two.
+    merged = []
+    for run in raw:
+        if merged and run[0] - merged[-1][1] <= max(2, w * .005):
+            merged[-1][1] = run[1]
+        else:
+            merged.append(run)
+    runs = [r for r in merged if r[1] - r[0] >= w * .08]
+    middle = [r for r in runs if r[0] <= w / 2 <= r[1]]
+    if not middle:
+        return None
+    m = middle[0]
+    left = [r for r in runs if r[1] <= m[0] and m[0] - r[1] <= w * .06]
+    if not left:
+        return None
+    l = left[-1]
+    if abs((m[1] - m[0]) - (l[1] - l[0])) > w * .03:
+        return None
+    width = (m[1] - m[0] + l[1] - l[0]) / 2.0
+    pitch = (m[0] + m[1]) / 2.0 - (l[0] + l[1]) / 2.0
+    centres = [(l[0] + l[1]) / 2.0, (m[0] + m[1]) / 2.0, (m[0] + m[1]) / 2.0 + pitch]
+    sx = 800.0 / w
+    boxes = [(int(round((c - width / 2) * sx)), int(round((c + width / 2) * sx))) for c in centres]
+    # Sanity: three cards of plausible size inside the usual card area.
+    if not (100 <= boxes[0][0] and boxes[2][1] <= 720 and 110 <= boxes[1][1] - boxes[1][0] <= 230
+            and abs((boxes[1][0] + boxes[1][1]) / 2.0 - 400) <= 40):
+        return None
+    return boxes
+
+
 def frame_mask(image):
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
@@ -620,6 +668,13 @@ class World:
             return None
         dx,dy = transform[0,2]*2*800/w,transform[1,2]*2*600/h
         return {"dx":"%.3f"%dx,"dy":"%.3f"%dy}
+
+    def card_boxes(self, cx, cy, cw, ch):
+        """X spans of the three card interiors (800x600 reference)."""
+        boxes = card_boxes(self.grab(cx, cy, cw, ch))
+        if not boxes:
+            return {"found": 0}
+        return {"found": 1, "boxes": ";".join("%d,%d" % b for b in boxes)}
 
     def unit_manager(self, cx, cy, cw, ch):
         """Locate manager portraits, avoiding sell X and upgrade/target buttons."""
@@ -1216,7 +1271,7 @@ def main():
                 "debug": vision.debug, "loadworld": world.load, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
                 "follow": world.follow, "beside": world.beside, "placementline": world.placement_line, "placementneighbours": world.placement_neighbours, "hillspots": world.hill_spots, "validateplacements": world.validate_placements, "placementvalid": world.placement_valid, "onpath": world.onpath, "worlddebug": world.debug,
                 "relocation": world.relocation, "rememberview": world.remember_view, "viewshift": world.view_shift,
-                "unitmanager": world.unit_manager,
+                "unitmanager": world.unit_manager, "cardboxes": world.card_boxes,
                 "discord": lambda *args: discord(world, *args)}
     for line in sys.stdin:
         parts = line.strip().split(" ")

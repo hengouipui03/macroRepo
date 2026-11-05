@@ -251,7 +251,9 @@ scenery, HUD and cyan range rings are excluded.
 
 Hill-only units require a confirmed highlighted Hill surface. If no usable
 Hill terrain or free Hill space exists, those copies remain unplaced and later
-units continue; Hill-only units never fall back to ground. Hybrid units try
+units continue (retried every 10 s); Hill-only units never fall back to ground.
+Every other unit is retried until it is placed before any later unit starts,
+so the build order holds. Hybrid units try
 Hill terrain first, then use normal path-side placement when Hill is unavailable.
 Confirmed Hill placements are recorded and upgraded using the same numbered
 positions and priority rules as other placements.
@@ -261,12 +263,14 @@ positions and priority rules as other placements.
 Upgrades are read and clicked on the unit's tile in the F manager; the side
 panel's UPG heading and R are no longer used. Lit bar segments under the tile
 (bright green or yellow; a dark body, with or without a white outline, is not done) are the
-upgrade level, and a grey Max button is MAX. Each click on the tile's Upg button
-must add a lit segment before the next click: a finite target waits 2 s for the
-new segment, so a slow bar cannot overshoot it, and MAX waits 0.6 s. Clicks that
-add nothing (not enough Yen) repeat at the same priority. Until a click is seen
-to work, every other retry selects the portrait first, so the macro learns
-whether Upg needs the unit selected; that is then kept for the session.
+upgrade level. Like holding R, the macro keeps clicking the tile's Upg button
+until the unit reaches MAX or its target; there is no failure counter, and
+clicks that buy nothing (not enough Yen) are simply repeated. A MAX target is
+clicked every 0.3 s (even with an unreadable bar); a finite target waits up to
+2 s for each new segment, so a slow bar cannot overshoot it. MAX needs the grey
+Max button and every segment lit (or a Max button that stays for 4 s); a level
+jump nobody clicked for, or a MAX, must read the same twice 0.25 s apart, so a
+manager that is still opening cannot end a unit early.
 The first tile seen for each slot teaches that slot's portrait colours; a tile
 that clearly looks like a different slot is never clicked. Unreadable bars,
 missing tiles or a portrait mismatch defer only that unit for 10, 20, 40, then
@@ -334,15 +338,19 @@ buff names and tiers. Shared portal/pearl rewards are excluded from effect
 classification. OCR enlarges text before recognition and returns original-size
 coordinates. Ambiguous red/unknown text is retried rather than clicked blindly.
 
-- Buffs: Random Blessings first, then Double Attack. Ordinary buffs always
-  prefer Attack, then Range, then Cooldown. Green Speed and unreadable green-word
-  buffs remain eligible and beat Yen. Yen is second-last and Boss Damage is last
-  among all buffs. Tiers break ties within
-  the same stat; Range I beats Cooldown II and every higher Cooldown tier.
-  Boss Damage is always the last buff, including behind
-  unreadable green-word buffs. Random Blessings and Boss Damage recognize I/II
-  titles; II beats I within the same type. Boss-only damage is never classified
-  as general Attack or physical/magical resistance.
+- Buffs: Double Attack first (it beats every tier of every other buff). Then
+  Attack, Cooldown and Range by tier: the higher tier wins first (Cooldown II
+  and Range II beat Attack I), and within one tier Attack, then Cooldown, then
+  Range. Then Random Blessings (II before I), then any other green card,
+  readable (for example green -Enemy Speed) or unreadable, then Yen, and Boss
+  Damage last. Boss-only damage is never classified as general Attack or
+  physical/magical resistance.
+- Three unreadable cards of one colour (all green or all red words): the
+  middle card is chosen.
+- Card positions are measured once per card screen (`cardboxes` in
+  MinimapVision.py) from the dark card panels, so the Level Modifiers panel
+  next to the right card never adds its colours or words to that card. Without
+  a detection the fixed 800x600 layout is used.
   Green Health buffs remain ahead of every red debuff.
 - Green first above everything: a single card with green words is chosen
   immediately from its pixels, before OCR.

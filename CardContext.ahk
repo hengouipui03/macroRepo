@@ -101,7 +101,44 @@ CardHasForbiddenSpeed(text) {
     return enemySpeed && !EnemyStatReduction(text,"speed")
 }
 
-CardEffectBounds(index) => [[129,188,290,425],[320,188,482,425],[512,188,674,425]][index]
+; Card interiors are measured once per card screen (MinimapVision cardboxes):
+; the dark panels give exact X spans, and the right card is placed by the
+; spacing of the other two, so the Level Modifiers panel never leaks into it.
+; Without a detection the fixed 800x600 layout is used.
+RefreshCardBoxes() {
+    global gCardBoxes
+    ; Up to three tries per card screen (cards may still be sliding in).
+    if IsSet(gCardBoxes) && gCardBoxes && (gCardBoxes.detected || gCardBoxes.tries>=3)
+        return gCardBoxes
+    gCardBoxes := {detected:false,tries:(IsSet(gCardBoxes) && gCardBoxes?gCardBoxes.tries:0)+1}
+    if !GetClient(&cx,&cy,&cw,&ch)
+        return gCardBoxes
+    reply := VisionRequest("cardboxes " cx " " cy " " cw " " ch)
+    if VisionOk(reply) && reply.Has("boxes") {
+        spans := []
+        for part in StrSplit(reply["boxes"],";") {
+            xy := StrSplit(part,",")
+            if xy.Length=2
+                spans.Push([Max(122,Number(xy[1])),Min(688,Number(xy[2]))])
+        }
+        if spans.Length=3 {
+            gCardBoxes := {detected:true,spans:spans}
+            Log("Card interiors at x " reply["boxes"] " (reference 800x600).")
+        }
+    }
+    return gCardBoxes
+}
+
+DetectedCardSpans() {
+    global gCardBoxes
+    return IsSet(gCardBoxes) && gCardBoxes && gCardBoxes.detected?gCardBoxes.spans:0
+}
+
+CardEffectBounds(index) {
+    if spans := DetectedCardSpans()
+        return [spans[index][1]+4,188,spans[index][2]-4,425]
+    return [[129,188,290,425],[320,188,482,425],[512,188,674,425]][index]
+}
 
 EffectWordInk(frame,x1,y1,x2,y2) {
     if !frame.valid
@@ -181,7 +218,7 @@ ReadWordColourCards(words,frame,geometry) {
         index := A_Index,lines := allRows[index]
         fullText := "",effectLines := [],green := false,red := false,redSpeed := false
         for line in lines {
-            if !line.valid || (index=3 && line.left>=635) || RegExMatch(line.text,"secret|portal|drop rate|summer|pearl|reward|multiplier")
+            if !line.valid || (index=3 && !DetectedCardSpans() && line.left>=635) || RegExMatch(line.text,"secret|portal|drop rate|summer|pearl|reward|multiplier")
                 || SharedNumericCardLine(line,allRows)
                 continue
             fullText .= " " line.text
@@ -197,8 +234,12 @@ ReadWordColourCards(words,frame,geometry) {
         }
         kind := green?"buff":red?"debuff":"unknown"
         ; OCR missed the words' colour: bright green glyph pixels still mean green.
-        if kind="unknown" && CardPixelIsGreen(CardPixelInk(frame,index))
-            kind := "buff"
+        ; Likewise bright red glyphs mean red words (used for three unreadable
+        ; red cards, where the middle card is taken).
+        if kind="unknown" {
+            ink := CardPixelInk(frame,index)
+            kind := CardPixelIsGreen(ink)?"buff":CardPixelIsRed(ink)?"debuff":"unknown"
+        }
         card := CardPolicy(fullText,kind="buff",kind)
         if kind!="unknown"
             card.kind := kind,card.rank := CardRank(kind,card.stat)
@@ -235,6 +276,7 @@ CardPixelInk(frame,index) {
 }
 
 CardPixelIsGreen(ink) => ink.green>=24 && ink.green>ink.red*3
+CardPixelIsRed(ink) => ink.red>=24 && ink.red>ink.green*3
 
 PixelGreenCards(frame) {
     green := []

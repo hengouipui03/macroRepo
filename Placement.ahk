@@ -1031,8 +1031,9 @@ PlaceConfiguredBuildAction(plan) {
                 if PlacementFailureLimitReached() {
                     if RelocatePlacementArea(unit)
                         continue
-                    retryAt[unit.slot] := A_TickCount+3000
-                    break
+                    ; Relocation not possible yet: wait, then the same unit again.
+                    ActionPause(3000)
+                    continue
                 }
                 Log("Place slot " unit.slot " copy " (before+1) "/" unit.count "; confirmed " before "/" unit.count)
                 placed := PlaceUnit(unit)
@@ -1050,10 +1051,13 @@ PlaceConfiguredBuildAction(plan) {
                 }
                 if PlacementFailureLimitReached() && RelocatePlacementArea(unit)
                     continue
-                retryAt[unit.slot] := A_TickCount+(PlacementFailureLimitReached()?3000:300)
-                Log(unit.name ": placement pending; keep confirmed units upgrading while the next attempt or DOWN relocation is prepared.")
+                ; Build order is kept: stay on this unit until it is placed (a
+                ; failed spot is already excluded, so the next try is elsewhere).
+                ; Only a Hill-only unit without Hill space (above) lets later
+                ; units go first.
+                Log(unit.name ": not placed yet; retry this same unit.")
                 RefreshPlacementSearch()
-                break
+                ActionPause(300)
             }
         }
         if !gRunning

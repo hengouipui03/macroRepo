@@ -95,11 +95,12 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
   - `manager` → retry the same priority. This is never counted against the unit.
   - Any other reason → retry the same unit up to **3** times, then defer it.
 - **Level:** the number of lit segments. A new lit segment confirms an upgrade. Fewer lit segments than already confirmed means the tile is doubtful: it is found again, and the lower count is accepted only after three reads in a row.
-- **Clicks:** one Upg click at a time. The next click waits for the new segment, or 2 s (finite target, so a slow bar cannot overshoot) / 0.6 s (MAX). Clicks that add nothing (not enough Yen) repeat at the same priority without deferral.
-- **Upg alone or portrait first:** until a click is seen to work, every other retry clicks the portrait before Upg. The first click that adds a segment fixes the method for the session (`gUpgradeClickMode`).
+- **Clicks (like holding R):** keep clicking the tile's Upg button until MAX or the target. No failure counter, no warnings, no deferral for clicks that buy nothing (not enough Yen). MAX target: every 0.3 s, even if the bar is unreadable. Finite target: after each click wait for the new segment, at most 2 s, so a slow bar cannot overshoot.
+- **Second look (`StableTileRead`):** a level jump that no click explains, and any MAX, must read the same twice, 0.25 s apart. One more segment right after a click is accepted at once.
 - **Identity guard:** the first tile seen for each slot teaches that slot's portrait colours. A tile is refused only when it is far from its own slot's colours and at most half as far from another slot's, so look-alike units never block upgrades.
 - **Deferral:** unreadable bars (3 reads), missing tiles (3 tries) or a portrait mismatch defer only that unit for 10, 20, 40, then 60 s; other units continue. Any confirmed upgrade resets the back-off. One diagnostic screenshot per unit per match goes to `cache\upg-tile-<id>.bmp`.
-- **Target reached or MAX (grey Max button):** mark complete (the manager stays open), log the next unit.
+- **MAX = grey Max button and every segment lit** (or unreadable bar). A grey button over unlit segments (a manager still opening; this ended #7 at 5 of 8 and skipped unit 2) is never clicked and is believed only if it stays for 4 s.
+- **Target reached or MAX:** mark complete (the manager stays open), log the next unit.
 - **Live target edits** in the GUI apply to already-placed units at once (`RefreshRecordedUpgradeTarget`).
 - **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the manager once (if it is confirmed open), and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click (the remembered tile position is dropped whenever F is pressed or the list scrolls).
 
@@ -107,7 +108,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 
 ## 5. Placement
 
-- **Order:** slots in order, copies in order. Each copy is bound to its slot and copy number before the mouse-down (`PlacementPurchaseReady`).
+- **Order:** slots in order, copies in order; the macro stays on a unit until it is placed (except Hill-only with no Hill space). Each copy is bound to its slot and copy number before the mouse-down (`PlacementPurchaseReady`).
 - **Where:** the first edge unit goes beside the lit path, closest to the player. Units sit 12 px outside the road, and only an 8–18 px edge gap is accepted. Every point must be within 180 px of the player.
 - **Pairs (`PlaceUnitAction`):** row 1 is the path edge; row 2 is one partner spot straight behind a row-1 unit. For each unit: if the newest edge unit's partner spot is open, one try there (`TryPartnerPlacement`); otherwise along the edge beside the newest edge unit. A failed partner try closes only that spot and never counts against the edge. Rows and partners are recorded (`row`, `anchor`, `partner`), so a row-2 unit never anchors. When one side of the edge is used up, open partner spots of older edge units are filled oldest first before crossing the road.
 - **Continuing:** a rescanned line starts beside the newest edge unit (`StartLineAtNewestEdgeUnit`), onward along the edge and then back along it.
@@ -121,7 +122,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
   - **Cards while walking:** every movement key is released *before* the card is chosen (`MovementHoldUntil`, `MovementCardPause`), so the player stands still during card selection. Afterwards the walk resumes toward the same checkpoint from the player's actual position, and card time does not count against the walk.
   - **20-second rule:** if relocation walking (card time excluded, added up across retries for the same checkpoint) passes 20 s without arriving, `TeleportBackToSpawn()` clicks the Settings gear (bottom left), then the arrow button on the row OCR confirms as "Teleport back to Spawn", then Settings' red X. It then re-finds the player and walks to the same checkpoint from spawn. "Return to Lobby" (the next row down) is never clicked. At most 2 teleports per checkpoint.
 - **Speed:** the Level Modifiers OCR runs at most every 30 s during placement and never during upgrades (the F manager covers it); a missed unit panel only re-runs OCR layout learning until the panel has been recognised once (`gUnitPanelSeen`). Unit placement/selection holds, gaps and cursor travel are 150 ms (was 200 ms), and the pause after a confirmed placement is 100 ms (was 180 ms). Panel-confirmation waits are unchanged, so purchases are still verified.
-- **Blocked copies** wait 10 s (Hill) or 0.3–3 s while the other slots continue.
+- **Same unit until placed:** a copy that is not placed yet is retried (0.3 s apart; 3 s while relocation is not possible) before any later unit, so the build order holds. The only exception is a Hill-only unit with no usable Hill space: it waits 10 s while later units are placed, then is tried again.
 - **No upgrades during placement.** Upgrades need the F manager, and F is only allowed once every unit is placed, so the build loop no longer calls `UpgradePriorityPass`. Consequence: if a unit can never be placed (for example a Hill-only unit with no Hill space), upgrades do not start for that match.
 - **Click-away after each confirmed placement** uses the same (497,168) point.
 
@@ -136,12 +137,14 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 1. Press Q only if a placement preview is active. During upgrades, close the F manager once (only if it is confirmed open). This is the only time it is closed. The side unit panel is clicked away only during placement, never during upgrades.
    After the card screen closes, the manager is reopened and the top-priority unit is reselected before any R.
 2. **Pixel green check first** (`PixelGreenCards`). Each card's title and first effect lines are scanned for bright green glyphs (G>170, G−R>80, G−B>60) versus bright red. If exactly one card is green, it is chosen **immediately, before OCR**, because votes can end within seconds. On the supplied screenshot this gives Range: 173 green pixels against 0 and 0 on the two red cards.
+   Card positions come from `cardboxes` (MinimapVision.py), measured once per card screen: the left and middle dark panels give the card width and spacing, and the right card is placed one spacing further, so the Level Modifiers panel touching it is never read as part of it. If detection fails three times, the fixed 800x600 layout is used.
 3. Otherwise OCR reads word boxes, and each word's pixels give its colour (`ReadWordColourCards`). Shared reward lines ("+30% SummerPearls", secret portal) are ignored. A card whose OCR colour is unknown but whose pixels are clearly green still counts as green.
 4. The choice is locked for this card screen. Each confirmation re-reads, and newly verified green words override a previous non-green pick. The card is clicked once, re-clicked after 1 s if the screen is still open, and the lock clears when the screen closes.
 
 ### Ranking (`ChooseBestCard`), in order of authority
 1. **GREEN FIRST, above everything.** One green card is chosen outright. If two or three are green, only the green cards are compared. A red card never beats a green one, whatever its text says. Green Speed reductions are allowed.
-2. **Buffs (green):** Random Blessings → Double Attack → Attack → Range → Cooldown → (unreadable green) → Yen → Boss Damage. Tiers only break ties within the same stat, and a bigger amount breaks equal tiers.
+2. **Buffs (green):** Double Attack → Attack/Cooldown/Range by **tier first** (Tier II of any of them beats Tier I of any; within a tier Attack → Cooldown → Range) → Random Blessings → any other green card (readable, e.g. green −Enemy Speed, or unreadable) → Yen → Boss Damage. A bigger amount breaks exact ties.
+   - **Three unreadable cards of one colour** (all green or all red words): pick the **middle** card.
 3. **Debuffs (red, only when nothing is green):** Shield → Explosive Death → Health → 0.5 Regen → **resistance group** → (positive enemy Speed is forbidden).
    - With 250%+ enemy Health already on the match, more Health drops behind the resistance group.
    - **Resistance group, Balanced team (the current setting):**
@@ -225,7 +228,8 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `DeferUnitUpgrade` | 10/20/40/60 s back-off for a genuinely stuck unit (the manager stays open). |
 | `OpenRecordedUnit` | Portrait selection through the manager (relocation checks). |
 | `PortraitDistance`, `SlotDisplayName`, `TileIdentityMismatch` | Portrait-colour identity guard. |
-| `ClickTileUpgrade` | Upg click on the tile, with the portrait first when the game needs selection. |
+| `ClickTileUpgrade` | Upg click on the tile. |
+| `StableTileRead` | Same reading twice, 0.25 s apart, before an unexplained level jump or a MAX is believed. |
 | `UpgradeOnce`, `UpgradeOnceAction`, `UpgradeWarning` | Upgrade one unit from its tile, with the rules from §4. |
 
 ### Placement.ahk
@@ -276,8 +280,9 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `BuildCardPreferencesTab`, `CardDamagePreferenceChanged` | Balanced / Magic team / Physical team (`card_preferences.ini`). |
 | `ResetMatchCardContext`, `SignedHealthChange`, `ParseMatchModifiers`, `RefreshMatchModifiers`, `ApplySelectedCardModifiers` | Read-only match modifiers. |
 | `CardHasForbiddenSpeed` | Positive enemy Speed detection. |
+| `RefreshCardBoxes`, `DetectedCardSpans` | Card interiors measured once per card screen (vision `cardboxes`); fixed layout if not found. |
 | `CardEffectBounds`, `EffectWordInk`, `CardWordRows`, `SharedNumericCardLine`, `ReadWordColourCards` | Per-word green/red colour, with the pixel fallback for unknown colour. |
-| `CardPixelInk`, `CardPixelIsGreen`, `PixelGreenCards`, `PixelInkCards` | **New:** OCR-free green detection and the immediate green pick. |
+| `CardPixelInk`, `CardPixelIsGreen`, `CardPixelIsRed`, `PixelGreenCards`, `PixelInkCards` | **New:** OCR-free green detection and the immediate green pick. |
 | `LogCardDecision` | Decision log. |
 
 ### MapNavigation.ahk
@@ -290,7 +295,7 @@ Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `
 `BuildDiscordTab`, `IsWebhookUrl`, `SaveWebhook`, `TestWebhook`, `PostToWebhook`, `ReportMatchResult` · `SavedUnitNumber`, `LoadUnitSettings`, `QueueUnitSettingsSave`, `SaveUnitSettings`, `FlushUnitSettings`, `UnitPlacementModeChanged`.
 
 ### MinimapVision.py (commands)
-`scan/locate/track/moved` (minimap and player), `toolbar/toolbarfixed` (P state), `world/follow/beside/onpath` (lit path), `placementline/placementneighbours/placementvalid/validateplacements` (placement geometry), `hillspots`, `relocation`, `rememberview/viewshift`, **`unitmanager`** (heading "Unit Overview", Sell-X anchored rows, portrait click points), `debug/worlddebug`, `discord`.
+`scan/locate/track/moved` (minimap and player), `toolbar/toolbarfixed` (P state), `world/follow/beside/onpath` (lit path), `placementline/placementneighbours/placementvalid/validateplacements` (placement geometry), `hillspots`, `relocation`, `rememberview/viewshift`, **`cardboxes`** (card interiors from the dark card panels), **`unitmanager`** (heading "Unit Overview", Sell-X anchored rows, portrait click points), `debug/worlddebug`, `discord`.
 
 ---
 

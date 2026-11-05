@@ -9,6 +9,7 @@ global gLearnButton, gTeachCard, gTeachKind, gTeachStat
 global gOcrPid := 0
 global gLastOcrRows := [], gLastOcrRect := "", gLastOcrTime := 0
 global gCardRetryAt := 0, gCardUnread := 0, gCardSelection := 0
+global gCardBoxes := 0
 global gCardHandling := false,gCardAction := "",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0
 
 BuildLearningTab(app) {
@@ -648,15 +649,19 @@ CardPolicyFromLines(lines,allLines,index,colour) {
 }
 
 CardRank(kind, stat) {
-    if kind="buff" && stat="random blessings"
-        return -1
-    if kind="buff" && stat="boss damage"
-        return 100
+    ; Buff order: Double Attack, Attack, Cooldown, Range, Random Blessings,
+    ; any other green, Yen, Boss Damage. CardPreferenceScore adds tiers.
     if kind="buff" && stat="double attack"
         return 0
+    if kind="buff" && stat="random blessings"
+        return 4
+    if kind="buff" && stat="yen"
+        return 98
+    if kind="buff" && stat="boss damage"
+        return 100
     ; A shared physical+magical resist debuff ranks above any sole physical or
     ; sole magical resist debuff, whatever the amounts.
-    priorities := kind="buff"?["attack","range","cooldown","yen"]:["shield","explosive death","health","0.5 regen","physical and magical resist","physical resist","magical resist","speed"]
+    priorities := kind="buff"?["attack","cooldown","range"]:["shield","explosive death","health","0.5 regen","physical and magical resist","physical resist","magical resist","speed"]
     for index,name in priorities
         if stat=name
             return index
@@ -691,16 +696,23 @@ CardPreferenceScore(card) {
     global gMatchModifiers
     if card.kind="buff" {
         tier := card.HasProp("tier")?Max(1,Min(10,card.tier)):1
-        if card.stat="random blessings"
-            return -200000000-tier*10000-Min(9,card.amount/100)
+        tie := Min(9,card.amount/100)
+        ; Double Attack beats every tier of every other buff.
         if card.stat="double attack"
-            return -100000000
-        if card.stat="boss damage"
-            return 200000000-tier*10000-Min(9,card.amount/100)
+            return -900000000
+        ; Attack/Cooldown/Range: the higher tier wins first (Cooldown II beats
+        ; Attack I); within one tier Attack, then Cooldown, then Range.
+        order := Map("attack",1,"cooldown",2,"range",3)
+        if order.Has(card.stat)
+            return -tier*1000000+order[card.stat]*1000-tie
+        if card.stat="random blessings"
+            return 100000000-tier*1000-tie
         if card.stat="yen"
-            return 150000000-tier*10000-Min(9,card.amount/100)
-        ; Stat preference is absolute; tiers only compare the same stat.
-        return CardRank("buff",card.stat)*1000000-tier*10000-Min(9,card.amount/100)
+            return 300000000-tier*1000-tie
+        if card.stat="boss damage"
+            return 400000000-tier*1000-tie
+        ; Any other green card, readable (e.g. -Enemy Speed) or unreadable.
+        return 200000000
     }
     if card.stat="health" && gMatchModifiers.healthKnown && gMatchModifiers.health>=250
         return 60+Min(9,card.amount/100)
@@ -721,6 +733,15 @@ ChooseBestCard(cards) {
     ; Exactly one verified green effect means there is nothing to compare.
     if observedGreen.Length=1
         return observedGreen[1]
+    ; Three unreadable cards of one colour (all green or all red): middle card.
+    if views.Length=3 {
+        sameColour := true
+        for card in views
+            if card.stat!="unknown" || (card.kind!="buff" && card.kind!="debuff") || card.kind!=views[1].kind
+                sameColour := false
+        if sameColour
+            return 2
+    }
     cards := views
     best := 0,bestScore := 1.0e30,hasBuff := false,hasNonSpeed := false
     ordinaryDebuffs := 0,unknown := false
@@ -828,6 +849,13 @@ HashText(text) {
 }
 
 CardRectangle(index) {
+    ; Detected cards: split the gaps between neighbours; the right card ends at
+    ; its own interior edge so modifier-panel words stay outside.
+    if spans := DetectedCardSpans() {
+        left := index=1?spans[1][1]-15:(spans[index-1][2]+spans[index][1])//2
+        right := index=3?spans[3][2]:(spans[index][2]+spans[index+1][1])//2
+        return [left,175,right,445]
+    }
     bounds := [[125,175,310,445], [310,175,500,445], [500,175,690,445]]
     return bounds[index]
 }

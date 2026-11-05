@@ -1033,8 +1033,8 @@ ClearCardChoiceAction() {
 }
 
 ResetCardSelection() {
-    global gCardSelection,gCardRetryAt,gCardUnread
-    gCardSelection := 0,gCardRetryAt := 0,gCardUnread := 0
+    global gCardSelection,gCardRetryAt,gCardUnread,gCardBoxes
+    gCardSelection := 0,gCardRetryAt := 0,gCardUnread := 0,gCardBoxes := 0
 }
 
 WaitForCardChoiceClosed() {
@@ -1110,6 +1110,7 @@ TryChooseCard() {
         ActionPause(100)
         return true
     }
+    RefreshCardBoxes()
     ; GREEN FIRST, above everything else: one card with green words is chosen
     ; at once from its pixels, before OCR (votes can end within seconds).
     frame := RefPixels(120,175,690,445)

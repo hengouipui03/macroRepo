@@ -6,7 +6,7 @@
         if !condition
             throw Error(message)
     }
-    buffs := ["attack", "range", "cooldown", "yen"]
+    buffs := ["attack", "cooldown", "range"]
     debuffs := ["shield","explosive death","health","0.5 regen","physical and magical resist","physical resist","magical resist","speed"]
     for index, stat in buffs {
         card := CardPolicy("Buff " stat " +20%")
@@ -96,8 +96,9 @@
     speed := CardPolicy("Enemy Speed III +10%",false,"debuff")
     AssertLearning(attackI.tier=1 && cooldownII.tier=2 && rangeIII.tier=3,"Roman title tiers not parsed")
     AssertLearning(cooldownII.stat="cooldown","Buff title lost to body text")
-    AssertLearning(ChooseBestCard([attackI,cooldownII])=1,"Attack I lost its stat priority to Cooldown II")
-    AssertLearning(ChooseBestCard([cooldownII,rangeIII,attackI])=3,"Attack stat priority lost to a higher-tier ordinary buff")
+    AssertLearning(ChooseBestCard([attackI,cooldownII])=2,"Tier did not beat stat: Attack I beat Cooldown II")
+    AssertLearning(ChooseBestCard([cooldownII,rangeIII,attackI])=2,"Highest tier lost to a lower-tier Attack/Cooldown")
+    AssertLearning(ChooseBestCard([CardPolicy("Buff yen +20%"),CardPolicy("Buff range +20%")])=2,"Yen beat Range")
     AssertLearning(ChooseBestCard([CardPolicy("Range II",true,"buff"),CardPolicy("Attack II",true,"buff")])=2,"Same-tier original buff order changed")
     AssertLearning(double.stat="double attack" && double.kind="buff","Double Attack was not recognized")
     AssertLearning(ChooseBestCard([rangeIII,double,CardPolicy("Attack X +500%",true,"buff")])=2,"Double Attack did not beat all other buffs")
@@ -105,16 +106,20 @@
     rangeI := CardPolicy("Range I +10% Unit Range",true,"buff")
     cooldownI := CardPolicy("Cooldown I -10% Unit Cooldown",true,"buff")
     rangeII := CardPolicy("Range II +20% Unit Range",true,"buff")
-    AssertLearning(ChooseBestCard([cooldownI,rangeI])=2 && ChooseBestCard([rangeI,cooldownI])=1,"Range did not beat equal-tier Cooldown")
-    AssertLearning(ChooseBestCard([cooldownII,rangeII])=2,"Range II did not beat Cooldown II")
-    AssertLearning(ChooseBestCard([rangeI,cooldownII])=1,"Range I must beat higher-tier Cooldown")
+    AssertLearning(ChooseBestCard([cooldownI,rangeI])=1 && ChooseBestCard([rangeI,cooldownI])=2,"Cooldown did not beat equal-tier Range")
+    AssertLearning(ChooseBestCard([cooldownII,rangeII])=1,"Cooldown II did not beat Range II")
+    AssertLearning(ChooseBestCard([rangeI,cooldownII])=2,"Cooldown II did not beat Range I")
     AssertLearning(ChooseBestCard([cooldownI,rangeII])=2 && ChooseBestCard([rangeII,cooldownI])=1,"Range II must beat Cooldown I in either position")
-    for tier in [1,2,3,4,5,6,7,8,9,10] {
-        higherCooldown := CardPolicy("Cooldown " tier " -50% Unit Cooldown",true,"buff")
-        AssertLearning(ChooseBestCard([higherCooldown,rangeI])=2 && FallbackCardChoice([higherCooldown,rangeI])=2,"A Cooldown tier overrode Range in selection or fallback")
-        higherCooldown.effectInk := "buff",greenRange := rangeI.Clone(),greenRange.effectInk := "buff"
-        AssertLearning(ChooseBestCard([higherCooldown,greenRange])=2,"Observed green Cooldown overrode observed green Range")
-        count += 2
+    AssertLearning(ChooseBestCard([attackI,rangeII])=2 && ChooseBestCard([rangeII,attackI])=1,"Range II must beat Attack I (tier beats stat)")
+    for tier in [1,2,3,4,5,6,7,8,9] {
+        lower := CardPolicy("Attack " tier " +50% Unit Attack",true,"buff")
+        higher := CardPolicy("Range " (tier+1) " +10% Unit Range",true,"buff")
+        same := CardPolicy("Cooldown " tier " -50% Unit Cooldown",true,"buff")
+        AssertLearning(ChooseBestCard([lower,higher])=2 && FallbackCardChoice([lower,higher])=2,"A lower tier beat a higher tier")
+        AssertLearning(ChooseBestCard([same,lower])=2,"Same-tier Attack lost to Cooldown")
+        lower.effectInk := "buff",higher.effectInk := "buff"
+        AssertLearning(ChooseBestCard([higher,lower])=1,"Observed green tiers compared wrongly")
+        count += 3
     }
     AssertLearning(ChooseBestCard([rangeI,rangeII])=2,"Same-stat Range tier comparison changed")
     count += 5
@@ -218,7 +223,10 @@
     AssertLearning(blessingsI.stat="random blessings" && blessingsI.tier=1 && blessingsII.tier=2,"Random Blessings title/tiers not recognized")
     AssertLearning(bossII.stat="boss damage" && bossII.tier=2 && bossII.amount=40,"Boss-only physical damage was misclassified as Attack/resistance")
     AssertLearning(BuffTitleTier("Boss Damage ll")=2 && BuffTitleTier("Random Blessing II")=2,"New buff OCR title variants not recognized")
-    AssertLearning(ChooseBestCard([double,blessingsI,CardPolicy("Attack X +500%",true,"buff")])=2,"Random Blessings did not beat Double Attack and higher ordinary tiers")
+    AssertLearning(ChooseBestCard([blessingsI,double,CardPolicy("Attack X +500%",true,"buff")])=2,"Double Attack did not beat Random Blessings and every Attack tier")
+    AssertLearning(ChooseBestCard([blessingsII,rangeI])=2,"Random Blessings beat Range")
+    AssertLearning(ChooseBestCard([unreadableGreen,blessingsI])=2,"Unreadable green beat Random Blessings")
+    AssertLearning(ChooseBestCard([CardPolicy("Yen II +30% Unit Yen",true,"buff"),unreadableGreen])=2,"Yen beat another green card")
     AssertLearning(ChooseBestCard([blessingsI,blessingsII])=2,"Random Blessings II did not beat I")
     AssertLearning(ChooseBestCard([bossI,bossII])=2,"Boss Damage II did not beat I when no other buff exists")
     AssertLearning(ChooseBestCard([bossII,attackI])=2,"Boss Damage II incorrectly beat Attack I")
@@ -303,7 +311,12 @@
     count += 3
     observedRange := rangeI.Clone(),observedRange.effectInk := "buff"
     observedCooldown := cooldownI.Clone(),observedCooldown.effectInk := "buff"
-    AssertLearning(ChooseBestCard([observedCooldown,observedRange,fakeRedBuff])=2,"Range priority compared against a red card or lost inside the green-only set")
+    AssertLearning(ChooseBestCard([observedRange,observedCooldown,fakeRedBuff])=2,"Cooldown priority compared against a red card or lost inside the green-only set")
+    for kind in ["buff","debuff"] {
+        blank := CardPolicy("unreadable",kind="buff",kind),blank.effectInk := kind
+        AssertLearning(ChooseBestCard([blank,blank.Clone(),blank.Clone()])=2,"Three unreadable " kind " cards did not pick the middle card")
+        count += 1
+    }
     count += 1
     greenRandom := blessingsI.Clone(),greenRandom.effectInk := "buff"
     AssertLearning(ChooseBestCard([greenBoss,greenRandom,soleGreen])=2,"Random Blessings did not rank first within the green-only set")

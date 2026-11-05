@@ -3,9 +3,6 @@ global PLACEMENT_RUN_FILE := A_ScriptDir "\placement_run.ini"
 global PLACEMENT_LAYOUT_FILE := A_ScriptDir "\placement_layouts.ini"
 global gRunRecording := false,gRunMap := "",gLayoutValidation := Map()
 global gUpgradeSelectedId := 0
-; How the tile's Upg button works in this game: "" until a click is seen to add
-; a segment, then "direct" (Upg alone) or "select" (portrait first, then Upg).
-global gUpgradeClickMode := ""
 
 BeginPlacementRun() {
     global gRunRecording,gRunMap,gMapModel,gLayoutValidation
@@ -143,7 +140,7 @@ ResetUpgradeSelection() {
 }
 
 ResetUpgradeTracking(item) {
-    item.lastClickAt := 0,item.lastClickMode := "",item.noChange := 0
+    item.lastClickAt := 0,item.stableKey := "",item.stableAt := 0,item.maxBarAt := 0
     item.upgradeUnreadCount := 0,item.lowerReads := 0,item.upgradeWarningAt := 0
     item.upgradeRetryAt := 0,item.deferCount := 0
 }
@@ -196,7 +193,7 @@ DeferUnitUpgrade(item,message) {
     count := (item.HasProp("deferCount")?item.deferCount:0)+1
     delay := Min(60,10*(2**(count-1)))
     item.deferCount := count,item.upgradeRetryAt := A_TickCount+delay*1000
-    item.lastClickAt := 0,item.noChange := 0,item.upgradeUnreadCount := 0,item.upgradeWarningAt := A_TickCount
+    item.lastClickAt := 0,item.upgradeUnreadCount := 0,item.upgradeWarningAt := A_TickCount
     Log("#" item.id " " item.name ": " message " Retry in " delay " seconds; continue other units.")
     CloseUnitPanel()
     ResetUpgradeSelection()
@@ -274,20 +271,29 @@ TileIdentityMismatch(item,entry) {
     return false
 }
 
-ClickTileUpgrade(entry,select) {
-    global gUpgradeSelectedId
-    if select {
-        if !ClickManagerPoint(entry.x,entry.y) || !WaitForUnitPanel(600,true)
-            return false
-    }
+ClickTileUpgrade(entry) {
     return ClickManagerPoint(entry.ux,entry.uy)
 }
 
-; One upgrade step for a recorded purchase, entirely from its manager tile:
-; lit segments are the level, a grey Max button is MAX, and every click on the
-; tile's Upg button is confirmed by a new lit segment before the next one.
+; The same reading twice, at least 250 ms apart, before a level jump nobody
+; clicked for, or a MAX, is believed. A manager that has just opened or
+; scrolled is still animating, and one frame can show a wrong level or a grey
+; button (that ended #7 at 5 of 8 and skipped unit 2).
+StableTileRead(item,key) {
+    if !item.HasProp("stableKey") || item.stableKey!=key {
+        item.stableKey := key,item.stableAt := A_TickCount
+        return false
+    }
+    return A_TickCount-item.stableAt>=250
+}
+
+; One upgrade step for a recorded purchase, entirely from its manager tile.
+; Like holding R: keep clicking the tile's Upg button until the unit reaches
+; MAX or its target. There is no failure counter; clicks that buy nothing
+; (not enough Yen) are simply repeated. A finite target waits up to 2 s for
+; the new segment after each click so a slow bar can never overshoot it.
 UpgradeOnceAction(item) {
-    global gRunning,gUnitManagerFailure,gUpgradeClickMode,gUpgradeSelectedId
+    global gRunning,gUnitManagerFailure,gUpgradeSelectedId
     RefreshRecordedUpgradeTarget(item)
     if item.complete
         return true
@@ -295,7 +301,7 @@ UpgradeOnceAction(item) {
         return false
     if item.HasProp("upgradeRetryAt") && A_TickCount<item.upgradeRetryAt
         return false
-    if !item.HasProp("noChange")
+    if !item.HasProp("stableKey")
         ResetUpgradeTracking(item)
     if !(found := LocateManagedUnit(item.id)) {
         if !gRunning
@@ -321,8 +327,9 @@ UpgradeOnceAction(item) {
         SaveUpgradeDiagnostic(item)
         return DeferUnitUpgrade(item,"the purchase list and the unit manager disagree about this tile. No upgrade clicked.")
     }
-    level := entry.filled
-    if level<0 && !entry.maxed {
+    level := entry.filled,finite := item.target!=99
+    ; An unreadable bar cannot overshoot a MAX target, so it is clicked anyway.
+    if level<0 && !entry.maxed && finite {
         item.upgradeUnreadCount += 1
         if item.upgradeUnreadCount>=3 {
             SaveUpgradeDiagnostic(item)
@@ -346,19 +353,39 @@ UpgradeOnceAction(item) {
     }
     item.lowerReads := 0
     if level>item.upgrades {
+        ; One more segment right after our click needs no second look.
+        explained := item.lastClickAt && level=item.upgrades+1
+        if !explained && !StableTileRead(item,"level " level)
+            return false
         Log("#" item.id " " item.name ": upgrade " item.upgrades " -> " level (entry.total>0?" of " entry.total:"") " confirmed on the manager tile.")
-        if gUpgradeClickMode="" && item.lastClickMode!="" {
-            gUpgradeClickMode := item.lastClickMode
-            Log(gUpgradeClickMode="direct"?"Upgrade clicks work directly on the tile's Upg button.":"Upgrade clicks need the unit selected first; selecting the portrait before Upg from now on.")
-        }
-        item.upgrades := level,item.noChange := 0,item.deferCount := 0,item.lastClickAt := 0
+        item.upgrades := level,item.deferCount := 0,item.lastClickAt := 0
         SavePlacementRun()
     }
-    finite := item.target!=99
-    if entry.maxed || (finite && level>=item.target) {
+    maxed := false
+    if entry.maxed {
+        ; MAX means a grey Max button AND (when readable) every segment lit.
+        if entry.total<=0 || level>=entry.total {
+            if !StableTileRead(item,"max")
+                return false
+            maxed := true
+        } else {
+            ; Grey button over unlit segments is normally a passing frame while
+            ; the manager opens. Never click it; believe it only after 4 s.
+            if !item.maxBarAt
+                item.maxBarAt := A_TickCount
+            if A_TickCount-item.maxBarAt<4000 {
+                UpgradeWarning(item,"Max button shown but only " level " of " entry.total " segments lit; re-reading before believing MAX.")
+                return false
+            }
+            Log("#" item.id " " item.name ": Max button for 4 s with " level " of " entry.total " segments lit; treating it as MAX.")
+            maxed := true
+        }
+    } else
+        item.maxBarAt := 0
+    if maxed || (finite && level>=item.target) {
         item.complete := true
         SavePlacementRun()
-        Log("#" item.id " target " item.target " reached" (entry.maxed?" (MAX).":" at upgrade " level "."))
+        Log("#" item.id " target " item.target " reached" (maxed?" (MAX).":" at upgrade " level "."))
         if gUpgradeSelectedId=item.id
             CloseUnitPanel()
         ResetUpgradeSelection()
@@ -369,26 +396,14 @@ UpgradeOnceAction(item) {
             Log("All recorded units have reached their upgrade targets.")
         return true
     }
-    ; One click at a time. A finite target waits 2 s for its new segment, so a
-    ; slow bar can never let a second click overshoot the target.
-    if item.lastClickAt {
-        if A_TickCount-item.lastClickAt<(finite?2000:600)
-            return false
-        item.noChange += 1
-        if Mod(item.noChange,5)=0
-            UpgradeWarning(item,"no new segment after " item.noChange " Upg clicks; waiting for Yen and retrying.")
-    }
+    if item.lastClickAt && A_TickCount-item.lastClickAt<(finite?2000:300)
+        return false
     if HasCardChoice() {
         ClearCardChoice()
         return false
     }
-    ; Until a click has been seen to work, alternate: Upg alone twice, then
-    ; portrait + Upg, so either game behaviour is discovered.
-    select := gUpgradeClickMode="select" || (gUpgradeClickMode="" && item.noChange>=2 && Mod(item.noChange,2)=0)
-    if !ClickTileUpgrade(entry,select)
+    if !ClickTileUpgrade(entry)
         return false
-    if select
-        gUpgradeSelectedId := item.id
-    item.lastClickAt := A_TickCount,item.lastClickMode := select?"select":"direct"
+    item.lastClickAt := A_TickCount
     return true
 }
