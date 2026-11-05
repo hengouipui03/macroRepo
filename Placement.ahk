@@ -12,11 +12,14 @@ global gUnitPanelLayout := 0
 ; with OCR (that read cost up to a second after every failed purchase).
 global gUnitPanelSeen := false
 global gUnitPreviewActive := true
+; Set when a purchase failed only because Yen was short: {slot,cost,since}.
+global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gLastYenRead := 0
 
 ResetPlacementSearch() {
-    global gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
+    global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
+    gPlacementYenWait := 0,gLastYenRead := 0
 }
 
 RefreshPlacementSearch() {
@@ -160,7 +163,7 @@ FindPartnerCandidate(anchor) {
 ; One try behind this edge unit. A miss closes only that partner spot; it
 ; never blocks the edge, and the next unit continues along the edge.
 TryPartnerPlacement(unit,anchor) {
-    global gPendingPlacement,gCardInterruptEpoch
+    global gPlacementYenWait,gPendingPlacement,gCardInterruptEpoch
     ; At the failure limit relocation comes first; the spot stays open.
     if PlacementFailureLimitReached()
         return false
@@ -179,8 +182,8 @@ TryPartnerPlacement(unit,anchor) {
         return true
     if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
         return FinishPlacement(unit,gPendingPlacement)
-    ; Unresolved purchases and card interruptions keep the spot open.
-    if gPendingPlacement || CountSlotPlacements(unit.slot)>before || epoch!=gCardInterruptEpoch
+    ; Unresolved purchases, card interruptions and a lack of Yen keep the spot open.
+    if gPendingPlacement || CountSlotPlacements(unit.slot)>before || epoch!=gCardInterruptEpoch || (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
         return false
     anchor.partner := "closed"
     Log(unit.name ": the spot behind #" anchor.id " did not take a unit; closed for this game. Continue along the edge.")
@@ -234,6 +237,151 @@ PlaceMoneyUnit(unit) {
 }
 
 PlacementTerrain(point) => point.HasProp("hill") && point.hill?"hill":"ground"
+
+; -----------------------------------------------------------------------------
+; Yen. Read only after a purchase failed, so successful placements cost no
+; time. One OCR call covers the Yen counter above the toolbar and the cost
+; under each of the six slot portraits (800x600 reference layout).
+; -----------------------------------------------------------------------------
+ReadPlacementMoney() {
+    global REF_W,REF_H
+    result := {yen:-1,costs:Map()}
+    geometry := WindowGeometry()
+    if !geometry
+        return result
+    rows := ReadOcrRows(205,484,595,562,true,4)
+    yenWords := [],slotWords := Map()
+    ; Cost text sits in the lower right of each portrait.
+    costX := [251,315,379,443,508,571]
+    for word in rows {
+        x := (word.x+word.w/2)*REF_W/geometry.cw,y := (word.y+word.h/2)*REF_H/geometry.ch
+        if y>=484 && y<=515 && x>=340 && x<=470 {
+            yenWords.Push({x:x,text:word.text})
+            continue
+        }
+        if y<543 || y>559
+            continue
+        slot := 0,gap := 30
+        for index,centre in costX
+            if Abs(x-centre)<gap
+                slot := index,gap := Abs(x-centre)
+        if slot {
+            if !slotWords.Has(slot)
+                slotWords[slot] := []
+            slotWords[slot].Push({x:x,text:word.text})
+        }
+    }
+    result.yen := DigitsValue(yenWords,0,10000000)
+    for slot,words in slotWords {
+        cost := DigitsValue(words,50,100000)
+        if cost>=0
+            result.costs[slot] := cost
+    }
+    return result
+}
+
+; Words left to right, joined: the first run of digits ("13 50" is 1350,
+; "9,401" is 9401). -1 when there is none or it is implausible.
+DigitsValue(words,low,high) {
+    sorted := []
+    for word in words {
+        at := sorted.Length+1
+        for index,other in sorted
+            if word.x<other.x {
+                at := index
+                break
+            }
+        sorted.InsertAt(at,word)
+    }
+    text := ""
+    for word in sorted
+        text .= word.text
+    text := RegExReplace(text,"[,.\s]")
+    if !RegExMatch(text,"\d{1,8}",&match)
+        return -1
+    value := Integer(match[0])
+    return value>=low && value<=high?value:-1
+}
+
+; A unit's placement cost, remembered by unit name in learning.ini. A new
+; value is believed only when two reads agree; until then the saved one stands.
+UnitPlacementCost(unit,read) {
+    global gUnitCosts,gUnitCostCandidates,LEARNING_FILE
+    key := MemoryKey(unit.name)
+    if !gUnitCosts.Has(key) {
+        saved := MemoryRead("UnitCosts",key,"")
+        if IsInteger(saved) && Integer(saved)>0
+            gUnitCosts[key] := Integer(saved)
+    }
+    known := gUnitCosts.Has(key)?gUnitCosts[key]:0
+    if !read.costs.Has(unit.slot)
+        return known
+    seen := read.costs[unit.slot]
+    if seen=known
+        return known
+    if gUnitCostCandidates.Has(key) && gUnitCostCandidates[key]=seen {
+        gUnitCosts[key] := seen,gUnitCostCandidates.Delete(key)
+        try IniWrite seen,LEARNING_FILE,"UnitCosts",key
+        Log(unit.name ": placement cost " seen " Yen (read twice on slot " unit.slot ").")
+        return seen
+    }
+    gUnitCostCandidates[key] := seen
+    return known
+}
+
+; Called once per failed purchase. True when Yen was below the unit's cost:
+; then the failure is not counted, the spot stays usable, and the build loop
+; waits for Yen. Anything unreadable counts as an ordinary failure.
+PlacementShortOfYen(unit) {
+    global gPlacementYenWait,gLastYenRead,gPlacements
+    ; Yen only rises between purchases (no upgrades during placement): once it
+    ; was seen to cover this cost, later misses need no new read.
+    known := UnitPlacementCost(unit,{yen:-1,costs:Map()})
+    if known && IsSet(gLastYenRead) && gLastYenRead && gLastYenRead.placements=gPlacements.Length && gLastYenRead.yen>=known
+        return false
+    read := ReadPlacementMoney()
+    cost := UnitPlacementCost(unit,read)
+    if !cost && read.costs.Has(unit.slot) {
+        ; First sighting of this cost: confirm it with a second read now.
+        read := ReadPlacementMoney()
+        cost := UnitPlacementCost(unit,read)
+    }
+    if read.yen>=0
+        gLastYenRead := {yen:read.yen,placements:gPlacements.Length}
+    if cost<=0 || read.yen<0 || read.yen>=cost
+        return false
+    gPlacementYenWait := {slot:unit.slot,cost:cost,since:A_TickCount}
+    Log(unit.name ": " read.yen " of " cost " Yen; not a failed spot. Wait for Yen, then place this unit.")
+    return true
+}
+
+; After a Yen-short purchase: re-read the counter about once a second until
+; the unit is affordable (at most 20 s, or 3 unreadable reads), then retry.
+WaitForPlacementYen(unit) {
+    global gPlacementYenWait,gRunning
+    if !IsSet(gPlacementYenWait) || !gPlacementYenWait || gPlacementYenWait.slot!=unit.slot
+        return false
+    wait := gPlacementYenWait,unread := 0
+    while gRunning && A_TickCount-wait.since<20000 && !IsEndGameBlocking() {
+        if HasCardChoice() {
+            ClearCardChoice()
+            ActionPause(150)
+            continue
+        }
+        if !ActionPause(1000)
+            break
+        yen := ReadPlacementMoney().yen
+        if yen>=wait.cost {
+            Log(unit.name ": " yen " Yen; affordable now.")
+            break
+        }
+        unread += yen<0?1:0
+        if unread>=3
+            break
+    }
+    gPlacementYenWait := 0
+    return true
+}
 
 FailedPlacementSpot(point) {
     global gFailedPlacementSpots,FAILED_PLACEMENT_RADIUS
@@ -511,7 +659,7 @@ CountSlotPlacements(slot) {
 }
 
 FinishPlacement(unit,point) {
-    global gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses
+    global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses
     if !point || CandidateOccupied(point.x,point.y)
         return false
     if HasCardChoice() || !HasUnitPanel()
@@ -524,6 +672,7 @@ FinishPlacement(unit,point) {
     }
     if !RegisterPlacedUnit(unit,point)
         return false
+    gPlacementYenWait := 0
     ResetPlacementFailureStreak()
     ForgetFailedPlacementSpot(point)
     terrain := PlacementTerrain(point)
@@ -657,6 +806,9 @@ RecoverPendingPlacement(unit) {
     }
     ; Two completed selection-only probes found no model after the purchase wait.
     gPendingPlacement := 0
+    ; Short of Yen: the spot itself was never tested, so it stays usable.
+    if point.HasProp("yenShort") && point.yenShort
+        return false
     RememberFailedPlacementSpot(point)
     RecordFailedPlacement(unit,point)
     return false
@@ -789,7 +941,7 @@ RegisterPlacementEdgeMiss(point) {
 }
 
 TryPlacementPoints(unit,points) {
-    global gRunning,gPlacementAttemptClicked,gPendingPlacement
+    global gPlacementYenWait,gRunning,gPlacementAttemptClicked,gPendingPlacement
     queue := points.Clone(),seen := Map()
     while queue.Length {
         if !gRunning || IsEndGameBlocking()
@@ -809,6 +961,10 @@ TryPlacementPoints(unit,points) {
         seen[key] := true
         if TryPlacementCandidate(unit,point)
             return true
+        ; Not enough Yen: other spots would fail the same way, and this miss
+        ; must not block the edge.
+        if (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
+            return false
         if !gPlacementAttemptClicked
             continue
         if point.HasProp("row") && point.row=2
@@ -917,7 +1073,7 @@ PlaceUnit(unit) {
 }
 
 PlaceUnitAction(unit) {
-    global gRunning,gPendingPlacement,gHillPlacementUnavailable,gPlacementLine
+    global gRunning,gPendingPlacement,gHillPlacementUnavailable,gPlacementLine,gPlacementYenWait
     gHillPlacementUnavailable := false
     ; No F here: the unit manager is only opened after every unit is placed.
     if !gRunning || IsEndGameBlocking()
@@ -947,6 +1103,8 @@ PlaceUnitAction(unit) {
                 return true
             if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
                 return FinishPlacement(unit,gPendingPlacement)
+            if (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
+                return false
         }
         if hillOnly {
             gHillPlacementUnavailable := true
@@ -967,7 +1125,7 @@ PlaceUnitAction(unit) {
     if anchor && PartnerOpen(anchor) {
         if TryPartnerPlacement(unit,anchor)
             return true
-        if gPendingPlacement || HasCardChoice()
+        if gPendingPlacement || HasCardChoice() || (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
             return false
     }
     points := FindPlacementCandidates(false)
@@ -979,7 +1137,7 @@ PlaceUnitAction(unit) {
                 continue
             if TryPartnerPlacement(unit,older)
                 return true
-            if gPendingPlacement || HasCardChoice()
+            if gPendingPlacement || HasCardChoice() || (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
                 return false
         }
         points := FindPlacementCandidates(true)
@@ -994,6 +1152,8 @@ PlaceUnitAction(unit) {
         return true
     if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
         return FinishPlacement(unit,gPendingPlacement)
+    if (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
+        return false
     if gRunning
         CancelUnitPreview()
     Log(unit.name ": path-side attempts unconfirmed; path-edge sections limited to 3 misses, then opposite side, keeping this same copy.")
@@ -1044,6 +1204,10 @@ PlaceConfiguredBuildAction(plan) {
                 }
                 if !gRunning
                     return "stopped"
+                ; Short of Yen: wait until affordable, then the same unit again.
+                ; Not a failure, so it never moves the player to a checkpoint.
+                if WaitForPlacementYen(unit)
+                    continue
                 if gHillPlacementUnavailable && unit.HasProp("hill") && unit.hill {
                     retryAt[unit.slot] := A_TickCount+10000
                     Log(unit.name ": Hill placement still pending; retry in 10 seconds.")

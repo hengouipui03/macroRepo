@@ -348,6 +348,8 @@ Log(message,*) {
 }
 ClearCardChoice(*) => true
 SaveUpgradeDiagnostic(*) => 0
+PlacementShortOfYen(*) => false
+WaitForPlacementYen(*) => false
 TeleportBackToSpawn(*) {
     global teleports
     teleports += 1

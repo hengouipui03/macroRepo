@@ -253,7 +253,14 @@ Hill-only units require a confirmed highlighted Hill surface. If no usable
 Hill terrain or free Hill space exists, those copies remain unplaced and later
 units continue (retried every 10 s); Hill-only units never fall back to ground.
 Every other unit is retried until it is placed before any later unit starts,
-so the build order holds. Hybrid units try
+so the build order holds.
+
+When a purchase fails, one OCR pass reads the Yen counter above the toolbar and
+the cost printed under each slot portrait. If Yen was below that unit's cost,
+the miss is not counted toward relocation and the spot stays usable; the macro
+re-reads Yen about once a second (at most 20 s) and then places the same unit.
+Costs are saved by unit name in learning.ini [UnitCosts] once two reads agree.
+Successful placements are never slowed by this check. Hybrid units try
 Hill terrain first, then use normal path-side placement when Hill is unavailable.
 Confirmed Hill placements are recorded and upgraded using the same numbered
 positions and priority rules as other placements.

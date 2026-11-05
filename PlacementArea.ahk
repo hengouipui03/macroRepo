@@ -36,6 +36,11 @@ RecordFailedPlacement(unit,point) {
         || (point.HasProp("failureCounted") && point.failureCounted)
         return false
     point.failureCounted := true
+    ; Not enough Yen is not a bad spot: do not count it.
+    if PlacementShortOfYen(unit) {
+        point.yenShort := true
+        return false
+    }
     PlacementCopyFailures(unit,true)
     return true
 }

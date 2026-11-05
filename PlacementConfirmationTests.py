@@ -183,6 +183,7 @@ RegisterPlacedUnit(unit,point) {
 CandidateOccupied(*) => false
 PlacementTerrain(*) => "ground"
 RememberFailedPlacementSpot(*) => 0
+PlacementShortOfYen(*) => false
 ForgetFailedPlacementSpot(*) => 0
 ClickAwayFromUnitPanel(*) => CloseUnitPanel()
 ActionPause(*) => true
