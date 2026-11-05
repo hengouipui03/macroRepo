@@ -1,7 +1,12 @@
 ﻿; Word colours classify cards. Right-hand modifiers are separate read-only context.
 global CARD_PREFS_FILE := A_ScriptDir "\card_preferences.ini"
 global gResistancePreference := "balanced",gMagicTeamControl := 0,gPhysicalTeamControl := 0
-global gMatchModifiers := {health:0,healthKnown:false,physical:0,magical:0},gModifierReadAt := 0
+global gMatchModifiers := {health:0,healthKnown:false,physical:0,magical:0,regen:0},gModifierReadAt := 0
+; Red-card ceilings, checked against the total AFTER taking the card (Level
+; Modifiers value + card amount). Health is the displayed %, resistance a flat
+; value per type, regen a %. An unreadable amount assumes the worst case below.
+global CARD_HEALTH_CAP := 300,CARD_RESIST_CAP := 150,CARD_REGEN_CAP := 2
+global CARD_UNKNOWN_HEALTH := 200,CARD_UNKNOWN_RESIST := 100
 
 BuildCardPreferencesTab(app) {
     global CARD_PREFS_FILE,gResistancePreference,gMagicTeamControl,gPhysicalTeamControl
@@ -14,7 +19,7 @@ BuildCardPreferencesTab(app) {
     gPhysicalTeamControl := app.AddCheckbox("x28 y238 w410" (saved="physical"?" Checked":""),"Physical team: prefer magical resistance debuffs")
     gMagicTeamControl.OnEvent("Click",CardDamagePreferenceChanged.Bind("magic"))
     gPhysicalTeamControl.OnEvent("Click",CardDamagePreferenceChanged.Bind("physical"))
-    app.AddText("x28 y286 w410 h95","Leave both off for balanced resistance choices. Both percentages on a combined card are added. Current physical/magical totals break ties. At 250% displayed enemy Health, prefer other safe debuffs before adding more Health.")
+    app.AddText("x28 y286 w410 h95","Leave both off for balanced resistance choices. Red cards are judged on the total after taking them: Health up to 300%, each resistance up to 150, regen up to 2%. Past those, the card that ends least over its cap. Unreadable red cards only beat Speed.")
     app.AddText("x28 y399 w410 h95","Hill only: highlighted Hill terrain is required. Hybrid: try Hill first, then normal ground. A Hill-only unit without space stays unplaced while the other units continue.")
 }
 
@@ -30,7 +35,12 @@ CardDamagePreferenceChanged(which,*) {
 
 ResetMatchCardContext() {
     global gMatchModifiers,gModifierReadAt
-    gMatchModifiers := {health:0,healthKnown:false,physical:0,magical:0},gModifierReadAt := 0
+    gMatchModifiers := {health:0,healthKnown:false,physical:0,magical:0,regen:0},gModifierReadAt := 0
+}
+
+MatchModifier(name) {
+    global gMatchModifiers
+    return IsSet(gMatchModifiers) && IsObject(gMatchModifiers) && gMatchModifiers.HasProp(name)?gMatchModifiers.%name%:0
 }
 
 SignedHealthChange(text,&found) {
@@ -43,22 +53,60 @@ SignedHealthChange(text,&found) {
     return 0
 }
 
+; Level Modifiers rows put the label first ("Enemy Health: +430.0%"); card
+; text puts the number first ("+50% Enemy Health"). Only the label-first form is
+; accepted here, so a card line can never be mistaken for a match total.
+PanelPercent(text,label,&found) {
+    found := false
+    if RegExMatch(NormalizeWords(text),"\b" label "\s*([+-]?\s*\d+(?:\.\d+)?)\s*%",&m) {
+        found := true
+        return Number(StrReplace(m[1]," "))
+    }
+    return 0
+}
+
 ParseMatchModifiers(rows) {
-    result := {health:0,healthKnown:false,physical:0,magical:0,physicalKnown:false,magicalKnown:false},text := ""
+    result := {health:0,healthKnown:false,physical:0,magical:0,physicalKnown:false,magicalKnown:false,regen:0,regenKnown:false}
     for row in rows {
-        line := NormalizeWords(row.text),text .= " " line
-        value := SignedHealthChange(line,&found)
+        value := PanelPercent(row.text,"health",&found)
         if found
             result.health := value,result.healthKnown := true
-    }
-    for row in rows {
-        resistance := ParseResistanceEffects(row.text)
+        value := PanelPercent(row.text,"(?:regen|regeneration)",&found)
+        if found
+            result.regen := value,result.regenKnown := true
+        resistance := ReadResistanceAmounts(StripSecretPortalReward(NormalizeWords(row.text)),false)
         if resistance.physicalRead
             result.physical := resistance.physical,result.physicalKnown := true
         if resistance.magicalRead
             result.magical := resistance.magical,result.magicalKnown := true
     }
     return result
+}
+
+ApplyModifierSnapshot(snapshot) {
+    global gMatchModifiers
+    if snapshot.healthKnown
+        gMatchModifiers.health := snapshot.health,gMatchModifiers.healthKnown := true
+    if snapshot.physicalKnown
+        gMatchModifiers.physical := snapshot.physical
+    if snapshot.magicalKnown
+        gMatchModifiers.magical := snapshot.magical
+    if snapshot.regenKnown
+        gMatchModifiers.regen := snapshot.regen
+}
+
+; Once per card screen, after the manager is closed for the cards, the panel is
+; uncovered. It is the game's own total, so a pick the macro did not see (vote
+; timer, a lost confirmation) is still counted. A stat with no row keeps the
+; tracked value (0 at match start), so a missed OCR line never lowers a total.
+ReadModifiersForCards() {
+    global gModifierReadAt
+    snapshot := ParseMatchModifiers(ReadOcrRows(635,210,785,455))
+    ApplyModifierSnapshot(snapshot)
+    gModifierReadAt := A_TickCount+30000
+    found := snapshot.healthKnown || snapshot.physicalKnown || snapshot.magicalKnown || snapshot.regenKnown
+    Log("Level Modifiers " (found?"read":"show no enemy totals (tracked values kept)") ": health " MatchModifier("health")
+        "% / physical " MatchModifier("physical") " / magical " MatchModifier("magical") " / regen " MatchModifier("regen") "%")
 }
 
 RefreshMatchModifiers() {
@@ -71,13 +119,7 @@ RefreshMatchModifiers() {
         return
     gModifierReadAt := A_TickCount+30000
     ; This crop is NEVER passed to card selection, card detection or clicking.
-    snapshot := ParseMatchModifiers(ReadOcrRows(635,210,785,455))
-    if snapshot.healthKnown
-        gMatchModifiers.health := snapshot.health,gMatchModifiers.healthKnown := true
-    if snapshot.physicalKnown
-        gMatchModifiers.physical := snapshot.physical
-    if snapshot.magicalKnown
-        gMatchModifiers.magical := snapshot.magical
+    ApplyModifierSnapshot(ParseMatchModifiers(ReadOcrRows(635,210,785,455)))
 }
 
 ApplySelectedCardModifiers(card) {
@@ -91,6 +133,11 @@ ApplySelectedCardModifiers(card) {
         value := SignedHealthChange(card.text,&found)
         if found
             gMatchModifiers.health += value,gMatchModifiers.healthKnown := true
+    }
+    if CardIsRegen(card) {
+        amount := card.stat="0.5 regen" && !(card.HasProp("amountKnown") && card.amountKnown)?0.5:card.amount
+        if amount>0
+            gMatchModifiers.regen := MatchModifier("regen")+amount
     }
     gModifierReadAt := A_TickCount+2500
 }
@@ -308,7 +355,9 @@ LogCardDecision(cards,best) {
             detail .= " | physical " card.resistance.physical " + magical " card.resistance.magical " = " card.resistance.total
         if CardIsSpeed(card)
             detail .= " | FORBIDDEN SPEED"
+        else if CardSelectionView(card).kind="debuff" && card.stat!="unknown"
+            detail .= " | " DebuffOutlook(card).detail
         Log(detail)
     }
-    Log("Choose card " best " | team " gResistancePreference " | current health " gMatchModifiers.health "% / physical " gMatchModifiers.physical " / magical " gMatchModifiers.magical)
+    Log("Choose card " best " | team " gResistancePreference " | current health " MatchModifier("health") "% / physical " MatchModifier("physical") " / magical " MatchModifier("magical") " / regen " MatchModifier("regen") "%")
 }

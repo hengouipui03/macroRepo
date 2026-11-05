@@ -361,11 +361,14 @@ coordinates. Ambiguous red/unknown text is retried rather than clicked blindly.
   Green Health buffs remain ahead of every red debuff.
 - Green first above everything: a single card with green words is chosen
   immediately from its pixels, before OCR.
-- Debuffs: shield, explosive death, health, 0.5 regen, resistance cards. With
-  balanced preferences a shared physical+magical resist debuff (e.g. 50+50)
-  always beats a sole physical or sole magical one (75, 100, ...).
-  At 250% displayed enemy Health, prefer other safe debuffs before adding more
-  Health. The right panel is read only as match context and is never selectable.
+- Debuffs are judged on the total after taking the card, read from the Level
+  Modifiers panel once per card screen: shield, explosive death, then health
+  up to 300%, resistance up to 150 per type, regen up to 2%. Past those caps,
+  the card that ends least far past its own cap wins (health on a tie), then
+  regen past 2%, then an unreadable red card; positive Speed never. Between
+  resistance cards, with balanced preferences, a shared physical+magical
+  debuff (e.g. 50+50) beats a sole physical or sole magical one (75, 100, ...).
+  The right panel is read only as match context and is never selectable.
 - Physical/magical resistance amounts are parsed independently, including
   separate OCR lines, and added. With balanced preferences, 50+50=100 beats
   150 on a single type. The first digit of a bare number cannot be mistaken
@@ -396,16 +399,16 @@ Shared reward lines (such as "+30% SummerPearls") are ignored; common effect
 keywords remain readable. Current OCR is read across all three cards for every
 new offer so an old memory cannot hide a negative sign. Visual memory is a
 fallback when current text cannot be read. Equal-stat buffs prefer a larger
-amount, debuffs a smaller one. The 0.5 regen debuff ranks immediately after
-health and before physical resist; larger regen amounts do not get that preference.
+amount, debuffs a smaller one. Regen ranks after health and resistance and is
+taken only while the regen total stays at or under 2%.
 Secret portal/drop-rate rewards are kept separate from the effect amount.
 They never override a green buff. With
 only debuffs and two ordinary alternatives, the ordinary choices are preferred
 in the existing debuff order. All-secret choices keep the same debuff order.
 Previously learned OCR cards are read once again to retain secret rewards;
 placement memories and learned files are preserved. When effect text stays
-unclear, a green-word buff or a readable safe debuff can be selected; unknown
-red cards and positive Speed are left unclicked. Card memory refreshes for the
+unclear, a green-word buff, then the easiest readable debuff, then an
+unreadable non-Speed card is selected; an all-Speed offer is left unclicked. Card memory refreshes for the
 new policy and stores each resistance amount independently.
 
 ## Discord results

@@ -4,8 +4,9 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 logic = '\n'.join(function('Learning.ahk', name) for name in [
     'CardRank', 'CardHasGreenEffect', 'CardSelectionView', 'CardIsSpeed',
-    'CardPreferenceScore', 'ChooseBestCard', 'PreferVerifiedGreenChoice',
-    'FallbackCardChoice'])
+    'CardPreferenceScore', 'DebuffOutlook', 'DebuffBetter', 'CardBetter',
+    'ChooseBestCard', 'PreferVerifiedGreenChoice', 'FallbackCardChoice'])
+logic += '\n' + function('CardContext.ahk', 'MatchModifier')
 logic += '\n' + '\n'.join(function('AAPathMacro.ahk', name) for name in [
     'ConfirmLockedCardSelection', 'ResetCardSelection'])
 fixture = r'''
@@ -14,6 +15,7 @@ fixture = r'''
 #Warn All, Off
 global gRunning := true,gCardSelection := 0,gCardRetryAt := 0,gCardUnread := 0
 global gMatchModifiers := {healthKnown:false},freshCards := [],clicked := []
+global CARD_HEALTH_CAP := 300,CARD_RESIST_CAP := 150,CARD_REGEN_CAP := 2,CARD_UNKNOWN_HEALTH := 200,CARD_UNKNOWN_RESIST := 100
 try {
     unknown := Card("unknown","buff"),speed := Card("speed","buff")
     yen := Card("yen","buff"),boss := Card("boss damage","buff")
@@ -78,6 +80,7 @@ Assert(value,message) {
         throw Error(message)
 }
 CardIsResistance(*) => false
+CardIsRegen(*) => false
 ResistancePreferred(*) => false
 WindowGeometry(*) => true
 ReadOcrRows(*) => []

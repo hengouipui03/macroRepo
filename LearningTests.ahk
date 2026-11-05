@@ -7,7 +7,7 @@
             throw Error(message)
     }
     buffs := ["attack", "cooldown", "range"]
-    debuffs := ["shield","explosive death","health","0.5 regen","physical and magical resist","physical resist","magical resist","speed"]
+    debuffs := ["shield","explosive death","health","physical and magical resist","physical resist","magical resist","0.5 regen","speed"]
     for index, stat in buffs {
         card := CardPolicy("Buff " stat " +20%")
         AssertLearning(card.kind="buff" && card.stat=stat && card.rank=index,"Buff priority misread: " stat)
@@ -83,7 +83,7 @@
     count += 8
     regen := CardPolicy("Enemy Health Regen +0.5",false,"debuff")
     AssertLearning(regen.stat="0.5 regen" && regen.amount=0.5,"0.5 regen was misread as health")
-    AssertLearning(ChooseBestCard([CardPolicy("Enemy Magical Resist +50",false,"debuff"),regen])=2,"0.5 regen must beat magical resist")
+    AssertLearning(ChooseBestCard([CardPolicy("Enemy Magical Resist +50",false,"debuff"),regen])=1,"Resistance within its cap must beat 0.5 regen")
     AssertLearning(ChooseBestCard([regen,CardPolicy("Enemy Health +50%",false,"debuff")])=2,"Regen changed the higher debuff priorities")
     AssertLearning(CardPolicy("Enemy Regen +5",false,"debuff").rank>CardPolicy("Enemy Magical Resist +50",false,"debuff").rank,"Larger regen was incorrectly given the 0.5 preference")
     count += 4
@@ -141,7 +141,7 @@
     AssertLearning(FallbackCardChoice([speed,unreadableGreen,secretShield])=2,"Fallback failed unconditional green-first rule")
     AssertLearning(ChooseBestCard([speed,CardPolicy("Enemy Regen +5",false,"debuff")])=2,"Speed beat an unranked debuff")
     AssertLearning(ChooseBestCard([speed,speed,secretHealth])=3,"Speed ordinary alternatives suppressed the only non-Speed choice")
-    AssertLearning(ChooseBestCard([speed,unreadable])=0 && FallbackCardChoice([speed,unreadable])=0,"Unclear red/unknown fallback guessed a potentially forbidden card")
+    AssertLearning(ChooseBestCard([speed,unreadable])=0 && FallbackCardChoice([speed,unreadable])=2,"Unreadable card did not beat Speed in the fallback")
     AssertLearning(ChooseBestCard([speed,speed,speed])=0 && FallbackCardChoice([speed,speed,speed])=0,"All-Speed offer must wait without clicking")
     for wording in ["-40% magical resist","Magical Resist -40%","-25% physical resist","Physical Resist -25%","-20% speed","Enemy Speed -20%","Speed III -20%","Magical Resist II -40%","Enemy Speed " Chr(0x2212) "20%"] {
         reduction := CardPolicy(wording,false,"debuff")
@@ -210,7 +210,7 @@
     AssertLearning(rewardResist.secretPortal && rewardResist.resistance.total=100,"Secret reward percentage inflated resistance")
     partial := CardPolicy("50% physical resist and magical resist unreadable",false,"debuff")
     AssertLearning(!ParseResistanceEffects("50% physical resist and unknown magical resist").known,"Unreadable second amount was treated as a known zero")
-    AssertLearning(ChooseBestCard([resistMix,regen])=2 && ChooseBestCard([resistMix,normalHealth])=2,"Resistance amount crossed health/regen priority groups")
+    AssertLearning(ChooseBestCard([resistMix,regen])=1 && ChooseBestCard([resistMix,normalHealth])=2,"Health > resistance > regen order broken within the caps")
     AssertLearning(ChooseBestCard([resistMix,unreadableGreen])=2 && ChooseBestCard([resistMix,double])=2,"Resistance amount overrode buff-first or Double Attack")
     AssertLearning(ChooseBestCard([speed,resistMagic150])=2,"Resistance change broke positive Speed-last")
     reduction := CardPolicy("-40% magical resist",false,"debuff")
@@ -305,7 +305,7 @@
     AssertLearning(ChooseBestCard([greenBoss,fakeRedBuff,soleGreen])=3,"Two green cards were compared with a red card or Boss Damage priority changed")
     AssertLearning(ChooseBestCard([greenBoss,fakeRedBuff,secretShield])=1,"The sole green Boss Damage card lost to red cards")
     wrongRedBuff := unreadableGreen.Clone(),wrongRedBuff.effectInk := "debuff"
-    AssertLearning(FallbackCardChoice([wrongRedBuff,speed])=0,"Fallback used a stale text-derived buff kind for red words")
+    AssertLearning(ChooseBestCard([wrongRedBuff,speed])=0 && FallbackCardChoice([wrongRedBuff,speed])=1,"Unreadable red card did not beat Speed, or red words were read as a buff")
     wrongRedSpeed := CardPolicy("-20% Enemy Speed",true,"buff"),wrongRedSpeed.effectInk := "debuff"
     AssertLearning(CardIsSpeed(wrongRedSpeed) && FallbackCardChoice([wrongRedSpeed])=0,"Red Speed words were allowed by a guessed minus sign")
     count += 3
@@ -335,13 +335,42 @@
     promoted := PreferVerifiedGreenChoice([greenBoss,soleGreen,fakeRedBuff],locked)
     AssertLearning(promoted.index=2,"A locked Boss card blocked a verified green Speed buff")
     count += 3
-    gMatchModifiers := {health:250,healthKnown:true,physical:200,magical:50}
     gResistancePreference := "balanced"
-    AssertLearning(ChooseBestCard([normalHealth,resistMix])=2,"250% existing Health did not move safe resistance ahead of more Health")
-    AssertLearning(ChooseBestCard([CardPolicy("150% physical resist",false,"debuff"),resistMix])=2,"Default repeated combined resistance lost to 150 sole physical")
-    AssertLearning(ChooseBestCard([resistMix,CardPolicy("100% magical resist",false,"debuff")])=1,"Accumulated resistance overrode the equal-total split preference")
-    AssertLearning(ChooseBestCard([CardPolicy("100% magical resist",false,"debuff"),resistMix])=2,"Equal-total split preference depended on card position")
-    AssertLearning(ChooseBestCard([CardPolicy("100% physical resist",false,"debuff"),CardPolicy("100% magical resist",false,"debuff")])=2,"Match history did not break an equal-total, equal-peak tie")
+    ; The reported loss: 230% Health, 100/100 resist. Health +200 would reach
+    ; 430% (over 300); shared resist reaches 150/150 (at its cap) and wins.
+    lossHealth := CardPolicy("+ Enemy Health III +200% Enemy Health",false,"debuff")
+    lossResist := CardPolicy("+ Resistant Enemies II +50 Enemy Physical Resist +50 Enemy Magic Resist",false,"debuff")
+    lossRegen := CardPolicy("+ Regenerating Enemies +5.0% Enemy Regen",false,"debuff")
+    gMatchModifiers := {health:230,healthKnown:true,physical:100,magical:100,regen:0}
+    AssertLearning(ChooseBestCard([lossHealth,lossResist,lossRegen])=2,"Reported loss repeated: Health +200 past the cap beat resistance within it")
+    AssertLearning(FallbackCardChoice([lossHealth,lossResist,lossRegen])=2,"Fallback ignored the projected caps")
+    ; Health landing exactly on 300% is still within its cap.
+    gMatchModifiers := {health:250,healthKnown:true,physical:0,magical:0,regen:0}
+    AssertLearning(ChooseBestCard([resistMix,normalHealth])=2,"Health reaching exactly 300% lost its priority")
+    gMatchModifiers := {health:260,healthKnown:true,physical:0,magical:0,regen:0}
+    AssertLearning(ChooseBestCard([normalHealth,resistMix])=2,"Health past 300% still beat resistance within its cap")
+    ; Both past their caps: the one least far over wins (330/300 vs 200/150).
+    gMatchModifiers := {health:280,healthKnown:true,physical:150,magical:150,regen:0}
+    AssertLearning(ChooseBestCard([resistMix,normalHealth])=2,"Over-cap comparison did not take the card least past its cap")
+    AssertLearning(ChooseBestCard([lossHealth,resistMix])=2,"Health +200 (480/300) beat resistance at 200/150")
+    ; Over-cap Health/resistance still beat regen past 2%; Shield/Explosive Death beat everything red.
+    AssertLearning(ChooseBestCard([lossRegen,lossHealth])=2,"Over-cap regen beat over-cap Health")
+    AssertLearning(ChooseBestCard([lossHealth,CardPolicy("+3 Enemy Shield",false,"debuff")])=2,"Shield lost to Health past its cap")
+    ; Regen: any amount while the total stays within 2%, never past it.
+    halfRegen := CardPolicy("+0.5% Enemy Regen",false,"debuff"),oneRegen := CardPolicy("+1% Enemy Regen",false,"debuff")
+    gMatchModifiers := {health:0,healthKnown:true,physical:0,magical:0,regen:1.5}
+    AssertLearning(ChooseBestCard([speed,halfRegen])=2 && DebuffOutlook(halfRegen).group=5,"0.5 regen reaching exactly 2% was refused")
+    AssertLearning(DebuffOutlook(oneRegen).group=7,"Regen past 2% stayed within its cap")
+    gMatchModifiers := {health:0,healthKnown:true,physical:0,magical:0,regen:1}
+    AssertLearning(DebuffOutlook(oneRegen).group=5,"1% regen within the 2% total was refused")
+    ; Unreadable amounts assume the worst case.
+    AssertLearning(DebuffOutlook(CardPolicy("Enemy Health",false,"debuff")).group=6,"Unread Health amount was treated as safe")
+    AssertLearning(DebuffOutlook(CardPolicy("Enemy Regen",false,"debuff")).group=7,"Unread regen amount was treated as safe")
+    ; Existing resistance rules still apply between resistance cards.
+    gMatchModifiers := {health:250,healthKnown:true,physical:200,magical:50,regen:0}
+    AssertLearning(ChooseBestCard([CardPolicy("150% physical resist",false,"debuff"),resistMix])=2,"Shared resistance lost to 150 sole physical when both are past the cap")
+    AssertLearning(ChooseBestCard([resistMix,CardPolicy("100% magical resist",false,"debuff")])=2,"Shared resistance pushed physical past its cap while 100 magical stayed within it")
+    AssertLearning(ChooseBestCard([CardPolicy("100% physical resist",false,"debuff"),CardPolicy("100% magical resist",false,"debuff")])=2,"Resistance within its cap lost to resistance past it")
     gResistancePreference := "magic"
     AssertLearning(ChooseBestCard([resistMix,CardPolicy("150% physical resist",false,"debuff")])=2,"Magic-team preference failed to avoid magical resistance")
     gResistancePreference := "physical"
@@ -350,6 +379,13 @@
     ResetMatchCardContext()
     modifiers := ParseMatchModifiers([{text:"Enemy Health: +100.0%"},{text:"Physical Resistance: +200"},{text:"Magic Resistance: +50"}])
     AssertLearning(modifiers.healthKnown && modifiers.health=100 && modifiers.physical=200 && modifiers.magical=50,"Screenshot right-panel values misread: health=" modifiers.health " known=" modifiers.healthKnown " physical=" modifiers.physical " magic=" modifiers.magical)
+    ; End-screen panel from the reported loss, plus a regen row.
+    modifiers := ParseMatchModifiers([{text:"Enemy Speed: -25.0%"},{text:"Enemy Health: +430.0%"},{text:"Enemy Shields: +3"},
+        {text:"Physical Resistance: +100"},{text:"Magic Resistance: +100"},{text:"Enemy Regen: +0.5%"}])
+    AssertLearning(modifiers.health=430 && modifiers.physical=100 && modifiers.magical=100 && modifiers.regenKnown && modifiers.regen=0.5,"Level Modifiers totals misread")
+    ; Card wording ("+50% Enemy Health") leaking into the panel crop is not a total.
+    modifiers := ParseMatchModifiers([{text:"+50% Enemy Health"},{text:"+75 Enemy Magic Resist"},{text:"+0.5% Enemy Regen"}])
+    AssertLearning(!modifiers.healthKnown && !modifiers.magicalKnown && !modifiers.regenKnown,"Card text was read as a Level Modifiers total")
     if FileExist(A_ScriptDir "\cache\provided-modifiers-upscaled.tsv") {
         actual := ParseMatchModifiers(ParseOcrRows(FileRead(A_ScriptDir "\cache\provided-modifiers-upscaled.tsv","UTF-8"),0,0))
         AssertLearning(actual.healthKnown && actual.health=100 && actual.physical=200 && actual.magical=50,"Actual attached screenshot OCR: health=" actual.health " known=" actual.healthKnown " physical=" actual.physical " magical=" actual.magical)
@@ -393,7 +429,7 @@
         RememberCard(bits,card,"test")
         gCardMemory.Clear()
         reloaded := ReadCardMemory(bits)
-        AssertLearning(reloaded && reloaded.kind="debuff" && reloaded.rank=7 && reloaded.amount=30,"Card did not survive a cold-cache reload")
+        AssertLearning(reloaded && reloaded.kind="debuff" && reloaded.rank=CardRank("debuff","physical and magical resist") && reloaded.amount=30,"Card did not survive a cold-cache reload")
         count += 1
         AssertLearning(reloaded.resistance.known && reloaded.resistance.total=60,"Resistance total did not survive a cold-cache reload")
         resistBits := "11110101011001011000101111001010"

@@ -8,7 +8,7 @@ global gMapKey := ""
 global gLearnButton, gTeachCard, gTeachKind, gTeachStat
 global gOcrPid := 0
 global gLastOcrRows := [], gLastOcrRect := "", gLastOcrTime := 0
-global gCardRetryAt := 0, gCardUnread := 0, gCardSelection := 0
+global gCardRetryAt := 0, gCardUnread := 0, gCardSelection := 0, gCardModifiersRead := false
 global gCardBoxes := 0
 global gCardHandling := false,gCardAction := "",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0
 
@@ -659,9 +659,9 @@ CardRank(kind, stat) {
         return 98
     if kind="buff" && stat="boss damage"
         return 100
-    ; A shared physical+magical resist debuff ranks above any sole physical or
-    ; sole magical resist debuff, whatever the amounts.
-    priorities := kind="buff"?["attack","cooldown","range"]:["shield","explosive death","health","0.5 regen","physical and magical resist","physical resist","magical resist","speed"]
+    ; Base debuff order. ChooseBestCard re-ranks red cards by their projected
+    ; totals against the caps (DebuffOutlook); this order is only the label.
+    priorities := kind="buff"?["attack","cooldown","range"]:["shield","explosive death","health","physical and magical resist","physical resist","magical resist","0.5 regen","speed"]
     for index,name in priorities
         if stat=name
             return index
@@ -693,7 +693,6 @@ CardIsSpeed(card) {
 }
 
 CardPreferenceScore(card) {
-    global gMatchModifiers
     if card.kind="buff" {
         tier := card.HasProp("tier")?Max(1,Min(10,card.tier)):1
         tie := Min(9,card.amount/100)
@@ -714,12 +713,79 @@ CardPreferenceScore(card) {
         ; Any other green card, readable (e.g. -Enemy Speed) or unreadable.
         return 200000000
     }
-    if card.stat="health" && gMatchModifiers.healthKnown && gMatchModifiers.health>=250
-        return 60+Min(9,card.amount/100)
-    ; All three resistance types share one priority group below 0.5 regen.
-    if CardIsResistance(card)
-        return 50
-    return CardRank(card.kind,card.stat)*10+Min(9,card.amount/100)
+    ; Red cards are compared with DebuffBetter; this is only a coarse score.
+    return DebuffOutlook(card).group*10+Min(9,card.amount/100)
+}
+
+CardIsRegen(card) => card.stat="regen" || card.stat="0.5 regen"
+
+; How hard a red card makes the match, judged on the total AFTER taking it.
+; Groups, easiest first:
+;   1 Shield   2 Explosive Death   (no limit)
+;   3 Health that stays <= CARD_HEALTH_CAP
+;   4 Resistance where every type it adds stays <= CARD_RESIST_CAP
+;   5 Regen that stays <= CARD_REGEN_CAP
+;   6 Health or resistance past its cap: least far past (ratio) wins
+;   7 Regen past its cap   8 any other readable red effect
+; Unreadable red cards and positive Speed come after all of these.
+DebuffOutlook(card) {
+    global CARD_HEALTH_CAP,CARD_RESIST_CAP,CARD_REGEN_CAP,CARD_UNKNOWN_HEALTH,CARD_UNKNOWN_RESIST
+    amount := card.HasProp("amountKnown") && card.amountKnown?card.amount:-1
+    if card.stat="shield"
+        return {group:1,ratio:0,detail:"shield (no limit)"}
+    if card.stat="explosive death"
+        return {group:2,ratio:0,detail:"explosive death (no limit)"}
+    if card.stat="health" {
+        now := MatchModifier("health"),after := now+(amount>=0?amount:CARD_UNKNOWN_HEALTH)
+        within := amount>=0 && after<=CARD_HEALTH_CAP
+        return {group:within?3:6,ratio:after/CARD_HEALTH_CAP,
+            detail:"health " now "% -> " after "%" (amount<0?" (amount unread)":"") " | cap " CARD_HEALTH_CAP "%" (within?"":" EXCEEDED")}
+    }
+    if CardIsResistance(card) {
+        effects := card.HasProp("resistance")?card.resistance:{physical:0,magical:0,physicalRead:false,magicalRead:false}
+        ratio := 0,detail := "",within := true
+        for name in ["physical","magical"] {
+            read := effects.%(name "Read")%
+            if !(card.stat="physical and magical resist" || card.stat=name " resist" || (read && effects.%name%>0))
+                continue
+            now := MatchModifier(name),after := now+(read?Max(0,effects.%name%):CARD_UNKNOWN_RESIST)
+            within := within && read && after<=CARD_RESIST_CAP
+            ratio := Max(ratio,after/CARD_RESIST_CAP)
+            detail .= (detail=""?"":", ") name " " now " -> " after (read?"":" (amount unread)")
+        }
+        return {group:within?4:6,ratio:ratio,detail:detail " | cap " CARD_RESIST_CAP (within?"":" EXCEEDED")}
+    }
+    if CardIsRegen(card) {
+        if amount<0 && card.stat="0.5 regen"
+            amount := 0.5
+        now := MatchModifier("regen"),after := now+Max(0,amount)
+        within := amount>=0 && after<=CARD_REGEN_CAP
+        return {group:within?5:7,ratio:after/CARD_REGEN_CAP,
+            detail:"regen " now "% -> " (amount>=0?after "%":"? (amount unread)") " | cap " CARD_REGEN_CAP "%" (within?"":" EXCEEDED")}
+    }
+    return {group:8,ratio:0,detail:"other red effect"}
+}
+
+; True when red card a is an easier pick than red card b.
+DebuffBetter(a,b) {
+    oa := DebuffOutlook(a),ob := DebuffOutlook(b)
+    if oa.group!=ob.group
+        return oa.group<ob.group
+    ; Two resistance cards keep the shared-first rule and team preference.
+    if CardIsResistance(a) && CardIsResistance(b)
+        return ResistancePreferred(a,b)
+    ; Least far past its own cap (or the smaller total); Health wins a tie.
+    if oa.ratio!=ob.ratio
+        return oa.ratio<ob.ratio
+    if a.stat!=b.stat
+        return a.stat="health"
+    return a.amount<b.amount
+}
+
+CardBetter(a,b) {
+    if a.kind="debuff" && b.kind="debuff"
+        return DebuffBetter(a,b)
+    return CardPreferenceScore(a)<CardPreferenceScore(b)
 }
 
 ChooseBestCard(cards) {
@@ -743,7 +809,7 @@ ChooseBestCard(cards) {
             return 2
     }
     cards := views
-    best := 0,bestScore := 1.0e30,hasBuff := false,hasNonSpeed := false
+    best := 0,hasBuff := false,hasNonSpeed := false
     ordinaryDebuffs := 0,unknown := false
     for card in cards
         if !CardIsSpeed(card) && (observedGreen.Length?CardHasGreenEffect(card):card.kind="buff")
@@ -773,10 +839,8 @@ ChooseBestCard(cards) {
         bonus := card.HasProp("secretPortal") && card.secretPortal
         if !hasBuff && ordinaryDebuffs>=2 && bonus
             continue
-        score := CardPreferenceScore(card)
-        if score<bestScore || (score=bestScore && best && card.kind="debuff"
-            && CardIsResistance(card) && CardIsResistance(cards[best]) && ResistancePreferred(card,cards[best]))
-            bestScore := score,best := index
+        if !best || CardBetter(card,cards[best])
+            best := index
     }
     return unknown && !hasBuff?0:best
 }
@@ -806,17 +870,23 @@ FallbackCardChoice(cards) {
     best := ChooseBestCard(cards)
     if best
         return best
-    ; Never guess among unreadable red/unknown cards: that can buy Speed.
-    for index,card in cards {
-        card := CardSelectionView(card)
+    views := []
+    for card in cards
+        views.Push(CardSelectionView(card))
+    for index,card in views
         if !CardIsSpeed(card) && card.kind="buff"
             return index
-    }
-    for index,card in cards {
-        card := CardSelectionView(card)
-        if !CardIsSpeed(card) && card.kind="debuff" && card.stat!="unknown"
+    ; Readable red cards: the easiest by the projected-total rules.
+    for index,card in views
+        if !CardIsSpeed(card) && card.kind="debuff" && card.stat!="unknown" && (!best || DebuffBetter(card,views[best]))
+            best := index
+    if best
+        return best
+    ; Unreadable cards rank only above Speed. Leaving the vote to its timer
+    ; would pick at random, Speed included. Only an all-Speed offer waits.
+    for index,card in views
+        if !CardIsSpeed(card)
             return index
-    }
     return 0
 }
 

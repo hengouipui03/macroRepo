@@ -146,14 +146,24 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 1. **GREEN FIRST, above everything.** One green card is chosen outright. If two or three are green, only the green cards are compared. A red card never beats a green one, whatever its text says. Green Speed reductions are allowed.
 2. **Buffs (green):** Double Attack → Attack/Cooldown/Range by **tier first** (Tier II of any of them beats Tier I of any; within a tier Attack → Cooldown → Range) → Random Blessings → any other green card (readable, e.g. green −Enemy Speed, or unreadable) → Yen → Boss Damage. A bigger amount breaks exact ties.
    - **Three unreadable cards of one colour** (all green or all red words): pick the **middle** card.
-3. **Debuffs (red, only when nothing is green):** Shield → Explosive Death → Health → 0.5 Regen → **resistance group** → (positive enemy Speed is forbidden).
-   - With 250%+ enemy Health already on the match, more Health drops behind the resistance group.
-   - **Resistance group, Balanced team (the current setting):**
+3. **Debuffs (red, only when nothing is green), judged on the total AFTER taking the card** (`DebuffOutlook`, `DebuffBetter`). The totals come from the Level Modifiers panel, read once per card screen while the cards are up (`ReadModifiersForCards`).
+   1. Shield → Explosive Death (no limit).
+   2. Health, if current + card ≤ **300%**.
+   3. Resistance, if every type the card adds stays ≤ **150**.
+   4. Regen (any amount), if the total stays ≤ **2%**.
+   5. Health or resistance past its cap: the card that ends **least far past its own cap** (projected ÷ cap) wins; Health wins an exact tie.
+   6. Regen past 2%, then any other readable red effect.
+   7. An unreadable red card, but only after the OCR retries (fallback).
+   8. Positive enemy Speed is never clicked. An all-Speed offer is left to the vote timer.
+   - An unreadable amount assumes the worst case: Health +200%, resistance +100 per type, regen past the cap.
+   - The ceilings are `CARD_HEALTH_CAP`, `CARD_RESIST_CAP` and `CARD_REGEN_CAP` at the top of `CardContext.ahk`.
+   - Example (the reported loss): 230% Health, 100/100 resist; offer Health +200 / +50+50 resist / Regen +5. Health would reach 430% (past 300), resist 150/150 (within), regen 5% (past 2) → **resist**.
+   - **Resistance cards compared with each other (same step above), Balanced team (the current setting):**
      **a shared physical + magical debuff (e.g. +50 Physical / +50 Magic) always beats a sole one (+75 or +100 Physical, +75 Magic, ...)**, whatever the amounts and even if one of its numbers was unreadable.
      Between two shared cards, or two sole cards: smaller total, then smaller single increase, then the lower projected match resistance.
    - Magic team / Physical team checkboxes (Cards tab): if one is ticked, it overrides the shared-first rule and the card that adds less of the stat that team must avoid wins.
 4. **Secret portal/drop bonus:** with two ordinary debuffs available, the ordinary ones are preferred.
-5. **Never chosen:** positive (red) enemy Speed. An all-Speed offer is left unclicked. Unclear red/unknown text is re-read up to 3 times (1.5 s apart) before a safe fallback is taken: any green card first, then a readable non-Speed debuff, otherwise wait.
+5. **Never chosen:** positive (red) enemy Speed. An all-Speed offer is left unclicked (the vote timer picks at random anyway). Unclear red/unknown text is re-read up to 3 times (1.5 s apart) before the fallback: any green card first, then the easiest readable non-Speed debuff, then an unreadable non-Speed card.
 
 ### Reported screenshot
 "+ Enemy Health I" (red) / "+ Range I" (green) / "+ Resistant Enemies I" (red, +50 physical and +50 magic) → **Range** by the pixel check, with no OCR needed. If Range were absent: Health, then the shared resist card ahead of any sole resist card.
@@ -164,7 +174,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **End screen:** the green Next button triggers end handling. The macro clicks Next, clicks game space 5 times to dismiss rewards, waits for the paired Return to lobby / Replay buttons, and clicks **Replay** only (never Return to lobby). It then waits up to 3 minutes for the next Vote Start. Placement, upgrades and idle clicks pause meanwhile.
 - **Discord:** once per match, WIN/LOSS plus a screenshot. Next before Replay means defeat.
 - **Idle keep-alive:** when every target is complete, the macro clicks the manager-safe click-away point every 5 minutes. It skips the click while cards, a unit panel or an end screen are up.
-- **Match modifiers:** the right panel (Enemy Health %, Physical/Magic resistance) is read every 8 s as context for card choice only. It is never clicked.
+- **Match modifiers:** the right panel (Enemy Health %, Physical/Magic resistance, Regen %) is read during placement and once per card screen (the unit manager covers it otherwise). Only label-first rows ("Enemy Health: +430.0%") count, so card text can never be read as a total. Picked cards are added in between. It is never clicked.
 
 ---
 
@@ -271,7 +281,8 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `ReadResistanceAmounts`, `ParseResistanceEffects`, `CombineResistanceLines`, `CardIsResistance` | Physical/magic amounts. |
 | `ResistanceIsShared` | **New:** a card adds both physical and magic resist. |
 | `ResistancePreferred` | Resistance tie-break: **shared first (Balanced)**, then team preference / total / peak / match totals. |
-| `CardPolicy`, `CardPolicyFromLines`, `CardRank` | Card stat, kind, amount, tier, rank. Debuff rank order: shield, explosive death, health, 0.5 regen, **physical+magical**, physical, magical, speed. |
+| `CardPolicy`, `CardPolicyFromLines`, `CardRank` | Card stat, kind, amount, tier, rank. Base debuff label order: shield, explosive death, health, **physical+magical**, physical, magical, 0.5 regen, speed (red cards are actually ranked by `DebuffOutlook`). |
+| `CardIsRegen`, `DebuffOutlook`, `DebuffBetter`, `CardBetter` | Red-card ranking on projected totals against the Health 300% / resist 150 / regen 2% caps (§6). |
 | `CardHasGreenEffect`, `CardSelectionView`, `CardIsSpeed`, `CardPreferenceScore`, `ChooseBestCard`, `PreferVerifiedGreenChoice`, `FallbackCardChoice` | Ranking and safety (§6). |
 | `WhiteBits`, `HashText`, `CardRectangle`, `CardVisual`, `ReadCardMemory`, `RememberCard`, `TeachCurrentCard`, `BitOverlap` | Visual card memory (fallback only). |
 | `PlacementContextMatches`, `PreparePlacementMemory`, `PlacementSection`, `ReadPlacementRecords`, `WritePlacementRecords`, `CandidateOccupied`, `KnownPlacementCandidates`, `RememberPlacement` | Placement memory per map/camera profile. |
@@ -304,7 +315,7 @@ Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `
 ## 9. Tests
 - `CheckpointManagerTests.py`: manager selection through 20/19/1-unit layouts. Exactly **one F for the whole match**, **no F before placement**, one F to reopen a closed manager, and the misread guard (2 presses at most).
 - `UpgradeRegressionTests.py`: finite targets and input guards. A missed selection is retried at the same priority before deferral, and no upgrades/F happen before the build is complete.
-- `LearningTests.ahk` (`--self-test`): card policy. Shared resist beats sole 100/75/25, the reported screenshot picks green Range, and pixel-only green is found in each position.
+- `LearningTests.ahk` (`--self-test`): card policy. Shared resist beats sole 100/75/25, the reported screenshot picks green Range, pixel-only green is found in each position, the reported loss (230% Health, Health +200 offered) now takes resist, the 300/150/2% caps, and Level Modifiers parsing that ignores card wording.
 - `CardPriorityTests.py`, `UnitManagerVisionTests.py`, and the existing placement/vision tests.
 - The AHK tests need `C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe`.
 

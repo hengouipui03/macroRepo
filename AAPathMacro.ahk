@@ -1033,8 +1033,8 @@ ClearCardChoiceAction() {
 }
 
 ResetCardSelection() {
-    global gCardSelection,gCardRetryAt,gCardUnread,gCardBoxes
-    gCardSelection := 0,gCardRetryAt := 0,gCardUnread := 0,gCardBoxes := 0
+    global gCardSelection,gCardRetryAt,gCardUnread,gCardBoxes,gCardModifiersRead
+    gCardSelection := 0,gCardRetryAt := 0,gCardUnread := 0,gCardBoxes := 0,gCardModifiersRead := false
 }
 
 WaitForCardChoiceClosed() {
@@ -1101,7 +1101,7 @@ ConfirmLockedCardSelection(cards := 0) {
 }
 
 TryChooseCard() {
-    global gCardRetryAt, gCardUnread, gCardSelection, gRunning, REF_W, REF_H
+    global gCardRetryAt, gCardUnread, gCardSelection, gRunning, REF_W, REF_H, gCardModifiersRead
     if !HasCardChoice()
         return false
     if gCardSelection
@@ -1126,6 +1126,12 @@ TryChooseCard() {
     geometry := WindowGeometry()
     if !geometry
         return false
+    ; Red cards are judged on the real match totals: the Level Modifiers panel
+    ; is uncovered while the cards are up, so read it once per card screen.
+    if !gCardModifiersRead {
+        gCardModifiersRead := true
+        ReadModifiersForCards()
+    }
     words := ReadOcrRows(125,175,690,445,true)
     cards := ReadWordColourCards(words,frame,geometry)
     for index,card in cards
@@ -1133,8 +1139,8 @@ TryChooseCard() {
             RememberCard(CardVisual(index),card)
     best := ChooseBestCard(cards)
     if !best {
-        ; Retry unclear wording before taking a green-word buff or a readable
-        ; safe debuff. Never guess among red/unknown cards or positive Speed.
+        ; Retry unclear wording first. The fallback then takes a green card, the
+        ; easiest readable red card, or an unreadable card; never positive Speed.
         gCardUnread += 1
         if gCardUnread < 3 {
             Log("Card text unclear; retrying OCR (" gCardUnread "/3).")
@@ -1143,7 +1149,7 @@ TryChooseCard() {
         }
         best := FallbackCardChoice(cards)
         if !best {
-            Log("No readable safe card. Positive Speed is forbidden; waiting for clearer effect text.")
+            Log("Only positive Speed is offered; not clicking (the vote timer decides).")
             gCardRetryAt := A_TickCount+1500
             return true
         }
