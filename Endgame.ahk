@@ -158,7 +158,7 @@ DismissEndRewards() {
 }
 
 TryEndState() {
-    global gRunning,gEndHandling,gAwaitingReplayMap,gEndResult,gEndNextClickAt,gEndRewardsDone,gEndRewardSweepAt
+    global gRunning,gEndHandling,gAwaitingReplayMap,gEndResult,gEndNextClickAt,gEndRewardsDone,gEndRewardSweepAt,gMatchReported
     if gAwaitingReplayMap
         return true
     screen := ReadEndScreen()
@@ -192,6 +192,16 @@ TryEndState() {
         } else if screen.stage="replay" {
             if !gEndRewardsDone && !DismissEndRewards()
                 return false
+            ; The Next screen may have been missed, or its result unreadable:
+            ; report before leaving. Next seen (result recorded) = defeat,
+            ; Replay without Next = win, unless OCR reads the outcome here.
+            if !gMatchReported {
+                outcome := gEndResult="victory" || gEndResult="defeat"?gEndResult:ReadEndOutcome()
+                if outcome="unknown"
+                    outcome := gEndResult=""?"victory":"defeat"
+                Log("Result: " StrUpper(outcome) " (reported at Replay).")
+                ReportMatchResult(outcome="victory")
+            }
             if ClickEndGameButton(screen) {
                 gAwaitingReplayMap := true
                 Log("Endgame: Replay selected once. Waiting for the next Vote Start; no lobby clicks.")

@@ -178,7 +178,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 
 ## 7. End of match, idle, reporting
 - **End screen:** the green Next button triggers end handling. The macro clicks Next, clicks game space 5 times to dismiss rewards, waits for the paired Return to lobby / Replay buttons, and clicks **Replay** only (never Return to lobby). It then waits up to 3 minutes for the next Vote Start. Placement, upgrades and idle clicks pause meanwhile.
-- **Discord:** once per match, WIN/LOSS plus a screenshot. Next before Replay means defeat.
+- **Discord:** once per match, WIN/LOSS plus a screenshot: on the Next screen when its result is read, otherwise just before Replay is clicked (Next seen = defeat, Replay without Next = win, unless OCR reads the result there). The webhook is in `settings.ini`, which is not synced by git: save it on each device.
 - **Idle keep-alive:** when every target is complete, the macro clicks the manager-safe click-away point every 5 minutes. It skips the click while cards, a unit panel or an end screen are up.
 - **Match modifiers:** the right panel (Enemy Health %, Physical/Magic resistance, Regen %) is read during placement and once per card screen (the unit manager covers it otherwise). Only label-first rows ("Enemy Health: +430.0%") count, so card text can never be read as a total. Picked cards are added in between. It is never clicked.
 

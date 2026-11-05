@@ -279,6 +279,18 @@ status = mv.send_discord("https://discord.com/api/webhooks/1/abc", "Result: WIN"
 request = sent["request"]
 body = request.data
 check(status == 200 and request.get_method() == "POST", "webhook not posted")
+# The reply to AHK must stay "ok": a "status=200" field once overwrote it, so
+# every successful post was logged as failed.
+original_send = mv.send_discord
+mv.send_discord = lambda url, text, png: 200
+try:
+    poster = mv.World(mv.Vision())
+    poster.static = shot
+    line = mv.format_reply(mv.discord(poster, 0, 0, 10, 10, "https://discord.com/api/webhooks/1/abc", "Result:", "WIN"))
+finally:
+    mv.send_discord = original_send
+fields = dict(part.split("=", 1) for part in line.split("\t")[1:])
+check(line.startswith("ok\t") and "status" not in fields and fields.get("http") == "200", "webhook reply read as a failure: " + line)
 check(b'name="payload_json"' in body and b'"content": "Result: WIN"' in body, "webhook text missing")
 check(b'filename="result.png"' in body and b"\x89PNG" in body, "webhook screenshot missing")
 boundary = request.get_header("Content-type").split("boundary=")[1]

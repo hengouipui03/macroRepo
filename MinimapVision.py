@@ -1346,7 +1346,9 @@ def discord(world, cx, cy, cw, ch, url, *words):
     if not ok:
         raise ValueError("screenshot could not be encoded")
     text = "%s  (%s)" % (" ".join(words), datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
-    return {"status": send_discord(url, text, png.tobytes())}
+    # Not "status": that key is the reply's ok/fail field, and "status=200"
+    # overwrote it, so AHK logged every successful post as a failure.
+    return {"http": send_discord(url, text, png.tobytes())}
 
 
 def format_reply(result):

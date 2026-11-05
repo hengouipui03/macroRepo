@@ -48,14 +48,17 @@ PostToWebhook(url,text) {
         return false
     }
     reply := VisionRequest("discord " cx " " cy " " cw " " ch " " url " " text)
-    if !VisionOk(reply)
+    if !VisionOk(reply) {
+        Log("Discord: post failed" (reply && reply.Has("reason")?" (" reply["reason"] ")":"") ".")
         return false
+    }
     Log('Discord: posted "' text '" with a screenshot.')
     return true
 }
 
-; Once per match: a defeat shows Next before Replay, so Replay without that
-; Next is treated as a win. The screenshot shows the actual end screen.
+; Once per match, from the Next screen or, at the latest, just before Replay is
+; clicked. A defeat shows Next before Replay, so Replay without that Next is
+; treated as a win. The screenshot shows the actual end screen.
 ReportMatchResult(won) {
     global gMatchReported,SETTINGS_FILE
     if gMatchReported
