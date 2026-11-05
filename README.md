@@ -226,7 +226,7 @@ positions and priority rules as other placements.
 
 Upgrades are read and clicked on the unit's tile in the F manager; the side
 panel's UPG heading and R are no longer used. Lit bar segments under the tile
-(green and yellow count the same; white-outlined segments are not done) are the
+(bright green or yellow; a dark body, with or without a white outline, is not done) are the
 upgrade level, and a grey Max button is MAX. Each click on the tile's Upg button
 must add a lit segment before the next click: a finite target waits 2 s for the
 new segment, so a slow bar cannot overshoot it, and MAX waits 0.6 s. Clicks that
@@ -417,7 +417,8 @@ F opens Unit Overview. The newest unit is top-left and the list reads left to
 right, top to bottom, so #1 is in the bottom row. With an even unit count the
 bottom row is #1 right, #2 left; with an odd count #1 is ALONE at the bottom
 left, and each row above holds the next even purchase on the right and odd on
-the left. The macro reads which case applies from the bottom row itself.
+the left. Odd or even comes from the recorded unit count, and the bottom row on
+screen must agree before any tile is used.
 Before selecting a recorded unit, the macro scrolls downward to the list bottom and
 confirms it is stationary. Upward scrolling uses one wheel notch at a time and
 checks the new row positions; reaching the top without the unit is reported as

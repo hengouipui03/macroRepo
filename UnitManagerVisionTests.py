@@ -41,7 +41,9 @@ def tiles(image):
     return state,[e.split(',') for e in state['entries'].split(';')]
 state,cells=tiles(reference)
 assert state['lastcount']==2,state  # 8 units: #1 bottom-right, #2 bottom-left
-assert [c[4:7] for c in cells[:6]]==[['7','7','0']]+[['8','8','0']]*5,cells
+# The supplied screenshot is a fresh build: every segment has the dark
+# not-done body (V about 80), exactly like a real level-0 manager.
+assert [c[4:7] for c in cells[:6]]==[['0','7','0']]+[['0','8','0']]*5,cells
 assert [c[4] for c in cells[6:]]==['-1','-1'],'clipped bottom-row bars must stay unread'
 for c in cells[:6]:
     ux,uy=float(c[7]),float(c[8])
@@ -52,25 +54,28 @@ def cluster(a,b):
 sig=[c[9] for c in cells[:6]]
 assert max(cluster(sig[1],sig[2]),cluster(sig[4],sig[5]))*3<min(cluster(sig[1],sig[4]),cluster(sig[0],sig[4])),sig
 segments=[(1167,1189),(1191,1212),(1214,1236),(1238,1260),(1262,1284),(1286,1307),(1309,1331),(1333,1355)]
-def empty(image,runs):
+def light(image,runs):
+    # Done segments: the same body hue, bright (V about 230 in the game).
+    hsv=cv2.cvtColor(image,cv2.COLOR_BGR2HSV)
     for a,b in runs:
-        image[285:294,a:b]=(20,20,20)
-        image[285:287,a:b]=image[292:294,a:b]=(230,230,230)
-        image[285:294,a:a+2]=image[285:294,b-2:b]=(230,230,230)
-partial=reference.copy();empty(partial,segments[5:])
+        cell=hsv[285:294,a:b]
+        body=cell[:,:,1]>=100
+        cell[:,:,2][body]=230
+    image[:]=cv2.cvtColor(hsv,cv2.COLOR_HSV2BGR)
+def outline(image,runs):
+    # Affordable next upgrades get a white outline around the dark body.
+    for a,b in runs:
+        image[283:285,a-1:b+1]=image[294:296,a-1:b+1]=(240,240,240)
+        image[283:296,a-1]=image[283:296,b]=(240,240,240)
+partial=reference.copy();light(partial,segments[:5]);outline(partial,segments[5:7])
 for image in [partial,cv2.resize(partial,(1600,1117))]:
-    assert tiles(image)[1][1][4:7]==['5','8','0'],'white-outline segments counted as upgrades'
-none=reference.copy();empty(none,segments)
-assert tiles(none)[1][1][4:7]==['0','8','0']
-bright=reference.copy()
-for i,(a,b) in enumerate(segments[:5]):
-    bright[285:294,a:b]=(40,220,60) if i%2 else (40,210,250)
-empty(bright,segments[5:])
-assert tiles(bright)[1][1][4:7]==['5','8','0'],'green and yellow segments must count the same'
+    assert tiles(image)[1][1][4:7]==['5','8','0'],('dark or outlined segments counted as upgrades',tiles(image)[1][1][4:7])
+full=reference.copy();light(full,segments)
+assert tiles(full)[1][1][4:7]==['8','8','0'],'bright segments were not all counted'
 grey=reference.copy();grey[198:228,1040:1118]=(90,90,90);grey[208:216,1065:1095]=(200,200,200)
 assert tiles(grey)[1][0][6]=='1','grey Max button not recognised'
 odd=reference.copy();odd[600:711,1140:]=20
 state,cells=tiles(odd)
 assert state['lastcount']==1 and cells[-1][0]=='0',('odd unit count: #1 must be the lone bottom-LEFT tile',state)
-print('PASS: tile segments (lit green/yellow vs white outline), grey Max, Upg click point, portrait colours, odd-count bottom row.')
+print('PASS: tile segments (bright = done; dark body, with or without white outline = not done), grey Max, Upg click point, portrait colours, odd-count bottom row.')
 print('PASS: bottom-row portrait click patches remain clear; physical left/right columns; reference/client-crop/resize; disabled buttons and closed-manager rejection.')

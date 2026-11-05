@@ -635,33 +635,33 @@ class World:
     @staticmethod
     def manager_tile(hsv, x, y, bw, bh, pitch, top, bottom):
         """Upgrade segments, MAX button, Upg click point and portrait colours of
-        the manager cell whose sell X is at (x, y). Unreadable bars give -1."""
+        the manager cell whose sell X is at (x, y). Unreadable bars give -1.
+
+        Every segment has a saturated green/yellow body. Done segments are
+        bright (V about 230); not-done segments are dark (V about 80), with or
+        without a white outline. Colour (green vs yellow) means nothing."""
         h,w=hsv.shape[:2]
         hue,sat,val=hsv[:,:,0].astype(np.int16),hsv[:,:,1].astype(np.int16),hsv[:,:,2].astype(np.int16)
-        def lit(ys,xs):
-            # Filled segments: saturated green or yellow; colour has no meaning.
-            return (sat[ys,xs]>=100)&(val[ys,xs]>=55)&(hue[ys,xs]>=15)&(hue[ys,xs]<=85)
         filled=total=-1
-        y0,y1=int(y+bh*3.3),int(y+min(pitch*.97,bh*4.9))
+        # Below the First button, above the next row's sell X.
+        y0,y1=int(y+bh*3.3),min(h,int(y+pitch*.95))
         x0,x1=int(x+bw*.3),min(w,int(x+bw*5.4))
-        if y0>=top and y1<=bottom and x1-x0>bw*3:
-            ys,xs=slice(y0,y1),slice(x0,x1)
-            fill=lit(ys,xs)
-            # Empty segments are a white/grey outline around a dark interior.
-            ink=fill|((sat[ys,xs]<70)&(val[ys,xs]>=150))
-            counts=ink.sum(axis=1)
-            if counts.max()>=(x1-x0)*.3:
-                # The bar is the strongest row plus strong rows within a bar's
-                # height of it (an empty bar is strong only at its outline).
-                peak=int(np.argmax(counts))
-                strong=[i for i in np.nonzero(counts>=counts.max()*.35)[0] if abs(int(i)-peak)<=bh*.6]
-                a,b=min(strong),max(strong)+1
-                if b-a<=bh*.6:
-                    inkf=ink[a:b].mean(axis=0);fillf=fill[a:b].mean(axis=0)
+        if y1>y0 and x1-x0>bw*3:
+            xs=slice(x0,x1)
+            body=(sat[y0:y1,xs]>=100)&(val[y0:y1,xs]>=50)&(hue[y0:y1,xs]>=15)&(hue[y0:y1,xs]<=85)
+            counts=body.sum(axis=1)
+            if counts.max()>=(x1-x0)*.5:
+                # The bar is the contiguous band of rows around the strongest one.
+                peak=int(np.argmax(counts));a=b=peak
+                while a>0 and counts[a-1]>=counts[peak]*.5:a-=1
+                while b<len(counts)-1 and counts[b+1]>=counts[peak]*.5:b+=1
+                if y0+b<bottom and b-a+1<=bh*.6:
+                    band=body[a:b+1];bright=val[y0+a:y0+b+1,xs]
+                    cols=band.mean(axis=0)
                     runs=[];start=None
-                    for i,v in enumerate(list(inkf)+[0]):
-                        if v>.12 and start is None:start=i
-                        elif v<=.12 and start is not None:
+                    for i,v in enumerate(list(cols)+[0]):
+                        if v>.5 and start is None:start=i
+                        elif v<=.5 and start is not None:
                             if i-start>=bw*.15:runs.append((start,i))
                             start=None
                     if runs:
@@ -671,7 +671,8 @@ class World:
                             parts=max(1,int(round((e-s)/width))) if e-s>width*1.6 else 1
                             for k in range(parts):
                                 ps=s+(e-s)*k//parts;pe=s+(e-s)*(k+1)//parts
-                                segments.append(fillf[ps:pe].mean()>=.45)
+                                v=bright[:,ps:pe][band[:,ps:pe]]
+                                segments.append(bool(v.size) and float(np.median(v))>=150)
                         if 1<=len(segments)<=20:
                             total=len(segments);filled=sum(segments)
         # Upg button: green/yellow when upgradable, grey "Max" when maxed.

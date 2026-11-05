@@ -297,9 +297,13 @@ LocateManagedUnit(purchaseId) {
     }
     if !(state := ResetUnitManagerBottom(state))
         return UnitManagerFail(HasCardChoice()?"card":"scroll")
-    bottomCount := state.Has("lastcount")?Integer(state["lastcount"]):0
-    if bottomCount!=1 && bottomCount!=2 {
-        Log("Unit manager bottom row is not fully visible; no tile used.")
+    ; Odd or even comes from the recorded build, not from one screen read.
+    ; The bottom row must agree before any tile is used: if it does not, the
+    ; list is not really at its bottom (or #1's tile was missed), so retry.
+    bottomCount := Mod(gPlacements.Length,2)?1:2
+    seen := state.Has("lastcount")?Integer(state["lastcount"]):0
+    if seen!=bottomCount {
+        Log("Unit manager bottom row shows " seen " tile(s) but " gPlacements.Length " units are recorded; no tile used.")
         return UnitManagerFail("scroll")
     }
     cell := ManagedUnitCell(purchaseId,bottomCount)

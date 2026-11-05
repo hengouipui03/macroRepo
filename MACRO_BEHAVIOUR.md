@@ -74,7 +74,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 2. `EnsureUnitManagerOpen()`. If it fails, the reason is `manager`.
 3. If the last tile found was this purchase and the list has not moved since (no scroll, no F), reuse it.
 4. Otherwise scroll down until the list bottom stays still for two single-notch checks (`ResetUnitManagerBottom`).
-5. Row/column of #N from the bottom (`ManagedUnitCell`). The game lists the **newest unit top-left**, reading left to right, so #1 is in the bottom row. The bottom row itself tells the macro which case applies:
+5. Row/column of #N from the bottom (`ManagedUnitCell`). The game lists the **newest unit top-left**, reading left to right, so #1 is in the bottom row. Odd or even comes from the recorded unit count; the bottom row on screen must show the matching 1 or 2 tiles, otherwise nothing is clicked and the lookup is retried:
    - even unit count: #1 bottom-right, #2 bottom-left, #3 the row above on the right, and so on;
    - odd unit count: #1 **alone at the bottom-left**, then #2 right / #3 left in the row above, and so on.
 6. Scroll up one notch at a time. If a notch moves a full row or more, it stops instead of guessing. If the list cannot move any further, the reason is `missing` (the manager shows fewer units than recorded).
@@ -82,7 +82,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 
 `SelectManagedUnit` (relocation checks, and upgrades when the game needs the unit selected) closes the previous side panel, finds the tile as above and clicks **only the portrait**, then waits for the side unit panel.
 
-Each tile is read by vision (`unitmanager`): lit bar segments (green and yellow are the same; white-outlined ones are not done), whether the Upg button is the grey **Max** button, the Upg click point, and the portrait's colours.
+Each tile is read by vision (`unitmanager`): bright bar segments are done (green and yellow are the same); a dark body, with or without a white outline, is not done, whether the Upg button is the grey **Max** button, the Upg click point, and the portrait's colours.
 
 ---
 
