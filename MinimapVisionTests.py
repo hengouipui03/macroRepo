@@ -165,6 +165,16 @@ world.static = mv.read_image(os.path.join(HERE, "path-toggle-split-fx.png"))
 toggle = world.toolbar(0, 0, world.static.shape[1], world.static.shape[0])
 x, y = (int(value) for value in toggle["p"].split(","))
 check(toggle["on"] == 0 and abs(x - 1241) < 6 and abs(y - 32) < 6, "P confused with i when FX splits: %s" % toggle)
+# Sand Village: the lit path is pure yellow (hue 28-31), not lime, on yellow
+# sand. It must still be found, and the wall below the player is not path.
+sand = mv.World(mv.Vision())
+sand.static = mv.read_image(os.path.join(HERE, "path-world-sand-village.png"))
+state = sand.world(0, 0, sand.static.shape[1], sand.static.shape[0])
+check(state["on"] == 1 and state["path"] > 20000, "yellow Sand Village path not found: %s" % state)
+check(all(sand.onpath(x, y)["on"] == 1 for x, y in [(735, 457), (490, 375), (960, 620)]), "yellow chevrons not counted as path")
+check(sand.onpath(605, 590)["on"] == 0 and sand.onpath(200, 350)["on"] == 0, "Sand Village wall or sand counted as path")
+check(sand.beside(12)["count"] >= 8, "no path-side spots beside the yellow path")
+
 world.static = shot
 
 state = world.world(0, 0, width, height)

@@ -591,15 +591,23 @@ class World:
         # Exclude HUD locations spatially instead of excluding those path hues.
         lime = (h >= 32) & (h <= 76) & (s >= 90) & (v >= 170)
         arrow = (h >= 84) & (h <= 96) & (s >= 90) & (s <= 160) & (v >= 225)
-        mask = (lime | arrow).astype(np.uint8)
-        height, width = mask.shape
-        mask[: int(height * 0.23)] = 0  # Vote controls and top HUD.
-        mask[int(height * 0.81):] = 0  # Bottom unit bar.
-        mask[int(height * 0.73):, int(width * 0.78):] = 0  # Minimap.
-        mask[:int(height * 0.73), int(width * 0.80):] = 0  # Party/modifier HUD.
+        height, width = h.shape
+        keep = np.ones((height, width), np.uint8)
+        keep[: int(height * 0.23)] = 0  # Vote controls and top HUD.
+        keep[int(height * 0.81):] = 0  # Bottom unit bar.
+        keep[int(height * 0.73):, int(width * 0.78):] = 0  # Minimap.
+        keep[:int(height * 0.73), int(width * 0.80):] = 0  # Party/modifier HUD.
         if self.vision.box is not None and self.vision.static is None:
             left, top, box_w, box_h = self.vision.box
-            mask[max(0, top // 2 - 4):(top + box_h) // 2 + 4, max(0, left // 2 - 4):(left + box_w) // 2 + 4] = 0
+            keep[max(0, top // 2 - 4):(top + box_h) // 2 + 4, max(0, left // 2 - 4):(left + box_w) // 2 + 4] = 0
+        # Sand-tinted maps (Sand Village) light the path pure yellow, hue
+        # 28-31, instead of lime; the sand stays at hue 17-23. Yellow counts
+        # only when it outweighs lime in the play area, so yellow HUD text and
+        # unit effects never add to a lime path on other maps.
+        yellow = (h >= 27) & (h < 32) & (s >= 150) & (v >= 200) & (keep > 0)
+        if np.count_nonzero(yellow) > 2 * np.count_nonzero(lime & (keep > 0)):
+            lime = lime | yellow
+        mask = (lime | arrow).astype(np.uint8) & keep
         # Cyan alone (unit rings, scenery) cannot establish a road. Preserve
         # the visible lime evidence before closing/filling gaps in the band.
         evidence = (lime & (mask > 0)).astype(np.uint8)
