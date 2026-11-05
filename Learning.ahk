@@ -7,8 +7,6 @@ global gPlacementProfile := ""
 global gMapKey := ""
 global gLearnButton, gTeachCard, gTeachKind, gTeachStat
 global gOcrPid := 0
-; The Yen counter above the unit bar (800 x 600 reference coordinates).
-global YEN_REGION := [335,485,470,512]
 global gLastOcrRows := [], gLastOcrRect := "", gLastOcrTime := 0
 global gCardRetryAt := 0, gCardUnread := 0, gCardSelection := 0
 global gCardHandling := false,gCardAction := "",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0
@@ -322,82 +320,6 @@ ReadOcrRows(rx1, ry1, rx2, ry2,words := false,scale := 2) {
     } finally {
         gOcrPid := 0
         try FileDelete imageFile
-        try FileDelete textFile
-    }
-    return rows
-}
-
-CaptureYenImage() {
-    global YEN_REGION
-    frame := RefPixels(YEN_REGION*)
-    if !frame.valid
-        return ""
-    DirCreate A_ScriptDir "\cache"
-    path := A_ScriptDir "\cache\yen-" DllCall("GetCurrentProcessId") "-" A_TickCount "-" Random(1000,9999) ".bmp"
-    return SaveFrameBmp(frame,path)?path:""
-}
-
-DiscardYenEvidence(point) {
-    for key in ["yenBefore","yenAfter"] {
-        if point.HasProp(key) && point.%key%!="" {
-            try FileDelete point.%key%
-            point.%key% := ""
-        }
-    }
-}
-
-; Yen in a saved counter image, or -1. Two OCR scales must agree, so a
-; dropped or invented digit cannot pass as a reading. The image is deleted.
-ReadYenImage(path) {
-    if path="" || !FileExist(path)
-        return -1
-    try {
-        first := YenFromRows(OcrImageRows(path,2))
-        second := first<0?-1:YenFromRows(OcrImageRows(path,3))
-    } finally {
-        try FileDelete path
-    }
-    return first>=0 && first=second?first:-1
-}
-
-YenFromRows(rows) {
-    best := ""
-    for row in rows {
-        digits := RegExReplace(row.text,"\D")
-        if StrLen(digits)>=2 && StrLen(digits)<=8 && StrLen(digits)>StrLen(best)
-            best := digits
-    }
-    return best=""?-1:Integer(best)
-}
-
-OcrImageRows(imageFile,scale) {
-    global gOcrPid,gRunning
-    textFile := imageFile "." scale ".tsv"
-    q := Chr(34)
-    command := q A_WinDir "\System32\WindowsPowerShell\v1.0\powershell.exe" q " -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " q A_ScriptDir "\OCRBridge.ps1" q " -ImagePath " q imageFile q " -OutputPath " q textFile q " -Scale " scale
-    rows := []
-    try {
-        Run command,,"Hide",&pid
-        gOcrPid := pid
-        deadline := A_TickCount+8000
-        while ProcessExist(pid) && A_TickCount<deadline {
-            if !gRunning {
-                ProcessClose pid
-                return rows
-            }
-            Sleep 30
-        }
-        if ProcessExist(pid) {
-            ProcessClose pid
-            return rows
-        }
-        if FileExist(textFile) {
-            content := FileRead(textFile,"UTF-8")
-            if SubStr(content,1,5)!="ERROR"
-                rows := ParseOcrRows(content,0,0)
-        }
-    } finally {
-        gOcrPid := 0
         try FileDelete textFile
     }
     return rows

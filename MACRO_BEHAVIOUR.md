@@ -111,7 +111,7 @@ Each tile is read by vision (`unitmanager`): lit bar segments (green and yellow 
 - **Where:** first a point beside the lit path, closest to the player. Then it follows the same side of the road. Units sit 12 px outside the road, and only an 8–18 px edge gap is accepted. A second row is allowed behind a confirmed first-row unit, never a third. Every point must be within 180 px of the player.
 - **Hill-only / Hybrid:** Hill-only needs highlighted Hill terrain and never falls back to ground. Hybrid tries Hill, then ground.
 - **Purchase confirmation:** the side unit panel opening after the click confirms the purchase. Before buying, a selection-only click rejects spots that already hold a unit. Failed spots (14 px radius) are skipped for the rest of the game.
-- **Recovery:** a purchase hidden by cards is re-checked with selection-only clicks and never bought twice (`RecoverPendingPlacement`). A failed purchase is counted only when recovery finishes. If the probes find nothing, the Yen counter images taken just before and just after the purchase click decide (`ConfirmPurchaseByYen`): a fall of at least 50 and at most half the balance, read identically at two OCR scales, counts the unit (`CompletePlacement`). This is the case of a card opening right after a purchase.
+- **Recovery:** a purchase hidden by cards is re-checked with selection-only clicks and never bought twice (`RecoverPendingPlacement`).
 - **Relocation:** 5 consecutive failed purchases move the player to the next route checkpoint (25% → 50% → 75%). At checkpoint 3 it keeps trying locally.
   - **Cards while walking:** every movement key is released *before* the card is chosen (`MovementHoldUntil`, `MovementCardPause`), so the player stands still during card selection. Afterwards the walk resumes toward the same checkpoint from the player's actual position, and card time does not count against the walk.
   - **20-second rule:** if relocation walking (card time excluded, added up across retries for the same checkpoint) passes 20 s without arriving, `TeleportBackToSpawn()` clicks the Settings gear (bottom left), then the arrow button on the row OCR confirms as "Teleport back to Spawn", then Settings' red X. It then re-finds the player and walks to the same checkpoint from spawn. "Return to Lobby" (the next row down) is never clicked. At most 2 teleports per checkpoint.
@@ -233,7 +233,7 @@ Each tile is read by vision (`unitmanager`): lit bar segments (green and yellow 
 | `HasUnitPanel`, `UnitPanelRegion`, `UnitPanelColourHits`, `WaitForUnitPanel` | Side unit panel detection (learns its layout per window size). |
 | `ClickAwayFromUnitPanel`, `CloseUnitPanel` | Close the side panel at (497,168). **Never touches F or the manager.** |
 | `PlacementPanelClosedStable`, `CountSlotPlacements` | Helpers. |
-| `FinishPlacement`, `CompletePlacement`, `ConfirmPurchaseByYen`, `TryPlacementCandidate`, `TryPlacementCandidateAction`, `TrySelectUnitAt`, `RecoverPendingPlacement` | Purchase, confirmation (side panel, or Yen drop) and recovery without double buying. |
+| `FinishPlacement`, `TryPlacementCandidate`, `TryPlacementCandidateAction`, `TrySelectUnitAt`, `RecoverPendingPlacement` | Purchase, confirmation and recovery without double buying. |
 | `PlacementStillBesidePath`, `AddPlacementGeometry`, `OppositePlacementPoint`, `PlacementEdgeNormal`, `SamePlacementEdge`, `BlockedPlacementEdge`, `PlacementBlockedEdgeExclusions`, `RegisterPlacementEdgeMiss` | Edge geometry, opposite-side switch after 3 misses. |
 | `TryPlacementPoints`, `MatchSavedPlacementsToPath`, `FindHillPlacementCandidates` | Try lists of points, saved points, Hill spots. |
 | `PlaceUnit`, `PlaceUnitAction` | One copy of one slot (no F). |
@@ -252,8 +252,7 @@ Each tile is read by vision (`unitmanager`): lit bar segments (green and yellow 
 |---|---|
 | `BuildLearningTab`, `MemoryRead`, `MemoryKey`, `WindowGeometry` | Learned-data storage per window size and DPI. |
 | `ButtonSection`, `SaveButtonRecord`, `ReadButtonRecord`, `ForgetButton`, `LearnHoveredButton`, `ButtonLabels`, `ButtonRegion`, `DiscoverButton`, `FindCompactRedControl`, `ClickWindowOnce`, `ClickLearnedButton`, `ConfirmObservedTransition`, `ObserveTextButtons`, `HasSavedRedControl`, `HasSavedColourControl` | Learn and click named buttons (OCR plus F10 teaching). |
-| `SaveFrameBmp`, `ReadOcrRows`, `OcrImageRows`, `ParseOcrRows`, `NormalizeWords` | OCR plumbing. |
-| `CaptureYenImage`, `ReadYenImage`, `YenFromRows`, `DiscardYenEvidence` | Yen counter snapshots around a purchase click, read only when its panel never showed. |
+| `SaveFrameBmp`, `ReadOcrRows`, `ParseOcrRows`, `NormalizeWords` | OCR plumbing. |
 | `HasSettingsPanel`, `SettingsPanelClosed`, `UnitPanelClosed` | Panel checks. |
 | `HasSecretPortalReward`, `StripSecretPortalReward`, `BuffTitleStat`, `BuffTitleTier`, `EnemyStatReduction` | Card text parsing. |
 | `ReadResistanceAmounts`, `ParseResistanceEffects`, `CombineResistanceLines`, `CardIsResistance` | Physical/magic amounts. |

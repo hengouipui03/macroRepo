@@ -13,9 +13,6 @@ BeginPlacementRun() {
     ResetUpgradeSelection()
     ResetPlacementArea()
     SavePlacementRun()
-    ; Leftover Yen evidence from an interrupted match.
-    Loop Files A_ScriptDir "\cache\yen-*.bmp"
-        try FileDelete A_LoopFileFullPath
 }
 
 SavePlacementRun() {
@@ -55,7 +52,7 @@ SaveLayoutPoint(item) {
     IniWrite gMapModel.id,PLACEMENT_LAYOUT_FILE,section,"map_id"
 }
 
-RegisterPlacedUnit(unit,point,how := "unit panel confirmed") {
+RegisterPlacedUnit(unit,point) {
     global gPlacements
     if CandidateOccupied(point.x,point.y) {
         Log("Existing recorded position rejected; slot " unit.slot " count unchanged.")
@@ -67,7 +64,7 @@ RegisterPlacedUnit(unit,point,how := "unit panel confirmed") {
     RememberPlacement(unit,point,true)
     SaveLayoutPoint(item)
     SavePlacementRun()
-    Log("Placed #" item.id " " item.name " at " item.x "," item.y "; priority " item.priority "; " how ".")
+    Log("Placed #" item.id " " item.name " at " item.x "," item.y "; priority " item.priority "; unit panel confirmed.")
     return item
 }
 

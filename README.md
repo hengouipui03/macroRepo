@@ -188,11 +188,7 @@ advance from newly registered placements, with per-slot confirmed/target logs;
 before buying, a selection-only click rejects spots which already open an
 existing model. Each purchase is bound to its slot and next copy number. The side unit panel
 appearing after that purchase confirms placement; placement does not read or
-require UPG 0. Panels obscured by cards never count. When the panel never shows
-(a card opened right after the purchase, or the view moved), the Yen counter
-images taken just before and just after the purchase click are read: a fall of
-at least 50 and at most half the balance, read identically at two OCR scales,
-confirms the purchase. A failed purchase is only counted after recovery finishes.
+require UPG 0. Panels obscured by cards never count.
 After cards close, one shared recovery function reselects the exact pending
 position without buying again, then verifies that purchase before recording it.
 duplicate recorded coordinates and a panel open before the click do not count. Every confirmed placement cancels
@@ -412,7 +408,7 @@ capture to MSS, and recreates MSS once before reporting a capture failure.
 Capture failures never count as five failed purchases or authorize movement.
 
 
-Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model, no panel has ever been seen and the Yen counter did not confirm the purchase. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
+Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model and no panel has ever been seen. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
 
 
 ## Unit manager selection
@@ -442,6 +438,6 @@ portrait click areas hidden by the viewport, and reads segments (lit vs white
 outline), the grey Max button, the Upg click point and portrait colours.
 ActionPacingTests.py covers 150 ms unit actions
 and unchanged 300 ms general controls. PlacementConfirmationTests.py checks
-panel-only and Yen-drop confirmation, placement caps and continued placement at checkpoint 3.
+panel-only confirmation, placement caps and continued placement at checkpoint 3.
 CardPriorityTests.py checks green Speed and unreadable green ahead of Yen/Boss,
 all offer positions, and confirmation retries with fresh effect colours.

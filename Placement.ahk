@@ -373,6 +373,7 @@ CountSlotPlacements(slot) {
 }
 
 FinishPlacement(unit,point) {
+    global gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses
     if !point || CandidateOccupied(point.x,point.y)
         return false
     if HasCardChoice() || !HasUnitPanel()
@@ -383,16 +384,8 @@ FinishPlacement(unit,point) {
         Log("Ignored unit panel without the matching pending slot/copy purchase.")
         return false
     }
-    return CompletePlacement(unit,point,"unit panel confirmed")
-}
-
-; Records a confirmed purchase (side panel, or a Yen drop when a card hid the
-; panel) and resets the placement failure state.
-CompletePlacement(unit,point,how) {
-    global gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses
-    if !RegisterPlacedUnit(unit,point,how)
+    if !RegisterPlacedUnit(unit,point)
         return false
-    DiscardYenEvidence(point)
     ResetPlacementFailureStreak()
     ForgetFailedPlacementSpot(point)
     terrain := PlacementTerrain(point)
@@ -475,33 +468,13 @@ TryPlacementCandidateAction(unit,candidate) {
         return false
     purchase := candidate.Clone()
     purchase.pendingSlot := unit.slot,purchase.pendingCopy := before+1,purchase.pendingTarget := unit.count
-    ; The Yen counter just before and just after the click is kept as images,
-    ; and read only if the side panel never confirms the purchase.
-    purchase.yenBefore := CaptureYenImage()
-    if !PlacementClickRef(candidate.x,candidate.y,true,purchase) {
-        DiscardYenEvidence(purchase)
+    if !PlacementClickRef(candidate.x,candidate.y,true,purchase)
         return false
-    }
     if WaitForUnitPanel(300,false)
         return FinishPlacement(unit,gPendingPlacement)
-    if gPendingPlacement=purchase
-        purchase.yenAfter := CaptureYenImage()
-    ; No failure is counted yet: the panel can be late, or hidden by a card
-    ; that opens right after the purchase. Recovery decides.
+    if gRunning && !HasCardChoice() && !IsEndGameBlocking()
+        RecordFailedPlacement(unit,gPendingPlacement)
     return RecoverPendingPlacement(unit)
-}
-
-ConfirmPurchaseByYen(unit,point) {
-    if !point.HasProp("yenBefore") || !point.HasProp("yenAfter")
-        return false
-    before := ReadYenImage(point.yenBefore),after := ReadYenImage(point.yenAfter)
-    point.yenBefore := "",point.yenAfter := ""
-    ; A misread that drops a digit looks like a huge drop, so only a fall of at
-    ; most half the balance counts; income during the click can only hide one.
-    if before<0 || after<0 || after>=before || before-after<50 || before-after>before/2
-        return false
-    Log(unit.name ": Yen fell " before " -> " after " right after the purchase click; counting it although its unit panel never showed.")
-    return CompletePlacement(unit,point,"Yen drop confirmed")
 }
 
 TrySelectUnitAt(point,timeout := 450,learn := false) {
@@ -542,10 +515,7 @@ RecoverPendingPlacement(unit) {
         Log(unit.name ": purchase panel was seen; reselect this unit to confirm it without another purchase.")
         return false
     }
-    ; Two completed selection-only probes found no model. A card or a camera
-    ; shift can hide a real unit from them, so a Yen drop still counts it.
-    if ConfirmPurchaseByYen(unit,point)
-        return true
+    ; Two completed selection-only probes found no model after the purchase wait.
     gPendingPlacement := 0
     RememberFailedPlacementSpot(point)
     RecordFailedPlacement(unit,point)

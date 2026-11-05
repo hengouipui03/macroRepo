@@ -346,8 +346,6 @@ ClickTileUpgrade(entry,select) {
 ForgetManagerTile(*) => 0
 WindowGeometry() => {x:100,y:200,cx:108,cy:230,w:1296,h:900,cw:800,ch:600,dpi:96}
 ReadOcrRows(*) => []
-CaptureYenImage(*) => ""
-DiscardYenEvidence(*) => 0
 GetClient(&cx,&cy,&cw,&ch) {
     cx := 108,cy := 230,cw := 800,ch := 600
     return true
