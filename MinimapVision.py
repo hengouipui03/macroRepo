@@ -27,7 +27,8 @@ World requests read the whole client (positions in client pixels):
     follow dx dy                     path point ahead of the player in a screen direction
     beside count                     placement points just outside the lit path
     placementline count              adjacent spots along one local path edge
-    unitmanager cx cy cw ch           manager portrait rows and visible entries
+    unitmanager cx cy cw ch           manager rows; entries are column,portrait x,y,row y,
+                                     filled,total segments,MAX,Upg x,y,portrait colours
     hillspots count cx cy cw ch       new green hill highlights nearest the path
     onpath x y                       whether a client point lies on the lit path
     worlddebug <path>                save the world capture with path and points
@@ -610,21 +611,92 @@ class World:
             rows[-1].append(s)
         row_y=[float(np.median([s[1] for s in row])) for row in rows]
         pitch=float(np.median(np.diff(row_y))) if len(row_y)>1 else h*.158
+        hsv=cv2.cvtColor(image,cv2.COLOR_BGR2HSV)
         entries=[]
         for ry,row in zip(row_y,rows):
             for x,y,bwidth,bheight,_ in sorted(row,key=lambda s:s[0]):
                 px=float(x)+bw*1.4;py=float(y)+bh*2.3
                 if py-bh*.6<top or py+bh*.6>bottom:continue
                 column=int(x+bwidth/2>w*.76)
-                entries.append((column,px,py,ry))
+                tile=self.manager_tile(hsv,float(x),float(y),bw,bh,pitch,top,bottom)
+                entries.append((column,px,py,ry)+tile)
         signature="empty"
         if entries:
-            col,px,py,_=entries[0]
+            col,px,py=entries[0][:3]
             patch=image[max(top,int(py-bh*.6)):min(bottom,int(py+bh*.6)),int(px-bw*.2):int(px+bw*.2)]
             if patch.size:signature=str(hash((cv2.resize(patch,(12,12))//32).tobytes()))
+        # The newest unit is top-left and #1 is in the bottom row; with an odd
+        # unit count that bottom row holds one tile, on the LEFT.
+        lastcount=sum(1 for e in entries if abs(e[3]-row_y[-1])<1)
         return {"open":1,"ready":1,"top":top,"bottom":bottom,"pitch":"%.3f"%pitch,
-                "first":"%.3f"%row_y[0],"last":"%.3f"%row_y[-1],"signature":signature,
-                "entries":";".join("%d,%.2f,%.2f,%.2f"%e for e in entries)}
+                "first":"%.3f"%row_y[0],"last":"%.3f"%row_y[-1],"lastcount":lastcount,"signature":signature,
+                "entries":";".join("%d,%.2f,%.2f,%.2f,%d,%d,%d,%.2f,%.2f,%s"%e for e in entries)}
+
+    @staticmethod
+    def manager_tile(hsv, x, y, bw, bh, pitch, top, bottom):
+        """Upgrade segments, MAX button, Upg click point and portrait colours of
+        the manager cell whose sell X is at (x, y). Unreadable bars give -1."""
+        h,w=hsv.shape[:2]
+        hue,sat,val=hsv[:,:,0].astype(np.int16),hsv[:,:,1].astype(np.int16),hsv[:,:,2].astype(np.int16)
+        def lit(ys,xs):
+            # Filled segments: saturated green or yellow; colour has no meaning.
+            return (sat[ys,xs]>=100)&(val[ys,xs]>=55)&(hue[ys,xs]>=15)&(hue[ys,xs]<=85)
+        filled=total=-1
+        y0,y1=int(y+bh*3.3),int(y+min(pitch*.97,bh*4.9))
+        x0,x1=int(x+bw*.3),min(w,int(x+bw*5.4))
+        if y0>=top and y1<=bottom and x1-x0>bw*3:
+            ys,xs=slice(y0,y1),slice(x0,x1)
+            fill=lit(ys,xs)
+            # Empty segments are a white/grey outline around a dark interior.
+            ink=fill|((sat[ys,xs]<70)&(val[ys,xs]>=150))
+            counts=ink.sum(axis=1)
+            if counts.max()>=(x1-x0)*.3:
+                # The bar is the strongest row plus strong rows within a bar's
+                # height of it (an empty bar is strong only at its outline).
+                peak=int(np.argmax(counts))
+                strong=[i for i in np.nonzero(counts>=counts.max()*.35)[0] if abs(int(i)-peak)<=bh*.6]
+                a,b=min(strong),max(strong)+1
+                if b-a<=bh*.6:
+                    inkf=ink[a:b].mean(axis=0);fillf=fill[a:b].mean(axis=0)
+                    runs=[];start=None
+                    for i,v in enumerate(list(inkf)+[0]):
+                        if v>.12 and start is None:start=i
+                        elif v<=.12 and start is not None:
+                            if i-start>=bw*.15:runs.append((start,i))
+                            start=None
+                    if runs:
+                        width=float(np.median([e-s for s,e in runs]))
+                        segments=[]
+                        for s,e in runs:
+                            parts=max(1,int(round((e-s)/width))) if e-s>width*1.6 else 1
+                            for k in range(parts):
+                                ps=s+(e-s)*k//parts;pe=s+(e-s)*(k+1)//parts
+                                segments.append(fillf[ps:pe].mean()>=.45)
+                        if 1<=len(segments)<=20:
+                            total=len(segments);filled=sum(segments)
+        # Upg button: green/yellow when upgradable, grey "Max" when maxed.
+        bx0,bx1=int(x+bw*2.95),min(w,int(x+bw*4.75));by0,by1=int(y+bh*1.2),int(y+bh*1.9)
+        maxed=0
+        if by0>=top and by1<=bottom and bx1>bx0:
+            ys,xs=slice(by0,by1),slice(bx0,bx1)
+            colour=((sat[ys,xs]>=110)&(val[ys,xs]>=90)&(hue[ys,xs]>=15)&(hue[ys,xs]<=85)).mean()
+            grey=((sat[ys,xs]<60)&(val[ys,xs]>=60)&(val[ys,xs]<=235)).mean()
+            maxed=int(colour<.06 and grey>.3)
+        ux,uy=x+bw*3.85,y+bh*1.55
+        # Portrait colours below the Lv label and above the name label:
+        # 12 hue bins of coloured pixels, then dark and neutral-light shares.
+        sig="-"
+        px0,px1,py0,py1=int(x+bw*.55),int(x+bw*2.05),int(y+bh*1.6),int(y+bh*3.0)
+        if py0>=top and py1<=bottom:
+            ph,ps,pv=hue[py0:py1,px0:px1],sat[py0:py1,px0:px1],val[py0:py1,px0:px1]
+            n=float(ph.size) or 1.0
+            coloured=(ps>=70)&(pv>=60)
+            bins=np.bincount((ph[coloured]*12//180).ravel(),minlength=12)[:12]
+            parts=[int(round(100*v/n)) for v in bins]
+            parts.append(int(round(100*(pv<60).sum()/n)))
+            parts.append(int(round(100*((ps<70)&(pv>=60)).sum()/n)))
+            sig=".".join(str(v) for v in parts)
+        return (filled,total,maxed,ux,uy,sig)
 
     def relocation(self, hint_x=0, hint_y=1):
         """A connected road waypoint downstream; AHK repeats it until relocated."""

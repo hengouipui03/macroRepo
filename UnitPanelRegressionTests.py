@@ -1,4 +1,4 @@
-"""Exercise the shared panel detector with a different device's UI layout."""
+﻿"""Exercise the shared panel detector with a different device's UI layout."""
 from pathlib import Path
 import subprocess
 from UpgradeRegressionTests import ROOT, RUNTIME, function
@@ -6,7 +6,6 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 logic = '\n'.join(function(file,name) for file,name in [
     ('Placement.ahk','UnitPanelColourHits'),('Placement.ahk','HasUnitPanel'),
     ('Placement.ahk','UnitPanelRegion'),('Placement.ahk','WaitForUnitPanel'),
-    ('PlacedUnits.ahk','ParseUpgradeState'),('PlacedUnits.ahk','UnitUpgradeButtonReady'),
     ('Learning.ahk','NormalizeWords'),('AAPathMacro.ahk','RGB'),
     ('AAPathMacro.ahk','IsUiYellow'),('AAPathMacro.ahk','IsBubbleRed'),
     ('AAPathMacro.ahk','IsUiRed'),('AAPathMacro.ahk','IsUiGreen')])
@@ -21,15 +20,12 @@ try {
         throw Error("fixture unexpectedly matched the old fixed panel position")
     if !WaitForUnitPanel(10)
         throw Error("panel was not learned from UPG/Sell/Upgrade on the other layout")
-    if !HasUnitPanel() || !UnitUpgradeButtonReady()
-        throw Error("learned panel/button regions were not reused")
+    if !HasUnitPanel()
+        throw Error("learned panel regions were not reused")
     previous := reads
     if !WaitForUnitPanel(10) || reads!=previous
         throw Error("known panel performed OCR again instead of reusing its regions")
-    state := ParseUpgradeState(ReadOcrRows(),{cw:1280,ch:720})
-    if state.level!=7
-        throw Error("UPG 7 did not parse at the learned heading location")
-    FileAppend "PASS: different-device UPG/Sell/Upgrade layout learned once; shared pixel detector and readiness checks reuse it; exact UPG 7 parsed at learned position.`n","*"
+    FileAppend "PASS: different-device UPG/Sell/Upgrade layout learned once; the shared pixel detector reuses it for purchase confirmation.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack,"*"

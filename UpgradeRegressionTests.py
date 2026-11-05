@@ -17,10 +17,10 @@ def function(file, name):
     return match[0]
 
 
-names = ["UpgradeQueue", "ResetUpgradeSelection", "ResetFiniteUpgradeGuard",
-         "RefreshRecordedUpgradeTarget", "UpgradePriorityPass", "ParseUpgradeState",
-         "ReadUnitUpgradeState", "DeferUnitUpgrade", "PressUnitUpgradeKey",
-         "UpgradeOnce", "UpgradeWarning", "UpgradeOnceAction"]
+names = ["UpgradeQueue", "ResetUpgradeSelection", "ResetUpgradeTracking",
+         "RefreshRecordedUpgradeTarget", "UpgradePriorityPass", "DeferUnitUpgrade",
+         "UpgradeOnce", "UpgradeWarning", "PortraitDistance", "SlotDisplayName",
+         "TileIdentityMismatch", "UpgradeOnceAction"]
 logic = "\n\n".join(function("PlacedUnits.ahk", name) for name in names)
 logic += "\n" + function("Learning.ahk", "NormalizeWords")
 logic += "\n" + function("MapNavigation.ahk", "EnsurePathLit")
@@ -42,14 +42,14 @@ fixture = r'''
 #Warn All, Off
 global testNow := 10000,gRunning := true,REF_W := 800,REF_H := 600
 global ACTION_HOLD_MS := 300,gPrepDeadline := 0,gNavigationTimedOut := false,navReached := true,endState := false
-global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUpgradeLastRAt := 0,gUpgradeReadAt := 0
+global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUpgradeClickMode := "",gUnitManagerFailure := "",gSlotPortraits := Map()
 global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
-global levels := Map(),presses := 0,ignored := 0,ocrOverride := -1,unreadable := false,ready := true
-global opened := [],ocrScale := 0,signatureChanged := false
+global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true
+global directWorks := true,lagMs := 0,opened := []
 global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
-global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,layoutY := 210,hillBlocked := false
+global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
 global moveCalls := 0,shiftReads := 0,trackingOkay := true,cameraShifts := [{dx:0,dy:30},{dx:0,dy:0}]
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global relocationSceneOkay := true,rememberOkay := true,scaleMovement := false,lastDuration := 120,lastMovementKey := ""
@@ -57,67 +57,96 @@ global gMapModel := 0,gMoveKeys := 0,MAP_GRID := 96,baseRoute := [101,102,103,10
 global navWalkMs := 0,RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0,gMovementCardTotalMs := 0,teleports := 0
 
 try {
+    ; Tile upgrades: one Upg click per new lit segment, exact finite targets,
+    ; ignored clicks never exhaust anything.
     a := Unit(1,7),b := Unit(2,2)
-    gPlacements := [b,a],levels[1] := 0,levels[2] := 0
-    ; Ignored inputs must not exhaust the finite budget before target 7.
-    ignored := 3
-    Loop 35 {
+    gPlacements := [b,a],levels[1] := 0,levels[2] := 0,ignored := 3
+    Loop 40 {
         UpgradePriorityPass()
-        testNow += 1100
+        testNow += 700
     }
     Assert(a.complete && a.upgrades=7 && levels[1]=7,"target 7 did not finish exactly")
-    Assert(b.complete && levels[2]=2 && presses=12,"target 7 did not hand off to the next unit")
-    Assert(ocrScale=4,"finite UPG OCR was not enlarged")
+    Assert(b.complete && levels[2]=2 && clicks=12,"target 7 did not hand off to the next unit (" clicks " clicks)")
+    Assert(gUpgradeClickMode="direct","a working Upg click was not remembered")
     Assert(UpgradeQueue().Length=0,"completed numeric targets kept reselecting")
 
-    a := Unit(1,7),gPlacements := [a],levels[1] := 6,presses := 0,ocrOverride := -1
+    ; A slow segment update never lets a second click overshoot a finite target.
+    a := Unit(1,7),gPlacements := [a],levels[1] := 6,clicks := 0,lagMs := 1500
     ResetUpgradeSelection()
-    UpgradePriorityPass()
-    Assert(levels[1]=7 && presses=1,"UPG 6 did not advance once")
-    ocrOverride := 6
-    Loop 20 {
-        testNow += 1100
+    Loop 6 {
         UpgradePriorityPass()
+        testNow += 400
     }
-    Assert(presses=1 && !a.complete,"stale OCR overshot the target after glyphs changed")
-    ocrOverride := -1,testNow += 11000
-    UpgradePriorityPass()
-    Assert(a.complete && a.upgrades=7 && presses=1,"fresh UPG 7 did not complete the pending unit")
+    Assert(a.complete && levels[1]=7 && clicks=1,"slow segment update allowed an overshoot (" clicks " clicks)")
+    lagMs := 0
 
-    a := Unit(1,7),b := Unit(2,1),gPlacements := [a,b],levels[1] := 4,levels[2] := 0
-    unreadable := true,presses := 0
+    ; An unreadable bar defers only that unit, and backs off longer each time.
+    a := Unit(1,7),b := Unit(2,1),gPlacements := [a,b],levels[1] := 4,levels[2] := 0,unreadable := 1,clicks := 0
     ResetUpgradeSelection()
     Loop 3 {
         UpgradePriorityPass()
-        testNow += 1100
+        testNow += 700
     }
-    Assert(!a.complete && UpgradeQueue().Length=2,"unreadable target was treated as done")
-    unreadable := false
+    Assert(!a.complete && a.upgradeRetryAt>testNow && clicks=0,"unreadable bar was clicked or not deferred")
     UpgradePriorityPass()
-    Assert(selected=2 && levels[2]=1,"unreadable first unit blocked every other unit")
+    Assert(levels[2]=1,"unreadable first unit blocked every other unit")
+    testNow := a.upgradeRetryAt
+    Loop 3 {
+        UpgradePriorityPass()
+        testNow += 100
+    }
+    Assert(a.deferCount=2 && a.upgradeRetryAt-testNow>15000,"second deferral did not back off for 20 seconds")
+    unreadable := 0
 
-    a := Unit(1,7),gPlacements := [a],levels[1] := 6,ready := false,presses := 0
+    ; Waiting for Yen keeps clicking at the same priority, then stops at target.
+    a := Unit(1,7),gPlacements := [a],levels[1] := 6,ready := false,clicks := 0
     ResetUpgradeSelection()
-    UpgradePriorityPass()
-    Assert(presses=0 && a.upgradeInputCount=0,"waiting for Yen spent finite input budget")
-    ready := true,testNow += 1100
-    UpgradePriorityPass()
-    testNow += 1100
-    UpgradePriorityPass()
-    Assert(a.complete && presses=1,"money wait did not resume and stop at target 7")
+    Loop 5 {
+        UpgradePriorityPass()
+        testNow += 2100
+    }
+    Assert(!a.complete && !a.upgradeRetryAt && levels[1]=6 && clicks>=3,"waiting for Yen deferred the unit or stopped clicking")
+    ready := true
+    Loop 3 {
+        UpgradePriorityPass()
+        testNow += 2100
+    }
+    Assert(a.complete && levels[1]=7,"money wait did not resume and stop at target 7")
 
     a := Unit(1,99),gPlacements := [a],levels[1] := 7,gUnitControls := [{target:{Value:7}}]
-    ResetUpgradeSelection(),presses := 0
+    ResetUpgradeSelection(),clicks := 0
     UpgradePriorityPass()
-    Assert(a.target=7 && a.complete && presses=0,"live MAX-to-7 edit failed to hand off")
+    Assert(a.target=7 && a.complete && clicks=0,"live MAX-to-7 edit failed to hand off")
     gUnitControls := []
 
-    ; A header changing during OCR cannot authorize an R.
-    a := Unit(1,7),gPlacements := [a],levels[1] := 6,signatureChanged := true,presses := 0
-    ResetUpgradeSelection()
+    ; A grey Max button completes a MAX target without a click.
+    a := Unit(1,99),gPlacements := [a],levels[1] := 5,maxed[1] := true,clicks := 0
     UpgradePriorityPass()
-    Assert(presses=0,"changing heading was accepted as a fresh stable level")
-    signatureChanged := false
+    Assert(a.complete && clicks=0,"grey Max tile was clicked")
+    maxed[1] := false
+
+    ; A tile whose portrait clearly belongs to another unit is never clicked;
+    ; a look-alike that is merely a little off still upgrades.
+    a := Unit(1,99),b := Unit(2,99),gPlacements := [a,b],levels[1] := 0,levels[2] := 0,clicks := 0
+    gSlotPortraits := Map(1,"80.0.0.0.0.0.0.0.0.0.10.10.0.0",2,"0.0.0.0.80.0.0.0.0.0.10.10.0.0")
+    sigs[1] := "0.0.0.0.78.0.0.0.0.0.11.11.0.0"
+    UpgradePriorityPass()
+    Assert(clicks=0 && a.upgradeRetryAt>testNow,"a tile showing another unit was clicked")
+    a.upgradeRetryAt := 0,sigs[1] := "70.0.0.0.6.0.0.0.0.0.12.12.0.0"
+    UpgradePriorityPass()
+    Assert(clicks=1,"a slightly different portrait of the right unit was refused")
+    sigs := Map(),gSlotPortraits := Map()
+
+    ; Upg alone does nothing in this game: portrait + Upg is discovered and kept.
+    gUpgradeClickMode := "",directWorks := false
+    a := Unit(1,3),gPlacements := [a],levels[1] := 0,clicks := 0
+    ResetUpgradeSelection()
+    Loop 20 {
+        UpgradePriorityPass()
+        testNow += 2100
+    }
+    Assert(a.complete && levels[1]=3 && gUpgradeClickMode="select","an Upg button that needs selection was not discovered")
+    directWorks := true,gUpgradeClickMode := "direct"
 
     ; P is discovered once; later calls use the exact saved coordinate.
     Assert(EnsurePathLit() && findCalls=1 && pClicks=1,"first P click was not saved/confirmed")
@@ -136,17 +165,17 @@ try {
     Assert(slotSelections=1 && placementClicks=2,"live path-edge candidate did not probe occupancy before its purchase")
 
     a := Unit(1,1),b := Unit(2,1),gPlacements := [a,b],levels[1] := 0,levels[2] := 0
-    blockedUnit := 1,presses := 0,gPendingPlacement := 0
+    blockedUnit := 1,clicks := 0,gPendingPlacement := 0
     ResetUpgradeSelection()
-    ; A missed selection is retried at the same priority twice before deferral.
+    ; A missed tile lookup is retried at the same priority twice before deferral.
     UpgradePriorityPass()
-    Assert(!a.upgradeRetryAt && !a.complete && presses=0,"one missed selection skipped the top-priority unit")
+    Assert(!a.upgradeRetryAt && !a.complete && clicks=0,"one missed lookup skipped the top-priority unit")
     UpgradePriorityPass()
     UpgradePriorityPass()
-    Assert(a.upgradeRetryAt>testNow && !a.complete,"unselectable unit was not deferred")
+    Assert(a.upgradeRetryAt>testNow && !a.complete,"unfindable unit was not deferred")
     testNow += 1100
     UpgradePriorityPass()
-    Assert(levels[2]=1 && presses=1,"failed unit selection starved the next upgrade")
+    Assert(levels[2]=1 && clicks=1,"failed lookup starved the next upgrade")
     blockedUnit := 0
 
     gPlacements := [],gPendingPlacement := 0,gPlacementAreaFailures := Map(),modelFails := 0
@@ -225,15 +254,10 @@ try {
     endState := false,gMapModel := 0
     ResetPlacementFailureStreak()
 
-    layoutY := 300
-    state := ParseUpgradeState([{x:140,y:305,w:60,h:15,text:"UPG [7]"}],WindowGeometry())
-    Assert(state.level=7,"learned device-specific panel heading was ignored")
-    layoutY := 210
-
     ; A permanently blocked first placement cannot prevent the next placement
     ; or upgrading an already placed unit.
     a := Unit(1,1),b := Unit(2,1),a.count := 1,b.count := 1,a.enabled := true,b.enabled := true
-    gPlacements := [],gPlacementAreaFailures := Map(),schedulerMode := true,stopAt := testNow+5000,presses := 0
+    gPlacements := [],gPlacementAreaFailures := Map(),schedulerMode := true,stopAt := testNow+5000,clicks := 0
     levels[2] := 0
     ResetUpgradeSelection()
     PlaceConfiguredBuildAction([a,b])
@@ -243,7 +267,7 @@ try {
     result := PlaceConfiguredBuildAction([a])
     Assert(result="stopped" && MissingBuildPlacements([a])!="","temporarily unavailable Hill unit was skipped and build marked complete")
     schedulerMode := false,gRunning := true,hillBlocked := false
-    FileAppend "PASS: checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; exact upgrade targets/input guards; no duplicate purchases; stop handling.`n","*"
+    FileAppend "PASS: checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; tile upgrades: exact targets, slow bars, Yen waits, grey Max, wrong-portrait refusal, Upg-needs-selection discovery, escalating back-off; no duplicate purchases; stop handling.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message " (line " err.Line ")`n" err.Stack,"*"
@@ -290,34 +314,40 @@ ActionPause(ms,*) {
         gRunning := false
     return true
 }
-SendEvent(keys) {
-    global presses,ignored,levels
-    if keys!="{r down}"
-        return
-    presses += 1
-    if ignored>0
-        ignored -= 1
-    else
-        levels[selected] += 1
-}
-UnitUpgradeButtonReady(*) => ready
-UpgradeHeaderSignature() {
-    global testNow
-    if signatureChanged {
-        testNow += 1
-        return "changing-" testNow
+LocateManagedUnit(id) {
+    global gUnitManagerFailure,pendingLevel,levels
+    if blockedUnit=id {
+        gUnitManagerFailure := "scroll"
+        return false
     }
-    return "gold-level-" levels[selected]
+    if pendingLevel.Has(id) && testNow>=pendingLevel[id] {
+        levels[id] += 1
+        pendingLevel.Delete(id)
+    }
+    entry := {id:id,column:1,x:600,y:200,row:180,filled:unreadable=id?-1:levels[id],total:8,
+        maxed:maxed.Has(id) && maxed[id],ux:700,uy:190,sig:sigs.Has(id)?sigs[id]:""}
+    return {state:Map(),entry:entry}
 }
+ClickTileUpgrade(entry,select) {
+    global clicks,ignored,pendingLevel,levels
+    clicks += 1
+    if ignored>0 {
+        ignored -= 1
+        return true
+    }
+    if !ready || (!directWorks && !select) || pendingLevel.Has(entry.id)
+        return true
+    if lagMs
+        pendingLevel[entry.id] := testNow+lagMs
+    else
+        levels[entry.id] += 1
+    return true
+}
+ForgetManagerTile(*) => 0
 WindowGeometry() => {x:100,y:200,cx:108,cy:230,w:1296,h:900,cw:800,ch:600,dpi:96}
-ReadOcrRows(x1,y1,x2,y2,words := false,scale := 2) {
-    global ocrScale
-    ocrScale := Max(ocrScale,scale)
-    rows := []
-    if !unreadable
-        rows.Push({x:145,y:215,w:60,h:16,text:"UPG [" (ocrOverride>=0?ocrOverride:levels[selected]) "]"})
-    return rows
-}
+ReadOcrRows(*) => []
+CaptureYenImage(*) => ""
+DiscardYenEvidence(*) => 0
 GetClient(&cx,&cy,&cw,&ch) {
     cx := 108,cy := 230,cw := 800,ch := 600
     return true
@@ -393,9 +423,6 @@ RecoverPendingPlacement(*) => false
 WaitFor(*) => false
 WaitForUnitPanel(*) => false
 FinishPlacement(*) => true
-UnitPanelRegion(name) {
-    return name="header"?[137,layoutY,215,layoutY+36]:[145,340,265,395]
-}
 CountSlotPlacements(slot) {
     count := 0
     for item in gPlacements

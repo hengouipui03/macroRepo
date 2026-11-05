@@ -15,13 +15,13 @@ to the live Roblox client area at run time. Roblox is sized to 1401 x 975 outer 
 | `MapNavigation.ahk` | Minimap reading (Python vision or AHK fallback), route graph, checkpoints, player probing, movement, obstacle escape, P (path light) toggle. |
 | `Placement.ahk` | Placement candidates, purchase clicks, unit-panel detection, click-away, pending-purchase recovery, the build loop. |
 | `PlacementArea.ahk` | Five-failure streak, checkpoint relocation (25% → 50% → 75% of the route). |
-| `PlacedUnits.ahk` | Numbered purchase record, upgrade queue, UPG reading, R presses, finite-target guards. |
-| `UnitManager.ahk` | F unit manager: when F may be pressed, keeping it open, scrolling, selecting purchase #N. |
+| `PlacedUnits.ahk` | Numbered purchase record, upgrade queue, tile-based upgrades (segments, Max, Upg clicks), identity guard, back-off. |
+| `UnitManager.ahk` | F unit manager: when F may be pressed, keeping it open, scrolling, finding purchase #N's tile (odd/even layout). |
 | `Learning.ahk` | OCR, learned buttons, card text policy and ranking, placement memory. |
 | `CardContext.ahk` | Card word colour (green/red) reading, pixel green detection, resistance preference tab, right-panel match modifiers. |
 | `Endgame.ahk` | End screen detection, Next/reward dismissal, Replay. |
 | `Discord.ahk` | Optional WIN/LOSS webhook with screenshot. |
-| `MinimapVision.py` | OpenCV service (minimap, lit path, placement lines, Hill spots, unit manager geometry). AHK sends all input. |
+| `MinimapVision.py` | OpenCV service (minimap, lit path, placement lines, Hill spots, unit manager tiles: segments, Max, Upg point, portrait colours). AHK sends all input. |
 | `OCRBridge.ps1` | Windows OCR bridge used by `ReadOcrRows`. |
 | `*.ini` | `unit_settings.ini`, `card_preferences.ini`, `settings.ini` (webhook), `button_positions.ini`, `learning.ini` (learned data), `placement_run.ini`, `placement_layouts.ini`. |
 
@@ -69,31 +69,39 @@ F6 → StartMacro → RunMacro (loops on "replay")
 | If the game closes it, it is reopened once. | `MaintainUnitManager()` checks every 3 s in the watch loop and reopens through the same guarded `EnsureUnitManagerOpen()`. |
 | Leftover manager before placement. | `EnsureRouteAndSpawn` only logs it. It does not press F (placement-phase rule). |
 
-### Selecting purchase #N (`SelectManagedUnit`)
+### Finding purchase #N (`LocateManagedUnit`)
 1. Refuse while a placement purchase is unresolved, or while a card is up (reason `card`).
-2. Close the previous unit's side panel with the manager-safe click-away, and drop any preview (Q).
-3. `EnsureUnitManagerOpen()`. If it fails, the reason is `manager`.
-4. Scroll down until the list bottom stays still for two single-notch checks (`ResetUnitManagerBottom`).
-5. Row/column of #N from the bottom: #1 bottom-right, #2 bottom-left, #3 the row above on the right, and so on.
-6. Scroll up one notch at a time. If a notch moves a full row or more, it stops instead of guessing.
-7. Click **only the portrait** (never Sell X, Upg or First), then wait for the side unit panel.
-8. Every failure records a reason in `gUnitManagerFailure`: `card`, `manager`, `scroll`, `panel` or `blocked`.
+2. `EnsureUnitManagerOpen()`. If it fails, the reason is `manager`.
+3. If the last tile found was this purchase and the list has not moved since (no scroll, no F), reuse it.
+4. Otherwise scroll down until the list bottom stays still for two single-notch checks (`ResetUnitManagerBottom`).
+5. Row/column of #N from the bottom (`ManagedUnitCell`). The game lists the **newest unit top-left**, reading left to right, so #1 is in the bottom row. The bottom row itself tells the macro which case applies:
+   - even unit count: #1 bottom-right, #2 bottom-left, #3 the row above on the right, and so on;
+   - odd unit count: #1 **alone at the bottom-left**, then #2 right / #3 left in the row above, and so on.
+6. Scroll up one notch at a time. If a notch moves a full row or more, it stops instead of guessing. If the list cannot move any further, the reason is `missing` (the manager shows fewer units than recorded).
+7. Every failure records a reason in `gUnitManagerFailure`: `card`, `manager`, `scroll`, `missing`, `panel` or `blocked`.
+
+`SelectManagedUnit` (relocation checks, and upgrades when the game needs the unit selected) closes the previous side panel, finds the tile as above and clicks **only the portrait**, then waits for the side unit panel.
+
+Each tile is read by vision (`unitmanager`): lit bar segments (green and yellow are the same; white-outlined ones are not done), whether the Upg button is the grey **Max** button, the Upg click point, and the portrait's colours.
 
 ---
 
 ## 4. Upgrades
 
 - **Queue:** unfinished recorded units, lowest priority number first, ties by purchase number (`UpgradeQueue`). Each watch-loop pass works only on the head of the queue (`UpgradePriorityPass`).
-- **Selection:** if the selected unit is not the head, or its panel is gone, it is reselected through the manager (`OpenRecordedUnit` → `SelectManagedUnit`).
-- **When selection fails** (this is the change that stops units being skipped):
-  - `card` → choose the card (the manager is closed for it, then reopened), then reselect **the same** unit. Nothing is deferred.
+- **Everything happens on the unit's manager tile** (`UpgradeOnceAction`). The side panel's UPG heading, OCR and R are no longer used.
+- **When the tile cannot be found:**
+  - `card` → choose the card (the manager is closed for it, then reopened), then find **the same** unit again. Nothing is deferred.
   - `manager` → retry the same priority. This is never counted against the unit.
-  - Any other reason → retry the same unit up to **3** times. Only then is it deferred for 10 s so the others can continue.
-- **MAX target (99):** R about every 300 ms while the panel is open. The level is re-read every 2 s.
-- **Finite target:** every R needs a fresh, stable UPG reading (OCR of the gold header at 4x, then 2x, then the full panel). The header pixel signature must not change during OCR. A per-unit input budget is calculated from the first verified level. An ignored R is retried after 4 s only if OCR and the pixels both still show the old level. An unaffordable (non-green) Upgrade button waits without spending budget. A header that stays unreadable 3 times defers the unit 10 s.
-- **Target reached or MAX:** mark complete, click away (the manager stays open), log the next unit.
+  - Any other reason → retry the same unit up to **3** times, then defer it.
+- **Level:** the number of lit segments. A new lit segment confirms an upgrade. Fewer lit segments than already confirmed means the tile is doubtful: it is found again, and the lower count is accepted only after three reads in a row.
+- **Clicks:** one Upg click at a time. The next click waits for the new segment, or 2 s (finite target, so a slow bar cannot overshoot) / 0.6 s (MAX). Clicks that add nothing (not enough Yen) repeat at the same priority without deferral.
+- **Upg alone or portrait first:** until a click is seen to work, every other retry clicks the portrait before Upg. The first click that adds a segment fixes the method for the session (`gUpgradeClickMode`).
+- **Identity guard:** the first tile seen for each slot teaches that slot's portrait colours. A tile is refused only when it is far from its own slot's colours and at most half as far from another slot's, so look-alike units never block upgrades.
+- **Deferral:** unreadable bars (3 reads), missing tiles (3 tries) or a portrait mismatch defer only that unit for 10, 20, 40, then 60 s; other units continue. Any confirmed upgrade resets the back-off. One diagnostic screenshot per unit per match goes to `cache\upg-tile-<id>.bmp`.
+- **Target reached or MAX (grey Max button):** mark complete (the manager stays open), log the next unit.
 - **Live target edits** in the GUI apply to already-placed units at once (`RefreshRecordedUpgradeTarget`).
-- **Cards during upgrades:** the unit panel is **not** clicked away. The macro presses Q only if a placement preview is active, closes the manager once (if it is confirmed open), and chooses the card. Afterwards it reopens the manager, clears the current selection and reselects the top-priority unit through the manager, so R always goes to the correct unit. If the side panel is still open and the chosen card is the left one, the click lands at y=405 instead of 330, so it can never hit the panel's Upgrade button.
+- **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the manager once (if it is confirmed open), and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click (the remembered tile position is dropped whenever F is pressed or the list scrolls).
 
 ---
 
@@ -103,7 +111,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 - **Where:** first a point beside the lit path, closest to the player. Then it follows the same side of the road. Units sit 12 px outside the road, and only an 8–18 px edge gap is accepted. A second row is allowed behind a confirmed first-row unit, never a third. Every point must be within 180 px of the player.
 - **Hill-only / Hybrid:** Hill-only needs highlighted Hill terrain and never falls back to ground. Hybrid tries Hill, then ground.
 - **Purchase confirmation:** the side unit panel opening after the click confirms the purchase. Before buying, a selection-only click rejects spots that already hold a unit. Failed spots (14 px radius) are skipped for the rest of the game.
-- **Recovery:** a purchase hidden by cards is re-checked with selection-only clicks and never bought twice (`RecoverPendingPlacement`).
+- **Recovery:** a purchase hidden by cards is re-checked with selection-only clicks and never bought twice (`RecoverPendingPlacement`). A failed purchase is counted only when recovery finishes. If the probes find nothing, the Yen counter images taken just before and just after the purchase click decide (`ConfirmPurchaseByYen`): a fall of at least 50 and at most half the balance, read identically at two OCR scales, counts the unit (`CompletePlacement`). This is the case of a card opening right after a purchase.
 - **Relocation:** 5 consecutive failed purchases move the player to the next route checkpoint (25% → 50% → 75%). At checkpoint 3 it keeps trying locally.
   - **Cards while walking:** every movement key is released *before* the card is chosen (`MovementHoldUntil`, `MovementCardPause`), so the player stands still during card selection. Afterwards the walk resumes toward the same checkpoint from the player's actual position, and card time does not count against the walk.
   - **20-second rule:** if relocation walking (card time excluded, added up across retries for the same checkpoint) passes 20 s without arriving, `TeleportBackToSpawn()` clicks the Settings gear (bottom left), then the arrow button on the row OCR confirms as "Teleport back to Spawn", then Settings' red X. It then re-finds the player and walks to the same checkpoint from spawn. "Return to Lobby" (the next row down) is never clicked. At most 2 teleports per checkpoint.
@@ -185,7 +193,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 | Function | What it does |
 |---|---|
 | `BeginUnitManagerPhase` / `EndUnitManagerPhase` | Allow F (after the build is placed) / forbid F and reset all manager state (match start, stop). |
-| `ReadUnitManager` | Vision `unitmanager`: open, ready, rows, pitch, entries (portrait click points). |
+| `ReadUnitManager` | Vision `unitmanager`: open, ready, rows, pitch, bottom-row count, entries (portrait and Upg click points, lit/total segments, Max, portrait colours). |
 | `FocusUnitManagerGame` | Focus Roblox before F or scrolling. |
 | `PressUnitManagerKey` | One F tap. Refused unless the phase is on. Records the press time. |
 | `UnitManagerBlocked` | True while a card or end screen is showing. |
@@ -194,7 +202,10 @@ F6 → StartMacro → RunMacro (loops on "replay")
 | `CloseUnitManagerForCards` | The only close: F during card choice only when two readings agree the manager is open (two presses at most). Cards are read only after two "closed" readings. |
 | `ReopenUnitManagerAfterCards` | After cards: reset the upgrade selection and reopen the manager, so the correct top-priority unit is reselected. |
 | `UnitManagerFail` | Record why a selection failed. |
-| `ScrollUnitManager`, `ResetUnitManagerBottom`, `UnitManagerEntry` | Wheel scrolling over the list, bottom anchoring, entry lookup. |
+| `ScrollUnitManager`, `ResetUnitManagerBottom`, `ParseUnitManagerEntry`, `UnitManagerEntry` | Wheel scrolling over the list (drops the remembered tile), bottom anchoring, entry lookup. |
+| `ManagedUnitCell` | Row and column of purchase #N for an even or odd unit count. |
+| `LocateManagedUnit`, `ForgetManagerTile`, `ResetManagerTileMemory` | Find a purchase's tile (reusing the last position while the list is still), and reset that memory. |
+| `ClickManagerPoint`, `SelectManagedUnit` | Click a manager point; portrait selection with side-panel confirmation. |
 | `SelectManagedUnit` | Select purchase #N (§3). |
 
 ### PlacedUnits.ahk
@@ -204,13 +215,13 @@ F6 → StartMacro → RunMacro (loops on "replay")
 | `PlacementLayoutKey`, `SaveLayoutPoint`, `CachedPlacementCandidates` | Per-map saved positions, reused only when the local path view validates. |
 | `RegisterPlacedUnit` | Record purchase #N (slot, priority, target, position). |
 | `UpgradeQueue`, `UpgradePriorityPass` | Priority order and one pass on the head. |
-| `ResetUpgradeSelection`, `ResetFiniteUpgradeGuard`, `RefreshRecordedUpgradeTarget` | Selection state, input budget, live target edits. |
-| `ParseUpgradeState`, `ReadUnitUpgradeState`, `UpgradeHeaderSignature`, `UnitUpgradeButtonReady` | UPG level and MAX reading, stability signature, affordability. |
-| `SaveUpgradeDiagnostic` | On the third unreadable UPG read, saves the client area to `cache\upg-unreadable-<id>.bmp`. The log line states why the read failed (no number from OCR, or the heading pixels changed during OCR) and the raw OCR text. |
-| `DeferUnitUpgrade` | 10 s back-off for a genuinely stuck unit (click-away only, the manager stays open). |
-| `OpenRecordedUnit` | `SelectManagedUnit(item.id)`. |
-| `PressUnitUpgradeKey` | One R (blocked during cards or with no panel). |
-| `UpgradeOnce`, `UpgradeOnceAction`, `UpgradeWarning` | Upgrade one unit, with the card/manager/retry rules from §4. |
+| `ResetUpgradeSelection`, `ResetUpgradeTracking`, `RefreshRecordedUpgradeTarget` | Selection and remembered tile, per-unit click tracking, live target edits. |
+| `SaveUpgradeDiagnostic` | Saves the client area to `cache\upg-tile-<id>.bmp`, once per unit per match. |
+| `DeferUnitUpgrade` | 10/20/40/60 s back-off for a genuinely stuck unit (the manager stays open). |
+| `OpenRecordedUnit` | Portrait selection through the manager (relocation checks). |
+| `PortraitDistance`, `SlotDisplayName`, `TileIdentityMismatch` | Portrait-colour identity guard. |
+| `ClickTileUpgrade` | Upg click on the tile, with the portrait first when the game needs selection. |
+| `UpgradeOnce`, `UpgradeOnceAction`, `UpgradeWarning` | Upgrade one unit from its tile, with the rules from §4. |
 
 ### Placement.ahk
 | Function | What it does |
@@ -222,7 +233,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 | `HasUnitPanel`, `UnitPanelRegion`, `UnitPanelColourHits`, `WaitForUnitPanel` | Side unit panel detection (learns its layout per window size). |
 | `ClickAwayFromUnitPanel`, `CloseUnitPanel` | Close the side panel at (497,168). **Never touches F or the manager.** |
 | `PlacementPanelClosedStable`, `CountSlotPlacements` | Helpers. |
-| `FinishPlacement`, `TryPlacementCandidate`, `TryPlacementCandidateAction`, `TrySelectUnitAt`, `RecoverPendingPlacement` | Purchase, confirmation and recovery without double buying. |
+| `FinishPlacement`, `CompletePlacement`, `ConfirmPurchaseByYen`, `TryPlacementCandidate`, `TryPlacementCandidateAction`, `TrySelectUnitAt`, `RecoverPendingPlacement` | Purchase, confirmation (side panel, or Yen drop) and recovery without double buying. |
 | `PlacementStillBesidePath`, `AddPlacementGeometry`, `OppositePlacementPoint`, `PlacementEdgeNormal`, `SamePlacementEdge`, `BlockedPlacementEdge`, `PlacementBlockedEdgeExclusions`, `RegisterPlacementEdgeMiss` | Edge geometry, opposite-side switch after 3 misses. |
 | `TryPlacementPoints`, `MatchSavedPlacementsToPath`, `FindHillPlacementCandidates` | Try lists of points, saved points, Hill spots. |
 | `PlaceUnit`, `PlaceUnitAction` | One copy of one slot (no F). |
@@ -241,7 +252,8 @@ F6 → StartMacro → RunMacro (loops on "replay")
 |---|---|
 | `BuildLearningTab`, `MemoryRead`, `MemoryKey`, `WindowGeometry` | Learned-data storage per window size and DPI. |
 | `ButtonSection`, `SaveButtonRecord`, `ReadButtonRecord`, `ForgetButton`, `LearnHoveredButton`, `ButtonLabels`, `ButtonRegion`, `DiscoverButton`, `FindCompactRedControl`, `ClickWindowOnce`, `ClickLearnedButton`, `ConfirmObservedTransition`, `ObserveTextButtons`, `HasSavedRedControl`, `HasSavedColourControl` | Learn and click named buttons (OCR plus F10 teaching). |
-| `SaveFrameBmp`, `ReadOcrRows`, `ParseOcrRows`, `NormalizeWords` | OCR plumbing. |
+| `SaveFrameBmp`, `ReadOcrRows`, `OcrImageRows`, `ParseOcrRows`, `NormalizeWords` | OCR plumbing. |
+| `CaptureYenImage`, `ReadYenImage`, `YenFromRows`, `DiscardYenEvidence` | Yen counter snapshots around a purchase click, read only when its panel never showed. |
 | `HasSettingsPanel`, `SettingsPanelClosed`, `UnitPanelClosed` | Panel checks. |
 | `HasSecretPortalReward`, `StripSecretPortalReward`, `BuffTitleStat`, `BuffTitleTier`, `EnemyStatReduction` | Card text parsing. |
 | `ReadResistanceAmounts`, `ParseResistanceEffects`, `CombineResistanceLines`, `CardIsResistance` | Physical/magic amounts. |

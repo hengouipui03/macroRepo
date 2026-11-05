@@ -12,11 +12,14 @@ global gUnitManagerPhase := false,gUnitManagerLastF := 0,gUnitManagerCheckAt := 
 global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := ""
 global UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
 global gUnitManagerClosedForCards := false
+; The last tile found for a purchase, valid only while the list has not moved.
+global gManagerTile := 0,gSlotPortraits := Map()
 
 BeginUnitManagerPhase() {
     global gUnitManagerPhase,gUnitManagerLastF,gUnitManagerCheckAt,gUnitManagerUnconfirmedF,gUnitManagerLockUntil
     gUnitManagerPhase := true,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
     gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0
+    ResetManagerTileMemory()
     Log("All units placed. The F unit manager opens now and stays open until the match ends.")
 }
 
@@ -26,6 +29,12 @@ EndUnitManagerPhase() {
     gUnitManagerPhase := false,gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerClosedForCards := false
     gUnitManagerLastF := 0,gUnitManagerCheckAt := 0,gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0
     gUnitManagerFailure := ""
+    ResetManagerTileMemory()
+}
+
+ResetManagerTileMemory() {
+    global gManagerTile,gSlotPortraits
+    gManagerTile := 0,gSlotPortraits := Map()
 }
 
 ReadUnitManager() {
@@ -53,6 +62,7 @@ PressUnitManagerKey() {
     if !gRunning || !gUnitManagerPhase || !FocusUnitManagerGame() || !BeginInputAction(true,UNIT_ACTION_MS)
         return false
     gUnitManagerLastF := A_TickCount
+    ForgetManagerTile()
     SendEvent "{f down}"
     try return ActionPause(UNIT_ACTION_MS,false)
     finally {
@@ -188,8 +198,15 @@ UnitManagerFail(reason) {
     return false
 }
 
+ForgetManagerTile() {
+    global gManagerTile
+    gManagerTile := 0
+}
+
 ScrollUnitManager(direction,notches := 1) {
     global UNIT_ACTION_MS
+    ; Any scroll may move every tile, so the remembered position is dropped.
+    ForgetManagerTile()
     if !FocusUnitManagerGame() || !GetClient(&cx,&cy,&cw,&ch) || !SmoothMoveTo(cx+Round(cw*.91),cy+Round(ch*.42),UNIT_ACTION_MS,UNIT_ACTION_MS)
         return false
     if !BeginInputAction(true,UNIT_ACTION_MS)
@@ -224,33 +241,68 @@ ResetUnitManagerBottom(state) {
     return false
 }
 
+ParseUnitManagerEntry(text) {
+    parts := StrSplit(text,",")
+    if parts.Length<4
+        return false
+    entry := {column:Integer(parts[1]),x:Number(parts[2]),y:Number(parts[3]),row:Number(parts[4]),
+        filled:-1,total:-1,maxed:false,ux:0,uy:0,sig:""}
+    if parts.Length>=10 {
+        entry.filled := Integer(parts[5]),entry.total := Integer(parts[6]),entry.maxed := parts[7]="1"
+        entry.ux := Number(parts[8]),entry.uy := Number(parts[9]),entry.sig := parts[10]="-"?"":parts[10]
+    }
+    return entry
+}
+
 UnitManagerEntry(state,column,rowY) {
     pitch := Number(state["pitch"])
     for text in StrSplit(state["entries"],";") {
-        parts := StrSplit(text,",")
-        if parts.Length=4 && Integer(parts[1])=column && Abs(Number(parts[4])-rowY)<pitch*.22
-            return {x:Number(parts[2]),y:Number(parts[3])}
+        entry := ParseUnitManagerEntry(text)
+        if entry && entry.column=column && Abs(entry.row-rowY)<pitch*.22
+            return entry
     }
     return false
 }
 
-SelectManagedUnit(purchaseId) {
-    global gPlacements,REF_W,REF_H,gRunning,gPendingPlacement,gUnitManagerFailure
+; The manager lists the NEWEST unit top-left and reads left to right, top to
+; bottom, so #1 is in the bottom row. With an even unit count the bottom row
+; is #1 right, #2 left. With an odd count #1 is ALONE on the left and every
+; row above it holds the next even purchase on the right, odd on the left.
+; Rows count up from the bottom (0 = bottom row); column 1 is right.
+ManagedUnitCell(purchaseId,bottomCount) {
+    if bottomCount=2
+        return {row:(purchaseId-1)//2,column:Mod(purchaseId,2)}
+    if purchaseId=1
+        return {row:0,column:0}
+    return {row:purchaseId//2,column:Mod(purchaseId,2)=0?1:0}
+}
+
+; Finds purchase #N's tile: the remembered position while the list has not
+; moved, otherwise anchored at the list bottom and scrolled up a notch at a
+; time. Returns {state,entry} or false with gUnitManagerFailure set.
+LocateManagedUnit(purchaseId) {
+    global gPlacements,gRunning,gPendingPlacement,gUnitManagerFailure,gManagerTile
     gUnitManagerFailure := ""
     if !gRunning || gPendingPlacement || purchaseId<1 || purchaseId>gPlacements.Length
         return UnitManagerFail("blocked")
     if HasCardChoice()
         return UnitManagerFail("card")
-    ; The previous unit's panel is closed with the manager-safe click-away;
-    ; the manager itself is left open.
-    if !CloseUnitPanel() || !CancelUnitPreview()
-        return UnitManagerFail(HasCardChoice()?"card":"panel")
     state := EnsureUnitManagerOpen()
     if !state
         return UnitManagerFail(HasCardChoice()?"card":"manager")
+    if gManagerTile && gManagerTile.id=purchaseId {
+        if entry := UnitManagerEntry(state,gManagerTile.column,gManagerTile.row)
+            return {state:state,entry:entry}
+        ForgetManagerTile()
+    }
     if !(state := ResetUnitManagerBottom(state))
         return UnitManagerFail(HasCardChoice()?"card":"scroll")
-    row := (purchaseId-1)//2,column := 1-Mod(purchaseId-1,2)
+    bottomCount := state.Has("lastcount")?Integer(state["lastcount"]):0
+    if bottomCount!=1 && bottomCount!=2 {
+        Log("Unit manager bottom row is not fully visible; no tile used.")
+        return UnitManagerFail("scroll")
+    }
+    cell := ManagedUnitCell(purchaseId,bottomCount)
     pitch := Number(state["pitch"]),last := Number(state["last"]),offset := 0
     limit := Ceil(gPlacements.Length/2)*8+10
     Loop limit {
@@ -258,15 +310,10 @@ SelectManagedUnit(purchaseId) {
             return UnitManagerFail("blocked")
         if HasCardChoice()
             return UnitManagerFail("card")
-        wanted := last-row*pitch+offset
-        entry := UnitManagerEntry(state,column,wanted)
-        if entry {
-            if !GetClient(&cx,&cy,&cw,&ch)
-                return UnitManagerFail("manager")
-            Log("Select purchase #" purchaseId " in unit manager | row from bottom " (row+1) " | " (column?"right":"left"))
-            if PlacementClickRef(entry.x*REF_W/cw,entry.y*REF_H/ch,true,0,true) && WaitForUnitPanel(600,true)
-                return true
-            return UnitManagerFail(HasCardChoice()?"card":"panel")
+        if entry := UnitManagerEntry(state,cell.column,last-cell.row*pitch+offset) {
+            Log("Purchase #" purchaseId " in unit manager | row from bottom " (cell.row+1) " | " (cell.column?"right":"left") " | " (bottomCount=1?"odd":"even") " unit count")
+            gManagerTile := {id:purchaseId,column:cell.column,row:entry.row}
+            return {state:state,entry:entry}
         }
         oldLast := Number(state["last"])
         if !ScrollUnitManager("Up",1)
@@ -275,12 +322,42 @@ SelectManagedUnit(purchaseId) {
         if !next || next["open"]!="1" || !next.Has("last")
             return UnitManagerFail(HasCardChoice()?"card":"manager")
         delta := Mod(Number(next["last"])-oldLast+pitch*4,pitch)
+        if delta<1 {
+            Log("Reached the top of the unit manager without purchase #" purchaseId "; the manager shows fewer units than recorded. No tile clicked.")
+            return UnitManagerFail("missing")
+        }
         ; One notch must move less than one row; never guess after a large jump.
-        if delta<1 || delta>pitch*.75 {
-            Log("Unit manager scroll did not yield a reliable next row; no portrait clicked.")
+        if delta>pitch*.75 {
+            Log("Unit manager scroll did not yield a reliable next row; no tile clicked.")
             return UnitManagerFail("scroll")
         }
         offset += delta,state := next
     }
     return UnitManagerFail("scroll")
+}
+
+ClickManagerPoint(x,y) {
+    global REF_W,REF_H
+    if !GetClient(&cx,&cy,&cw,&ch)
+        return false
+    return PlacementClickRef(x*REF_W/cw,y*REF_H/ch,true,0,true)
+}
+
+; Portrait click: opens purchase #N's side panel (relocation checks, and
+; upgrades when the Upg button needs the unit selected first).
+SelectManagedUnit(purchaseId) {
+    global gUnitManagerFailure,gRunning,gPendingPlacement,gPlacements
+    gUnitManagerFailure := ""
+    ; Checked before any click-away, so a pending purchase's panel is kept.
+    if !gRunning || gPendingPlacement || purchaseId<1 || purchaseId>gPlacements.Length
+        return UnitManagerFail("blocked")
+    if HasCardChoice()
+        return UnitManagerFail("card")
+    if !CloseUnitPanel() || !CancelUnitPreview()
+        return UnitManagerFail(HasCardChoice()?"card":"panel")
+    if !(found := LocateManagedUnit(purchaseId))
+        return false
+    if ClickManagerPoint(found.entry.x,found.entry.y) && WaitForUnitPanel(600,true)
+        return true
+    return UnitManagerFail(HasCardChoice()?"card":"panel")
 }

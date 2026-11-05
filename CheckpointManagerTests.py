@@ -52,13 +52,15 @@ global ACTION_GAP_MS := 300,gLastInputFinishedAt := 0,gInputEpoch := 0,testNow :
 global gPlacements := [],managerVisible := false,scroll := 180,panel := false,wantedNumber := 0,selected := [],downs := 0,ups := 0,managerReads := 0,readFailure := false
 global gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerPhase := true,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
 global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := "",UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
-global fPresses := 0,blindVision := false
+global fPresses := 0,blindVision := false,gManagerTile := 0,gSlotPortraits := Map(),gUnitManagerClosedForCards := false
 try {
-    for total in [20,19,1] {
+    ; The game lists the newest unit top-left, reading left to right, so with
+    ; an odd count #1 sits alone at the bottom-LEFT (the user's 9-unit match).
+    for total in [20,19,9,1] {
         gPlacements := []
         Loop total
             gPlacements.Push({id:A_Index})
-        for purchaseId in [1,2,3,4,9,10,17,18,20,1] {
+        for purchaseId in [1,2,3,4,7,8,9,10,17,18,20,1] {
             if purchaseId>total
                 continue
             if purchaseId=17
@@ -94,7 +96,7 @@ try {
     }
     Assert(fPresses-before<=2 && managerVisible,"misread manager state toggled F repeatedly")
     blindVision := false
-    FileAppend "PASS: bottom-right #1, bottom-left #2, then upward by row; bottom reset; one-notch upward scrolling; 20/19/1-unit layouts; no skipped purchases; one F for the whole match; no F before placement; reopen once; misread F guard.`n","*","UTF-8"
+    FileAppend "PASS: newest-first layout: even count #1 bottom-right/#2 bottom-left, odd count #1 alone bottom-left; upward by row; bottom reset; one-notch upward scrolling; 20/19/9/1-unit layouts; no skipped purchases; one F for the whole match; no F before placement; reopen once; misread F guard.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -126,14 +128,18 @@ VisionRequest(command) {
             if y+30-30>=100 && y+30+30<=450 {
                 Loop 2 {
                     col := A_Index-1
-                    candidateId := (totalRows-1-row)*2+(col=1?1:2)
-                    if candidateId<=gPlacements.Length
+                    candidateId := gPlacements.Length-(row*2+col)
+                    if candidateId>=1
                         entries .= (entries=""?"":";") col "," (col=0?570:710) "," (y+30) "," y
                 }
             }
         }
     }
-    return Map("status","ok","open","1","pitch","100","first",first,"last",last,"signature",managerReads,"entries",entries,"top","100","bottom","450")
+    lastcount := 0
+    for text in StrSplit(entries,";")
+        if text!="" && StrSplit(text,",")[4]=last
+            lastcount += 1
+    return Map("status","ok","open","1","pitch","100","first",first,"last",last,"lastcount",lastcount,"signature",managerReads,"entries",entries,"top","100","bottom","450")
 }
 SendEvent(key) {
     global managerVisible,scroll,downs,ups
@@ -153,7 +159,7 @@ SendEvent(key) {
 PlacementClickRef(x,y,*) {
     global panel
     row := Round((y-170+scroll)/100),column := x>650?1:0
-    purchaseId := (Ceil(gPlacements.Length/2)-1-row)*2+(column=1?1:2)
+    purchaseId := gPlacements.Length-(row*2+column)
     Assert(purchaseId=wantedNumber,"scroll/index mapping clicked purchase " purchaseId " instead of " wantedNumber)
     selected.Push(purchaseId),panel := true
     return true

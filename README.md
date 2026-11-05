@@ -176,7 +176,7 @@ and placement continues until the build is complete or the match ends.
 
 Unit selection and placement clicks, keys and cursor travel use 150 ms holds
 and action intervals, including F-manager navigation. Other UI actions, P,
-Vote Start and upgrade R retain their existing 300 ms timing. Redundant preview
+Vote Start retain their existing 300 ms timing; manager Upg clicks use the 150 ms unit timing. Redundant preview
 cancellations are skipped. Menu clicks no longer add multi-second fixed pauses.
 Panel confirmation, OCR, loading, calibrated movement and camera holds retain
 their necessary observation/hold time. Stale panels and
@@ -188,7 +188,11 @@ advance from newly registered placements, with per-slot confirmed/target logs;
 before buying, a selection-only click rejects spots which already open an
 existing model. Each purchase is bound to its slot and next copy number. The side unit panel
 appearing after that purchase confirms placement; placement does not read or
-require UPG 0. Panels obscured by cards never count.
+require UPG 0. Panels obscured by cards never count. When the panel never shows
+(a card opened right after the purchase, or the view moved), the Yen counter
+images taken just before and just after the purchase click are read: a fall of
+at least 50 and at most half the balance, read identically at two OCR scales,
+confirms the purchase. A failed purchase is only counted after recovery finishes.
 After cards close, one shared recovery function reselects the exact pending
 position without buying again, then verifies that purchase before recording it.
 duplicate recorded coordinates and a panel open before the click do not count. Every confirmed placement cancels
@@ -224,35 +228,32 @@ positions and priority rules as other placements.
 
 ## Recorded placements and upgrades
 
-Finite upgrade targets require a fresh reading of the focused UPG header before
-every R. Unreadable or decreasing/stale readings cannot trigger blind upgrades.
-A per-unit input cap is derived from the first verified level and target; stale
-OCR cannot keep buying toward MAX. The enlarged UPG crop is read at 4x scale.
-Gold header pixels must stay stable during OCR. An ignored R can retry after
-four seconds only when OCR and the actual header pixels still show the old
-level; that rejected attempt is returned to the input budget. Changed pixels
-with stale OCR cannot send another R. Persistently unreadable units wait ten
-seconds while other units continue, then retry at their original priority. A disabled
-upgrade button waits for Yen without spending an input. Target edits in the UI
-update already-recorded units immediately; only target 99 requests MAX.
-Failed model selection uses that same deferred queue instead of reopening the
-same unit indefinitely. The shared panel detector learns UPG/Sell/Upgrade
-regions once for the current window when another device uses a different layout;
-header OCR and upgrade readiness reuse those regions.
-
+Upgrades are read and clicked on the unit's tile in the F manager; the side
+panel's UPG heading and R are no longer used. Lit bar segments under the tile
+(green and yellow count the same; white-outlined segments are not done) are the
+upgrade level, and a grey Max button is MAX. Each click on the tile's Upg button
+must add a lit segment before the next click: a finite target waits 2 s for the
+new segment, so a slow bar cannot overshoot it, and MAX waits 0.6 s. Clicks that
+add nothing (not enough Yen) repeat at the same priority. Until a click is seen
+to work, every other retry selects the portrait first, so the macro learns
+whether Upg needs the unit selected; that is then kept for the session.
+The first tile seen for each slot teaches that slot's portrait colours; a tile
+that clearly looks like a different slot is never clicked. Unreadable bars,
+missing tiles or a portrait mismatch defer only that unit for 10, 20, 40, then
+60 seconds while other units continue; any confirmed upgrade resets the back-off.
+One diagnostic screenshot per unit per match is saved as cache\upg-tile-<id>.bmp.
+Target edits in the UI update already-recorded units immediately; only target 99
+requests MAX.
 
 Every confirmed purchase receives a number (#1, #2, ...), its exact position,
 slot, priority and upgrade target. The current numbered build is written to
-placement_run.ini. Upgrades select each recorded purchase number through the F unit manager
+placement_run.ini. Upgrades find each recorded purchase number's tile in the F unit manager
 and process the lowest unfinished
-priority first; equal priorities follow placement number. The selected unit
-stays open while R is pressed once per second until MAX or its configured
-target is confirmed. Waiting for Yen keeps that panel open. Cards are the only
-time the F manager is closed (one F, only when it is confirmed open); the unit
-panel is not clicked away. After the card the manager is reopened and the
-top-priority unit is reselected through it before any R. Counts advance only
-when the visible UPG level increases or MAX is confirmed. Unaffordable clicks
-stay pending at the same priority.
+priority first; equal priorities follow placement number. Cards are the only
+time the F manager is closed (one F, only when it is confirmed open). After the
+card the manager is reopened and the top-priority unit's tile is found again
+before any click. Counts advance only when a new lit segment appears or the
+grey Max button shows. Unaffordable clicks stay pending at the same priority.
 
 Confirmed positions are also saved by map pattern in placement_layouts.ini and
 by matching camera/player/window profile in learning.ini. Saved positions are
@@ -403,7 +404,7 @@ the coordinate is within 8–18 reference pixels of the road. Second rows requir
 a current first-row anchor and a road gap of 22–48 pixels. Stale candidates,
 cyan-only rings and blue regions without nearby lime road evidence are rejected.
 Run NavyPlacementTests.py, ToolbarTargetTests.py and UpgradeRegressionTests.py
-for the screenshot, saved P coordinate and exact-target-7 regressions.
+for the screenshot, saved P coordinate and tile-upgrade regressions.
 VisionRecoveryTests.py verifies black-frame fallback, the placement circle and
 camera translation. UnitPanelRegressionTests.py checks a second device layout.
 The shared screen reader rejects blank/wrong-size frames, falls back from DX
@@ -411,29 +412,36 @@ capture to MSS, and recreates MSS once before reporting a capture failure.
 Capture failures never count as five failed purchases or authorize movement.
 
 
-Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model and no panel has ever been seen. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
+Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model, no panel has ever been seen and the Yen counter did not confirm the purchase. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
 
 
 ## Unit manager selection
 
-F opens Unit Overview. Entries use confirmed purchase order: #1 bottom right,
-#2 bottom left, #3 row above right, #4 row above left, continuing upward two per row.
+F opens Unit Overview. The newest unit is top-left and the list reads left to
+right, top to bottom, so #1 is in the bottom row. With an even unit count the
+bottom row is #1 right, #2 left; with an odd count #1 is ALONE at the bottom
+left, and each row above holds the next even purchase on the right and odd on
+the left. The macro reads which case applies from the bottom row itself.
 Before selecting a recorded unit, the macro scrolls downward to the list bottom and
-confirms it is stationary. Upward scrolling uses one wheel notch at a time,
-checks the new row positions, and stops as soon as that unit's portrait has a clear,
-visible click area. Only the portrait is clicked; Sell X, Upgrade and targeting buttons
-are excluded. The side unit GUI confirms selection. Existing upgrade priorities,
-levels, targets, R guards and card recovery remain in place. F is pressed only
+confirms it is stationary. Upward scrolling uses one wheel notch at a time and
+checks the new row positions; reaching the top without the unit is reported as
+"fewer units than recorded". While the list has not moved, the last tile found
+is reused without scrolling. Upgrades click only the tile's Upg button (and the
+portrait, if the game needs the unit selected first); Sell X and targeting
+buttons are never clicked. F is pressed only
 after every unit is placed, then the manager stays open until the match ends,
 except while a card is chosen: it is closed for the card, then reopened. F is sent only after three consecutive "closed"
 readings, never twice within 2.5 s, and two unconfirmed presses lock F for 20 s.
 Click-aways use (497,168), left of the open manager. See MACRO_BEHAVIOUR.md.
 
 Validation: CheckpointManagerTests.py exercises route quarters, purchase-order
-selection through twenty entries, odd counts, bottom reset, and one-notch upward scrolling.
-UnitManagerVisionTests.py checks the supplied screenshot at multiple sizes and
-rejects portrait click areas hidden by the viewport. ActionPacingTests.py covers 150 ms unit actions
+selection through twenty entries in the game's newest-first layout, odd counts
+(#1 alone bottom-left), bottom reset, and one-notch upward scrolling.
+UnitManagerVisionTests.py checks the supplied screenshot at multiple sizes, rejects
+portrait click areas hidden by the viewport, and reads segments (lit vs white
+outline), the grey Max button, the Upg click point and portrait colours.
+ActionPacingTests.py covers 150 ms unit actions
 and unchanged 300 ms general controls. PlacementConfirmationTests.py checks
-panel-only confirmation, placement caps and continued placement at checkpoint 3.
+panel-only and Yen-drop confirmation, placement caps and continued placement at checkpoint 3.
 CardPriorityTests.py checks green Speed and unreadable green ahead of Yen/Boss,
 all offer positions, and confirmation retries with fresh effect colours.

@@ -13,7 +13,6 @@ logic = '\n'.join(function(file, name) for file, name in [
     ('Placement.ahk', 'CancelUnitPreview'),
     ('Placement.ahk', 'PlacementClickRef'),
     ('Learning.ahk', 'ClickWindowOnce'),
-    ('PlacedUnits.ahk', 'PressUnitUpgradeKey'),
 ]).replace('A_TickCount', 'testNow')
 
 fixture = r'''
@@ -21,7 +20,7 @@ fixture = r'''
 #SingleInstance Off
 #Warn All, Off
 global gRunning := true,gInputEpoch := 0,ACTION_GAP_MS := 300,gLastInputFinishedAt := 0
-global gUnitPreviewActive := true,gUpgradeLastRAt := 0,gPendingPlacement := 0,gPlacementAttemptClicked := false
+global gUnitPreviewActive := true,gPendingPlacement := 0,gPlacementAttemptClicked := false
 global testNow := 10000,events := [],ACTION_HOLD_MS := 300,UNIT_ACTION_MS := 150,CLICK_HOLD_MS := 300,MOUSE_SETTLE_MS := 0,stopAfter := 0
 global voteMode := false,voteVisible := true,mouseDownAt := 0
 try {
@@ -30,10 +29,10 @@ try {
     Assert(CancelUnitPreview(),"preview cancellation failed")
     count := events.Length
     Assert(CancelUnitPreview() && events.Length=count,"redundant Q consumed another action")
-    Assert(PressUnitUpgradeKey(),"upgrade key failed")
+    Assert(PlacementClickRef(700,190,true,0,true),"manager Upg button click failed")
     Assert(ClickRef(400,330),"standard click failed")
     Assert(ClickWindowOnce({x:400,y:330},{x:0,y:0}),"menu click failed")
-    lastUp := 0,actions := 0,downAt := 0,expected := [150,150,150,300,300,300]
+    lastUp := 0,actions := 0,downAt := 0,expected := [150,150,150,150,300,300]
     for event in events {
         if InStr(event.key,"down") {
             actions += 1

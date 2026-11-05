@@ -2,7 +2,10 @@
 global PLACEMENT_RUN_FILE := A_ScriptDir "\placement_run.ini"
 global PLACEMENT_LAYOUT_FILE := A_ScriptDir "\placement_layouts.ini"
 global gRunRecording := false,gRunMap := "",gLayoutValidation := Map()
-global gUpgradeSelectedId := 0,gUpgradeLastRAt := 0,gUpgradeReadAt := 0
+global gUpgradeSelectedId := 0
+; How the tile's Upg button works in this game: "" until a click is seen to add
+; a segment, then "direct" (Upg alone) or "select" (portrait first, then Upg).
+global gUpgradeClickMode := ""
 
 BeginPlacementRun() {
     global gRunRecording,gRunMap,gMapModel,gLayoutValidation
@@ -10,6 +13,9 @@ BeginPlacementRun() {
     ResetUpgradeSelection()
     ResetPlacementArea()
     SavePlacementRun()
+    ; Leftover Yen evidence from an interrupted match.
+    Loop Files A_ScriptDir "\cache\yen-*.bmp"
+        try FileDelete A_LoopFileFullPath
 }
 
 SavePlacementRun() {
@@ -49,7 +55,7 @@ SaveLayoutPoint(item) {
     IniWrite gMapModel.id,PLACEMENT_LAYOUT_FILE,section,"map_id"
 }
 
-RegisterPlacedUnit(unit,point) {
+RegisterPlacedUnit(unit,point,how := "unit panel confirmed") {
     global gPlacements
     if CandidateOccupied(point.x,point.y) {
         Log("Existing recorded position rejected; slot " unit.slot " count unchanged.")
@@ -61,7 +67,7 @@ RegisterPlacedUnit(unit,point) {
     RememberPlacement(unit,point,true)
     SaveLayoutPoint(item)
     SavePlacementRun()
-    Log("Placed #" item.id " " item.name " at " item.x "," item.y "; priority " item.priority "; unit panel confirmed.")
+    Log("Placed #" item.id " " item.name " at " item.x "," item.y "; priority " item.priority "; " how ".")
     return item
 }
 
@@ -128,19 +134,19 @@ UpgradeQueue(readyOnly := false) {
 }
 
 ResetUpgradeSelection() {
-    global gUpgradeSelectedId,gUpgradeLastRAt,gUpgradeReadAt
-    gUpgradeSelectedId := 0,gUpgradeLastRAt := 0,gUpgradeReadAt := 0
+    global gUpgradeSelectedId
+    gUpgradeSelectedId := 0
+    ForgetManagerTile()
 }
 
-ResetFiniteUpgradeGuard(item) {
-    item.upgradeInputCount := 0,item.upgradeInputLimit := -1
-    item.lastUpgradeInputLevel := -1,item.lastUpgradeInputAt := 0,item.upgradeWarningAt := 0
-    item.upgradeRetryAt := 0
-    item.lastUpgradeInputSignature := "",item.upgradeUnreadCount := 0
+ResetUpgradeTracking(item) {
+    item.lastClickAt := 0,item.lastClickMode := "",item.noChange := 0
+    item.upgradeUnreadCount := 0,item.lowerReads := 0,item.upgradeWarningAt := 0
+    item.upgradeRetryAt := 0,item.deferCount := 0
 }
 
 RefreshRecordedUpgradeTarget(item) {
-    global gUnitControls,gUpgradeReadAt,gUpgradeSelectedId
+    global gUnitControls,gUpgradeSelectedId
     if !IsSet(gUnitControls) || !IsObject(gUnitControls) || item.slot<1 || item.slot>gUnitControls.Length
         return false
     control := gUnitControls[item.slot]
@@ -151,10 +157,9 @@ RefreshRecordedUpgradeTarget(item) {
         return false
     Log("#" item.id " slot " item.slot ": upgrade target changed " item.target " -> " target ".")
     item.target := target,item.complete := target=0 || (target!=99 && item.upgrades>=target)
-    ResetFiniteUpgradeGuard(item)
-    gUpgradeReadAt := 0
+    ResetUpgradeTracking(item)
     if item.complete && gUpgradeSelectedId=item.id {
-        ClickAwayFromUnitPanel()
+        CloseUnitPanel()
         ResetUpgradeSelection()
     }
     SavePlacementRun()
@@ -170,121 +175,33 @@ UpgradePriorityPass() {
         UpgradeOnce(queue[1])
 }
 
-ParseUpgradeState(rows,geometry) {
-    global REF_W,REF_H
-    state := {level:-1,maxed:false,x:210,y:368,raw:""}
-    heading := UnitPanelRegion("header"),button := UnitPanelRegion("button")
-    for row in rows {
-        text := NormalizeWords(row.text)
-        state.raw .= (state.raw=""?"":" | ") text
-        y := (row.y+row.h/2)*REF_H/geometry.ch
-        if y>=heading[2]-6 && y<=heading[4]+6 && RegExMatch(text,"\bu\s*p\s*[g69](?:rade)?\s*(?:\[|:|\.|-)?\s*(\d+|o)",&match)
-            state.level := match[1]="o"?0:Integer(match[1])
-        if y>=heading[2]-6 && y<=heading[4]+6 && RegExMatch(text,"\bupg(?:rade)?\s*max(?:ed)?\b")
-            state.maxed := true
-        if y>=button[2]-6 && y<=button[4]+6 {
-            if RegExMatch(text,"^(?:(?:upgrade|upg)\s+)?max(?:ed)?(?:\s+(?:upgrade|upg|level))?$")
-                state.maxed := true
-            if RegExMatch(text,"\bupgrade\b") {
-                state.x := (row.x+row.w/2)*REF_W/geometry.cw
-                state.y := y
-            }
-        }
-    }
-    return state
-}
-
-UnitUpgradeButtonReady(frame := 0) {
-    region := UnitPanelRegion("button")
-    if !frame
-        frame := RefPixels(region*)
-    return frame.valid && UnitPanelColourHits(frame,region[1],region[2],region[3],region[4],IsUiGreen)>=8
-}
-
-ReadUnitUpgradeState(finite := false) {
-    geometry := WindowGeometry()
-    if !geometry
-        return {level:-1,maxed:false,signature:"",canUpgrade:false,x:210,y:368,raw:"window unavailable"}
-    ; Keep numbers from damage, cooldown and upgrade cost out of the level OCR.
-    before := finite?UpgradeHeaderSignature():""
-    header := UnitPanelRegion("header")
-    rows := finite?ReadOcrRows(header[1],header[2],header[3],header[4],false,4):ReadOcrRows(0,100,340,520)
-    state := ParseUpgradeState(rows,geometry)
-    if finite && state.level<0 && !state.maxed {
-        ; Windows OCR can drop the bracketed digit at 4x but read it at 2x.
-        rows := ReadOcrRows(header[1],header[2],header[3],header[4],false,2)
-        state := ParseUpgradeState(rows,geometry)
-    }
-    state.canUpgrade := !finite || UnitUpgradeButtonReady()
-    if finite && (state.level<0 || !state.canUpgrade) {
-        full := ParseUpgradeState(ReadOcrRows(0,100,340,520),geometry)
-        if state.level<0
-            state.level := full.level
-        state.maxed := state.maxed || full.maxed
-        state.raw .= " | " full.raw
-    }
-    state.signature := finite?UpgradeHeaderSignature():""
-    ; Why a finite read failed, for the Activity log (diagnostic only).
-    state.unread := ""
-    if finite && (before="" || before!=state.signature) {
-        state.unread := before=""?"no gold UPG heading pixels":"UPG heading pixels changed during OCR (OCR level " state.level ")"
-        state.level := -1,state.signature := ""
-    } else if finite && state.level<0
-        state.unread := "OCR found no UPG number"
-    return state
-}
-
-UpgradeHeaderSignature() {
-    region := UnitPanelRegion("header")
-    frame := RefPixels(region*)
-    if !frame.valid
-        return ""
-    ; Only the fixed gold heading participates, never animated scenery/stats.
-    signature := "",hits := 0
-    Loop frame.height {
-        y := A_Index-1
-        Loop frame.width {
-            ink := IsUiYellow(frame.At(A_Index-1,y))
-            signature .= ink?"1":"0",hits += ink?1:0
-        }
-    }
-    return hits>=8?signature:""
-}
-
-; Evidence for an unreadable UPG heading: the client area exactly as it was.
+; Evidence for a tile that could not be used: the client area exactly as it
+; was. Saved once per unit per match, not on every retry.
 SaveUpgradeDiagnostic(item) {
-    path := A_ScriptDir "\cache\upg-unreadable-" item.id ".bmp"
+    if item.HasProp("diagnosticSaved") && item.diagnosticSaved
+        return
+    item.diagnosticSaved := true
+    path := A_ScriptDir "\cache\upg-tile-" item.id ".bmp"
     frame := RefPixels(0,0,800,600)
     if frame.valid && SaveFrameBmp(frame,path)
         Log("#" item.id ": saved " path " for diagnosis.")
 }
 
+; A genuinely stuck unit backs off 10, 20, 40, then 60 seconds so lower
+; priorities keep upgrading; any confirmed upgrade resets the back-off.
 DeferUnitUpgrade(item,message) {
-    ; Unreadable pending targets remain unfinished and return to their priority.
-    item.upgradeRetryAt := A_TickCount+10000
-    UpgradeWarning(item,message " Retry in 10 seconds; continue other units.")
-    ClickAwayFromUnitPanel()
+    count := (item.HasProp("deferCount")?item.deferCount:0)+1
+    delay := Min(60,10*(2**(count-1)))
+    item.deferCount := count,item.upgradeRetryAt := A_TickCount+delay*1000
+    item.lastClickAt := 0,item.noChange := 0,item.upgradeUnreadCount := 0,item.upgradeWarningAt := A_TickCount
+    Log("#" item.id " " item.name ": " message " Retry in " delay " seconds; continue other units.")
+    CloseUnitPanel()
     ResetUpgradeSelection()
     return false
 }
 
 OpenRecordedUnit(item) {
     return SelectManagedUnit(item.id)
-}
-
-PressUnitUpgradeKey() {
-    global gRunning,gUpgradeLastRAt,ACTION_HOLD_MS
-    if !gRunning || HasCardChoice() || !HasUnitPanel()
-        return false
-    if !BeginInputAction()
-        return false
-    gUpgradeLastRAt := A_TickCount
-    SendEvent "{r down}"
-    try return ActionPause(ACTION_HOLD_MS,false)
-    finally {
-        SendEvent "{r up}"
-        EndInputAction()
-    }
 }
 
 UpgradeOnce(item) {
@@ -296,7 +213,7 @@ UpgradeOnce(item) {
             result := UpgradeOnceAction(item)
             if epoch=gCardInterruptEpoch || !gRunning || item.complete
                 return result
-            ; Keep this exact recorded unit/priority after closing its panel.
+            ; Keep this exact recorded unit/priority after the card.
         }
     } finally gCardAction := previous
 }
@@ -310,8 +227,64 @@ UpgradeWarning(item,message) {
     }
 }
 
+PortraitDistance(a,b) {
+    left := StrSplit(a,"."),right := StrSplit(b,".")
+    if left.Length!=right.Length
+        return 999
+    total := 0
+    for index,value in left
+        total += Abs(Integer(value)-Integer(right[index]))
+    return total
+}
+
+SlotDisplayName(slot) {
+    global gPlacements
+    for item in gPlacements
+        if item.slot=slot
+            return item.name
+    return "slot " slot
+}
+
+; The first tile seen for a slot teaches that slot's portrait colours. A
+; later tile is refused only on clear evidence: far from its own slot's look
+; and at most half as far from another slot's. Look-alike units never block.
+TileIdentityMismatch(item,entry) {
+    global gSlotPortraits
+    if entry.sig=""
+        return false
+    if !gSlotPortraits.Has(item.slot) {
+        gSlotPortraits[item.slot] := entry.sig
+        return false
+    }
+    own := PortraitDistance(entry.sig,gSlotPortraits[item.slot])
+    if own<40
+        return false
+    for slot,sig in gSlotPortraits {
+        if slot=item.slot
+            continue
+        other := PortraitDistance(entry.sig,sig)
+        if other*2<=own {
+            Log("#" item.id " " item.name ": this tile looks like " SlotDisplayName(slot) " (distance " other ") rather than " item.name " (distance " own ").")
+            return true
+        }
+    }
+    return false
+}
+
+ClickTileUpgrade(entry,select) {
+    global gUpgradeSelectedId
+    if select {
+        if !ClickManagerPoint(entry.x,entry.y) || !WaitForUnitPanel(600,true)
+            return false
+    }
+    return ClickManagerPoint(entry.ux,entry.uy)
+}
+
+; One upgrade step for a recorded purchase, entirely from its manager tile:
+; lit segments are the level, a grey Max button is MAX, and every click on the
+; tile's Upg button is confirmed by a new lit segment before the next one.
 UpgradeOnceAction(item) {
-    global gRunning,gUpgradeSelectedId,gUpgradeLastRAt,gUpgradeReadAt,gUnitManagerFailure
+    global gRunning,gUnitManagerFailure,gUpgradeClickMode,gUpgradeSelectedId
     RefreshRecordedUpgradeTarget(item)
     if item.complete
         return true
@@ -319,113 +292,100 @@ UpgradeOnceAction(item) {
         return false
     if item.HasProp("upgradeRetryAt") && A_TickCount<item.upgradeRetryAt
         return false
-    if !item.HasProp("upgradeInputLimit")
-        ResetFiniteUpgradeGuard(item)
-    if gUpgradeSelectedId!=item.id || !HasUnitPanel() {
-        ResetUpgradeSelection()
-        Log("Open upgrade #" item.id " " item.name " | priority " item.priority " | target " item.target " | select purchase #" item.id " through F manager")
-        if !OpenRecordedUnit(item) {
-            if !gRunning
-                return false
-            reason := IsSet(gUnitManagerFailure)?gUnitManagerFailure:""
-            if reason="card" || HasCardChoice() {
-                ; A card interrupted the selection: choose it (manager stays open),
-                ; then reselect this same top-priority unit. Never a skip.
-                ClearCardChoice()
-                return false
-            }
-            item.openFailures := (item.HasProp("openFailures")?item.openFailures:0)+1
-            ; Manager visibility is not this unit's fault, and a single missed
-            ; portrait click is retried at the same priority instead of skipped.
-            if reason="manager" || item.openFailures<3 {
-                UpgradeWarning(item,"selection through the unit manager did not finish" (reason=""?"":" (" reason ")") "; retry the same priority.")
-                return false
-            }
-            item.openFailures := 0
-            return DeferUnitUpgrade(item,"Unit panel did not open after three tries; let the other units upgrade.")
+    if !item.HasProp("noChange")
+        ResetUpgradeTracking(item)
+    if !(found := LocateManagedUnit(item.id)) {
+        if !gRunning
+            return false
+        reason := gUnitManagerFailure
+        if reason="card" || HasCardChoice() {
+            ; Choose the card (manager closed and reopened), then this same unit.
+            ClearCardChoice()
+            return false
+        }
+        item.openFailures := (item.HasProp("openFailures")?item.openFailures:0)+1
+        if reason="manager" || item.openFailures<3 {
+            UpgradeWarning(item,"tile not found in the unit manager" (reason=""?"":" (" reason ")") "; retry the same priority.")
+            return false
         }
         item.openFailures := 0
-        gUpgradeSelectedId := item.id
+        SaveUpgradeDiagnostic(item)
+        return DeferUnitUpgrade(item,"tile not found in the unit manager after three tries" (reason=""?"":" (" reason ")") "; let the other units upgrade.")
+    }
+    item.openFailures := 0
+    entry := found.entry
+    if TileIdentityMismatch(item,entry) {
+        SaveUpgradeDiagnostic(item)
+        return DeferUnitUpgrade(item,"the purchase list and the unit manager disagree about this tile. No upgrade clicked.")
+    }
+    level := entry.filled
+    if level<0 && !entry.maxed {
+        item.upgradeUnreadCount += 1
+        if item.upgradeUnreadCount>=3 {
+            SaveUpgradeDiagnostic(item)
+            return DeferUnitUpgrade(item,"upgrade segments unreadable three times. No upgrade clicked.")
+        }
+        UpgradeWarning(item,"upgrade segments unreadable; no upgrade clicked until the level is visible.")
+        return false
+    }
+    item.upgradeUnreadCount := 0
+    if level>=0 && level<item.upgrades {
+        ; Fewer segments than already confirmed: re-find the tile first, and only
+        ; accept the lower count after it is read three times in a row.
+        item.lowerReads += 1
+        ForgetManagerTile()
+        if item.lowerReads<3 {
+            UpgradeWarning(item,"tile shows " level " upgrades, below the confirmed " item.upgrades "; re-finding the tile before any click.")
+            return false
+        }
+        Log("#" item.id " " item.name ": tile read " level " upgrades three times; using it instead of " item.upgrades ".")
+        item.upgrades := level
+    }
+    item.lowerReads := 0
+    if level>item.upgrades {
+        Log("#" item.id " " item.name ": upgrade " item.upgrades " -> " level (entry.total>0?" of " entry.total:"") " confirmed on the manager tile.")
+        if gUpgradeClickMode="" && item.lastClickMode!="" {
+            gUpgradeClickMode := item.lastClickMode
+            Log(gUpgradeClickMode="direct"?"Upgrade clicks work directly on the tile's Upg button.":"Upgrade clicks need the unit selected first; selecting the portrait before Upg from now on.")
+        }
+        item.upgrades := level,item.noChange := 0,item.deferCount := 0,item.lastClickAt := 0
+        SavePlacementRun()
     }
     finite := item.target!=99
-    wantsInput := !gUpgradeLastRAt || A_TickCount-gUpgradeLastRAt>=300
-    ; Every finite-target R needs its own fresh header read.
-    if finite && (!wantsInput || (gUpgradeReadAt && A_TickCount<gUpgradeReadAt))
-        return false
-    state := 0
-    if finite || wantsInput || !gUpgradeReadAt || A_TickCount>=gUpgradeReadAt {
-        state := ReadUnitUpgradeState(finite)
-        gUpgradeReadAt := A_TickCount+(finite?600:2000)
-        if RefreshRecordedUpgradeTarget(item)
-            return item.complete
-        finite := item.target!=99
-        if state.level>=0 && state.level>item.upgrades {
-            Log("#" item.id " confirmed UPG " item.upgrades " -> " state.level)
-            item.upgrades := state.level
-            SavePlacementRun()
-        }
-        if item.complete || state.maxed || (state.level>=0 && finite && state.level>=item.target) {
-            item.complete := true
-            SavePlacementRun()
-            Log("#" item.id " target " item.target " reached" (state.maxed?" (MAX).":" at UPG " state.level "."))
-            ClickAwayFromUnitPanel()
-            ResetUpgradeSelection()
-            next := UpgradeQueue()
-            if next.Length
-                Log("Next upgrade #" next[1].id " " next[1].name " | priority " next[1].priority " | target " next[1].target)
-            else
-                Log("All recorded units have reached their upgrade targets.")
-            return true
-        }
+    if entry.maxed || (finite && level>=item.target) {
+        item.complete := true
+        SavePlacementRun()
+        Log("#" item.id " target " item.target " reached" (entry.maxed?" (MAX).":" at upgrade " level "."))
+        if gUpgradeSelectedId=item.id
+            CloseUnitPanel()
+        ResetUpgradeSelection()
+        next := UpgradeQueue()
+        if next.Length
+            Log("Next upgrade #" next[1].id " " next[1].name " | priority " next[1].priority " | target " next[1].target)
+        else
+            Log("All recorded units have reached their upgrade targets.")
+        return true
+    }
+    ; One click at a time. A finite target waits 2 s for its new segment, so a
+    ; slow bar can never let a second click overshoot the target.
+    if item.lastClickAt {
+        if A_TickCount-item.lastClickAt<(finite?2000:600)
+            return false
+        item.noChange += 1
+        if Mod(item.noChange,5)=0
+            UpgradeWarning(item,"no new segment after " item.noChange " Upg clicks; waiting for Yen and retrying.")
     }
     if HasCardChoice() {
         ClearCardChoice()
         return false
     }
-    if finite {
-        if !state || state.level<0 {
-            item.upgradeUnreadCount += 1
-            detail := state && state.HasProp("unread") && state.unread!=""?" [" state.unread " | OCR: " SubStr(state.raw,1,90) "]":""
-            if item.upgradeUnreadCount>=3 {
-                SaveUpgradeDiagnostic(item)
-                return DeferUnitUpgrade(item,"UPG header unreadable" detail "; target " item.target " remains pending. No R sent.")
-            }
-            UpgradeWarning(item,"UPG number unreadable" detail "; target " item.target ". No R sent until a level is confirmed.")
-            return false
-        }
-        item.upgradeUnreadCount := 0
-        if state.level<item.upgrades {
-            UpgradeWarning(item,"stale UPG reading below confirmed " item.upgrades "; no R sent.")
-            return false
-        }
-        if item.lastUpgradeInputLevel>=0 && state.level<=item.lastUpgradeInputLevel {
-            if A_TickCount-item.lastUpgradeInputAt<4000
-                return false
-            ; Retry an ignored R only when both OCR and the actual gold glyphs
-            ; still show the same level. Changed glyphs + stale OCR cannot spend
-            ; another input, even if the configured target has not been read yet.
-            if state.signature="" || state.signature!=item.lastUpgradeInputSignature
-                return DeferUnitUpgrade(item,"UPG pixels changed but OCR has not confirmed the new level. No extra R sent.")
-            item.upgradeInputCount := Max(0,item.upgradeInputCount-1)
-            item.lastUpgradeInputLevel := -1
-        }
-        available := item.upgradeInputCount+Max(0,item.target-state.level)
-        item.upgradeInputLimit := item.upgradeInputLimit<0?available:Min(item.upgradeInputLimit,available)
-        if item.upgradeInputCount>=item.upgradeInputLimit {
-            return DeferUnitUpgrade(item,"Finite-target input limit reached; waiting for UPG " item.target " confirmation. No extra R sent.")
-        }
-        if !state.HasProp("canUpgrade") || !state.canUpgrade {
-            UpgradeWarning(item,"upgrade button is not affordable/ready; keep this unit selected and wait.")
-            return false
-        }
-        if PressUnitUpgradeKey() {
-            item.upgradeInputCount += 1,item.lastUpgradeInputLevel := state.level,item.lastUpgradeInputAt := A_TickCount
-            item.lastUpgradeInputSignature := state.signature
-            return true
-        }
+    ; Until a click has been seen to work, alternate: Upg alone twice, then
+    ; portrait + Upg, so either game behaviour is discovered.
+    select := gUpgradeClickMode="select" || (gUpgradeClickMode="" && item.noChange>=2 && Mod(item.noChange,2)=0)
+    if !ClickTileUpgrade(entry,select)
         return false
-    }
-    if wantsInput
-        return PressUnitUpgradeKey()
-    return false
+    if select
+        gUpgradeSelectedId := item.id
+    item.lastClickAt := A_TickCount,item.lastClickMode := select?"select":"direct"
+    return true
 }

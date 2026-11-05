@@ -6,7 +6,8 @@ logic = '\n'.join(function(file,name) for file,name in [
     ('Placement.ahk','TryPlacementCandidateAction'),('Placement.ahk','TrySelectUnitAt'),
     ('Placement.ahk','RecoverPendingPlacement'),
     ('Placement.ahk','RefreshPlacementSearch'),('Placement.ahk','PlacementPurchaseReady'),
-    ('Placement.ahk','FinishPlacement'),('Placement.ahk','CountSlotPlacements'),
+    ('Placement.ahk','FinishPlacement'),('Placement.ahk','CompletePlacement'),
+    ('Placement.ahk','ConfirmPurchaseByYen'),('Placement.ahk','CountSlotPlacements'),
     ('Placement.ahk','MissingBuildPlacements'),('AAPathMacro.ahk','CheckCardInterruption')])
 logic += '\n' + function('PlacedUnits.ahk','OpenRecordedUnit')
 for name in ['PlacementFailureLimitReached','ResetPlacementFailureStreak','RecordFailedPlacement','PlacementCopyFailures']:
@@ -24,6 +25,7 @@ global gCardHandling := false,gCardAction := "placement",gCardPollAt := 0,gCardI
 global panel := false,preview := false,existingModel := false,purchased := false,cards := false,buys := 0,slots := 0,registrations := 0
 global gPlacementLine := [],gLayoutValidation := Map(),gPlacementAreaFailures := Map(),PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global modelMode := false,models := Map(),hidePanels := false,delayPanel := false,rejectPurchase := false,failures := 0,cardDuringPurchase := false
+global yen := 5000,unitCost := 800,probesMiss := false,misreadAfter := false
 try {
     unit := {slot:1,name:"Unit 1",count:2,enabled:true},point := {x:400,y:330}
     existingModel := true
@@ -110,13 +112,31 @@ try {
     Assert(!PlacementFailureLimitReached() && TryPlacementCandidateAction(unit,point) && buys=1,"checkpoint 3 did not keep placing after five misses")
     gMapModel := 0
 
+    ; The user's log: a card opens right after the purchase, the panel never
+    ; shows and the probes cannot find the model. The Yen drop counts it once,
+    ; with no failed purchase recorded and no second buy.
+    gPlacements := [],registrations := 0,buys := 0,models := Map(),panel := false,yen := 5000
+    ResetPlacementFailureStreak()
+    unit := {slot:2,name:"Unit 2",count:1,enabled:true},hidePanels := true,probesMiss := true
+    Assert(TryPlacementCandidateAction(unit,{x:375,y:283}) && registrations=1 && buys=1,"placed unit hidden by a card was not counted from the Yen drop")
+    Assert(gConsecutivePlacementFailures=0 && !gPendingPlacement,"a Yen-confirmed purchase was also counted as a failure")
+    Assert(!TryPlacementCandidateAction(unit,{x:400,y:300}) && buys=1,"configured single copy was bought again after the Yen-confirmed purchase")
+    ; A misread that drops a digit is not a purchase.
+    gPlacements := [],registrations := 0,buys := 0,models := Map(),misreadAfter := true,yen := 5000
+    Assert(!TryPlacementCandidateAction(unit,{x:375,y:283}) && registrations=0 && gConsecutivePlacementFailures=1,"a digit-dropping Yen misread counted a purchase")
+    ; No Yen change (a really rejected spot) is still one failed purchase.
+    gPlacements := [],registrations := 0,buys := 0,models := Map(),misreadAfter := false,rejectPurchase := true
+    ResetPlacementFailureStreak()
+    Assert(!TryPlacementCandidateAction(unit,{x:375,y:283}) && registrations=0 && gConsecutivePlacementFailures=1,"unchanged Yen was treated as a purchase")
+    hidePanels := false,probesMiss := false,rejectPurchase := false,ResetPlacementFailureStreak()
+
     attempt := {pendingSlot:1,pendingCopy:1,pendingTarget:1}
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard ignored the completed target")
     gPlacements := [],gPendingPlacement := Pending(1,1)
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard overwrote an unresolved purchase")
     gPendingPlacement := 0,attempt.pendingCopy := 2
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard accepted the wrong copy number")
-    FileAppend "PASS: five actual rejected purchases counted once each; sixth buy blocked after rescan; side panel alone confirms a bound purchase; no UPG OCR; all 16 startup purchases across six slots advance; target four never buys five; existing-model/card/duplicate guards; delayed panel recovery and interruptions.`n","*"
+    FileAppend "PASS: five actual rejected purchases counted once each; sixth buy blocked after rescan; side panel alone confirms a bound purchase; no UPG OCR; all 16 startup purchases across six slots advance; target four never buys five; existing-model/card/duplicate guards; delayed panel recovery and interruptions; a card-hidden purchase is counted from its Yen drop, never as a failure or a second buy; digit-dropping misreads and unchanged Yen are not purchases.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack,"*"
@@ -149,8 +169,10 @@ PlacementClickRef(x,y,guard := false,purchase := 0) {
             return false
         gPendingPlacement := purchase,gPlacementAttemptClicked := true
         buys += 1,purchased := true
-        if !rejectPurchase
+        if !rejectPurchase {
             models[x "," y] := true
+            yen -= unitCost
+        }
         panel := !rejectPurchase && !delayPanel && !hidePanels
         delayPanel := false
         if cardDuringPurchase {
@@ -158,7 +180,7 @@ PlacementClickRef(x,y,guard := false,purchase := 0) {
             CheckCardInterruption()
         }
     } else
-        panel := !hidePanels && (modelMode?models.Has(x "," y):existingModel || purchased)
+        panel := !hidePanels && !probesMiss && (modelMode?models.Has(x "," y):existingModel || purchased)
     return true
 }
 WaitForUnitPanel(*) => panel
@@ -173,7 +195,7 @@ ClearCardChoice(*) {
     panel := false,cards := false,preview := false
     return true
 }
-RegisterPlacedUnit(unit,point) {
+RegisterPlacedUnit(unit,point,*) {
     global registrations,gPlacements
     registrations += 1
     item := {slot:unit.slot,x:point.x,y:point.y}
@@ -193,12 +215,15 @@ SelectManagedUnit(number) {
     panel := number>=1 && number<=gPlacements.Length
     return panel
 }
-UpgradeHeaderSignature(*) {
-    throw Error("Placement must not read the upgrade heading")
+CaptureYenImage() => "yen:" yen
+ReadYenImage(path) {
+    if path=""
+        return -1
+    value := Integer(SubStr(path,5))
+    ; A misread "after" image (below the 5000 start) loses its last digit.
+    return misreadAfter && value<5000?value//10:value
 }
-ReadUnitUpgradeState(*) {
-    throw Error("Placement must not OCR UPG 0")
-}
+DiscardYenEvidence(*) => 0
 '''
 
 if __name__ == '__main__':
