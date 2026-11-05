@@ -815,9 +815,22 @@ EnsureRouteAndSpawn() {
             return false
     } else if !ProbePlayer()
         return false
-    gMapModel.checkpoints := MapPlacementCheckpoints(gMapModel)
+    gMapModel.checkpoints := MapPlacementCheckpoints(gMapModel),gMapModel.baseHidden := false
+    if gMapModel.checkpoints.Length!=3 && !gMapModel.baseMarker && gMapModel.player {
+        ; The heart is hidden (the player spawns standing on it). The 25/50/75%
+        ; points are the same from either end, so draw them now, walk to the
+        ; middle one, and number them once the moving arrow uncovers the heart.
+        quarters := MapRouteQuarters(gMapModel)
+        if quarters.points.Length=3 {
+            gMapModel.checkpoints := quarters.points,gMapModel.routeEnds := quarters.ends,gMapModel.baseHidden := true
+            gMapModel.startPoint := {x:gMapModel.player.x,y:gMapModel.player.y}
+            gMapModel.checkpointIndex := 0,gMapModel.target := quarters.points[2]
+            Log("Base heart hidden on the minimap (player standing on it?). Route divided at 25%, 50%, 75%; walk to the middle point, then number the checkpoints once the heart is uncovered.")
+            return true
+        }
+    }
     if gMapModel.checkpoints.Length!=3 {
-        Log("Cannot divide the connected minimap route into three baseward checkpoints.")
+        Log("Cannot divide the connected minimap route into three baseward checkpoints" (gMapModel.baseMarker?".":" (no base heart found)."))
         return false
     }
     gMapModel.checkpointIndex := 0,gMapModel.target := gMapModel.checkpoints[1]
@@ -1302,6 +1315,9 @@ NavigateForPlacement() {
     }
     gNavigationTimedOut := true
     ReleaseMovementKeys()
+    ; Time ran out before the heart was seen: still number the checkpoints, so
+    ; later relocations move baseward.
+    ResolveHiddenBase(true)
     ResetPlacementSearch()
     Log("Navigation time expired. Keep the current player position; use the same path-side placement and selected Hill preferences.")
     return true

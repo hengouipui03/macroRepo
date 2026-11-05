@@ -336,14 +336,37 @@ MapPlacementCheckpoints(model) {
         if points.Length=3
             return points
     }
-    base := MapNearest(model.nodes,model.baseMarker.x,model.baseMarker.y)
-    tree := MapDistances(model.nodes,base),entrance := base,longest := -1
+    return MapRouteQuarters(model,MapNearest(model.nodes,model.baseMarker.x,model.baseMarker.y)).points
+}
+
+MapFarthestNode(nodes,start) {
+    tree := MapDistances(nodes,start),far := start,longest := -1
     for node,distance in tree.distance
         if distance>longest
-            entrance := node,longest := distance
+            far := node,longest := distance
+    return far
+}
+
+; The 25/50/75% points along the route. They are the same three spots from
+; either end; only their order (checkpoint 1 = furthest from the base) needs
+; the base. Without a base node, the route's two far ends are used (searched
+; from the node nearest the player) and the points come back unordered.
+MapRouteQuarters(model,base := -1) {
+    global MAP_GRID
+    if base<0 {
+        seed := model.player?MapNearest(model.nodes,model.player.x,model.player.y):-1
+        if seed<0
+            for node in model.nodes {
+                seed := node
+                break
+            }
+        base := MapFarthestNode(model.nodes,seed)
+    }
+    entrance := MapFarthestNode(model.nodes,base)
+    result := {points:[],ends:[entrance,base]}
     route := MapShortestPath(model.nodes,entrance,base)
     if route.Length<5
-        return []
+        return result
     lengths := [0],total := 0
     Loop route.Length-1 {
         a := route[A_Index],b := route[A_Index+1]
@@ -357,10 +380,49 @@ MapPlacementCheckpoints(model) {
             if Abs(length-total*share)<error
                 best := index,error := Abs(length-total*share)
         if points.Length && points[points.Length]=route[best]
-            return []
+            return result
         points.Push(route[best])
     }
-    return points
+    result.points := points
+    return result
+}
+
+; The base heart was hidden when the route was drawn (the player spawns
+; standing on it). The macro walks toward the middle checkpoint, which is the
+; same from either end, and checks the minimap again as it moves: once the
+; arrow has left the heart, the heart is read whole and the checkpoints are
+; numbered from it. final: the middle point was reached (or time ran out)
+; with the heart still hidden; the route end nearest where the player started
+; is taken as the base, since the player was standing on it.
+ResolveHiddenBase(final := false) {
+    global gMapModel,MAP_GRID
+    if !gMapModel || !gMapModel.HasProp("baseHidden") || !gMapModel.baseHidden
+        return false
+    if !gMapModel.baseMarker && gMapModel.source="vision" {
+        scan := VisionRequest("scan")
+        if VisionOk(scan) && scan.Has("heart") {
+            point := StrSplit(scan["heart"],",")
+            gMapModel.baseMarker := {x:Number(point[1]),y:Number(point[2])}
+        }
+    }
+    how := "uncovered"
+    if !gMapModel.baseMarker {
+        if !final
+            return false
+        start := gMapModel.startPoint,a := gMapModel.routeEnds[1],b := gMapModel.routeEnds[2]
+        end := MapDistance(start.x,start.y,Mod(a,MAP_GRID),a//MAP_GRID)<=MapDistance(start.x,start.y,Mod(b,MAP_GRID),b//MAP_GRID)?a:b
+        gMapModel.baseMarker := {x:Mod(end,MAP_GRID),y:end//MAP_GRID}
+        how := "still hidden; using the route end where the player started"
+    }
+    gMapModel.baseHidden := false
+    points := MapPlacementCheckpoints(gMapModel)
+    if points.Length!=3 {
+        Log("Base heart " how ", but the route could not be numbered from it; keep the current destination.")
+        return false
+    }
+    gMapModel.checkpoints := points,gMapModel.checkpointIndex := 0,gMapModel.target := points[1]
+    Log("Base heart " how " at " Round(gMapModel.baseMarker.x,1) "," Round(gMapModel.baseMarker.y,1) ": checkpoints numbered from the base; head for checkpoint 1.")
+    return true
 }
 
 ; Two-path maps: the purple path meets the green route at crossings and at a
@@ -608,6 +670,8 @@ NavigateByHeading() {
             }
             p := gMapModel.player,target := gMapModel.target
             if MapDistance(p.x,p.y,Mod(target,MAP_GRID),target//MAP_GRID)<2.2 {
+                if ResolveHiddenBase(true)
+                    continue
                 Log("Reached designated point on the minimap drawing.")
                 return true
             }
@@ -646,6 +710,7 @@ NavigateByHeading() {
                 return false
             ActionPause(80)
             if RefreshMapPlayer() {
+                ResolveHiddenBase()
                 moved := MapDistance(p.x,p.y,gMapModel.player.x,gMapModel.player.y)
                 if moved<0.45
                     stuck += 1
@@ -1060,6 +1125,10 @@ NavigateWithKeys() {
             p := gMapModel.player,target := gMapModel.target
             tx := Mod(target,MAP_GRID),ty := target//MAP_GRID
             if MapDistance(p.x,p.y,tx,ty)<2.2 {
+                if ResolveHiddenBase(true) {
+                    toTarget := MapDistances(gMapModel.nodes,gMapModel.target),escape := 0
+                    continue
+                }
                 Log("Reached designated point on the minimap drawing.")
                 return true
             }
@@ -1112,6 +1181,9 @@ NavigateWithKeys() {
                 }
                 continue
             }
+            ; Hidden base: re-read the minimap now the arrow has moved.
+            if ResolveHiddenBase()
+                toTarget := MapDistances(gMapModel.nodes,gMapModel.target),escape := 0
             ox := gMapModel.player.x-before.x,oy := gMapModel.player.y-before.y
             moved := MapDistance(0,0,ox,oy),wanted := MapDistance(0,0,expected.x,expected.y)
             ; An escape ends once the player is clearly closer along the route

@@ -47,6 +47,13 @@ check(abs(x - 140) < 3 and abs(y - 244) < 3, "fixture chevron at %.1f,%.1f" % (x
 x, y = pixels(fixture, scan["heart"])
 check(abs(x - 83) < 3 and abs(y - 236) < 3, "fixture heart at %.1f,%.1f" % (x, y))
 
+# Magic Town: the player spawns on the heart and its chevron outline cuts the
+# heart into small white pieces, so no heart is reported. The route is still
+# read; AHK walks toward the middle checkpoint and reads the heart once uncovered.
+onheart = mv.read_image(os.path.join(HERE, "player-on-heart-minimap.png"))
+onheart_scan = vision_for(onheart).scan()
+check("heart" not in onheart_scan and onheart_scan["route"].count("1") > 100, "player-on-heart frame: %s" % {k: v for k, v in onheart_scan.items() if k not in ("route", "occluded")})
+
 # The screenshot's route is darker along its length and largely covered by
 # enemies. Every visible route cell must lie on the clean fixture route, and
 # route plus occluded cells must cover the fixture route for AHK to bridge.

@@ -2,7 +2,7 @@
 import subprocess
 from UpgradeRegressionTests import ROOT,RUNTIME,function
 
-route_logic='\n'.join(function('MapNavigation.ahk',n) for n in ['MapNeighbours','MapNearest','MapDistances','MapShortestPath','MapPlacementCheckpoints','MapCrossingCheckpoints'])
+route_logic='\n'.join(function('MapNavigation.ahk',n) for n in ['MapNeighbours','MapNearest','MapDistances','MapShortestPath','MapPlacementCheckpoints','MapFarthestNode','MapRouteQuarters','MapCrossingCheckpoints'])
 route_fixture=r'''
 #Requires AutoHotkey v2.0
 #SingleInstance Off
@@ -27,6 +27,19 @@ try {
     Assert(Mod(points[1],96)<50 && points[3]//96>20,"bent route used straight screen distance instead of route order")
     model.baseMarker := false
     Assert(MapPlacementCheckpoints(model).Length=0,"missing base silently invented route direction")
+    ; Hidden heart (player standing on it): the same three points come from
+    ; the route's ends without a base; the middle one is the same either way.
+    model.player := {x:50,y:49}
+    hidden := MapRouteQuarters(model)
+    model.baseMarker := {x:50,y:50}
+    known := MapPlacementCheckpoints(model)
+    ; Within 2 cells: the two directions may split a corner differently.
+    near := (a,b) => Abs(Mod(a,96)-Mod(b,96))<=2 && Abs(a//96-b//96)<=2
+    Assert(hidden.points.Length=3 && near(hidden.points[2],known[2]),"hidden-base middle point differed from the numbered checkpoint 2")
+    Assert((near(hidden.points[1],known[1]) && near(hidden.points[3],known[3])) || (near(hidden.points[1],known[3]) && near(hidden.points[3],known[1])),"hidden-base points were not the same three spots")
+    e1 := hidden.ends[1],e2 := hidden.ends[2]
+    Assert((e1=50*96+50 && e2=10*96+10) || (e1=10*96+10 && e2=50*96+50),"hidden-base route ends were not the two far ends")
+    model.baseMarker := false
     ; Two-path map: the meeting points replace the quarters, first crossing
     ; (furthest from the base along the route) first, whatever order vision gave.
     nodes := Map()
@@ -41,7 +54,7 @@ try {
     Assert(points.Length=3 && points[1]=40*96+30 && points[2]>points[1] && points[3]>points[2] && points[3]<40*96+80,"a single crossing did not lead the checkpoints")
     model.crossings := []
     Assert(MapPlacementCheckpoints(model)[1]=40*96+20,"one-path maps changed")
-    FileAppend "PASS: quarter-path checkpoints on straight/bent routes; entrance-to-base order; missing-base rejection; two-path maps start at the first crossing, then the next meeting points toward the base.`n","*","UTF-8"
+    FileAppend "PASS: quarter-path checkpoints on straight/bent routes; entrance-to-base order; missing-base rejection; hidden-base quarters match the numbered ones; two-path maps start at the first crossing, then the next meeting points toward the base.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
