@@ -14,7 +14,8 @@ Requests:
     locate cx cy cw ch hl ht hr hb   client rect (screen) + guessed box (client)
     box cx cy l t w h                client origin (screen) + known box (client)
     load <path>                      read a .png/.bmp/.mapframe instead of the screen
-    scan                             route/occlusion bits, heart, static player
+    scan                             route/occlusion bits, heart, static player,
+                                     crossings with a second (purple) path
     mark                             remember the current frame for "moved"
     moved                            the white marker that changed since "mark"
     track x y radius                 the player marker nearest a predicted point
@@ -130,6 +131,43 @@ def masks(image):
     # the purple boss and similar enemy markers.
     icon = (s >= 110) & (v >= 120) & ~route & ~((h >= 68) & (h <= 92))
     return route, white, icon
+
+
+def second_route(image):
+    """A second, purple enemy path (two-path maps). Only long lines count, so
+    purple enemy markers such as the boss icon are never taken for a path."""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    purple = ((h >= 125) & (h <= 160) & (s >= 120) & (v >= 90)).astype(np.uint8)
+    scale = image.shape[1] / REF_SIDE
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(purple, 8)
+    path = np.zeros(purple.shape, bool)
+    for index in range(1, count):
+        if max(stats[index][2], stats[index][3]) >= 60 * scale:
+            path |= labels == index
+    return path
+
+
+def path_crossings(image, route, purple):
+    """Grid points where the purple path meets the green route: every crossing
+    and the merge before the base, nearby contacts merged into one point."""
+    if not purple.any() or not route.any():
+        return []
+    scale = image.shape[1] / REF_SIDE
+    k = max(3, int(round(5 * scale))) | 1
+    kernel = np.ones((k, k), np.uint8)
+    touch = (cv2.dilate(route.astype(np.uint8), kernel) > 0) & (cv2.dilate(purple.astype(np.uint8), kernel) > 0)
+    count, _, stats, centres = cv2.connectedComponentsWithStats(touch.astype(np.uint8), 8)
+    points = [tuple(centres[i]) for i in range(1, count) if stats[i][4] >= 3 * scale * scale]
+    clusters = []
+    for x, y in points:
+        for cluster in clusters:
+            if any((x - cx) ** 2 + (y - cy) ** 2 <= (28 * scale) ** 2 for cx, cy in cluster):
+                cluster.append((x, y))
+                break
+        else:
+            clusters.append([(x, y)])
+    return [grid_point(image, float(np.mean([p[0] for p in c])), float(np.mean([p[1] for p in c]))) for c in clusters]
 
 
 def frame_mask(image):
@@ -278,6 +316,9 @@ class Vision:
                  "size": "%d,%d" % (image.shape[1], image.shape[0]), "arrows": len(arrows)}
         if heart:
             reply["heart"] = "%.2f,%.2f" % grid_point(image, heart["x"], heart["y"])
+        crossings = path_crossings(image, route, second_route(image))
+        if crossings:
+            reply["crossings"] = ";".join("%.2f,%.2f" % point for point in crossings)
         if len(arrows) == 1:
             reply["player"] = "%.2f,%.2f,%.2f" % (grid_point(image, arrows[0]["x"], arrows[0]["y"]) + (0.8,))
         elif arrows:

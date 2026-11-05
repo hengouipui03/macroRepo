@@ -2,7 +2,7 @@
 import subprocess
 from UpgradeRegressionTests import ROOT,RUNTIME,function
 
-route_logic='\n'.join(function('MapNavigation.ahk',n) for n in ['MapNeighbours','MapNearest','MapDistances','MapShortestPath','MapPlacementCheckpoints'])
+route_logic='\n'.join(function('MapNavigation.ahk',n) for n in ['MapNeighbours','MapNearest','MapDistances','MapShortestPath','MapPlacementCheckpoints','MapCrossingCheckpoints'])
 route_fixture=r'''
 #Requires AutoHotkey v2.0
 #SingleInstance Off
@@ -27,7 +27,21 @@ try {
     Assert(Mod(points[1],96)<50 && points[3]//96>20,"bent route used straight screen distance instead of route order")
     model.baseMarker := false
     Assert(MapPlacementCheckpoints(model).Length=0,"missing base silently invented route direction")
-    FileAppend "PASS: quarter-path checkpoints on straight/bent routes; entrance-to-base order; missing-base rejection.`n","*","UTF-8"
+    ; Two-path map: the meeting points replace the quarters, first crossing
+    ; (furthest from the base along the route) first, whatever order vision gave.
+    nodes := Map()
+    Loop 81
+        nodes[40*96+A_Index-1] := true
+    model := {nodes:nodes,baseMarker:{x:80,y:40},crossings:[{x:60,y:41},{x:20,y:39},{x:50,y:40}]}
+    points := MapPlacementCheckpoints(model)
+    Assert(points.Length=3 && points[1]=40*96+20 && points[2]=40*96+50 && points[3]=40*96+60,"two-path checkpoints were not the meeting points in route order")
+    ; One meeting point: it comes first, the rest spread toward the base.
+    model.crossings := [{x:30,y:40}]
+    points := MapPlacementCheckpoints(model)
+    Assert(points.Length=3 && points[1]=40*96+30 && points[2]>points[1] && points[3]>points[2] && points[3]<40*96+80,"a single crossing did not lead the checkpoints")
+    model.crossings := []
+    Assert(MapPlacementCheckpoints(model)[1]=40*96+20,"one-path maps changed")
+    FileAppend "PASS: quarter-path checkpoints on straight/bent routes; entrance-to-base order; missing-base rejection; two-path maps start at the first crossing, then the next meeting points toward the base.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"

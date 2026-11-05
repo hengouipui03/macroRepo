@@ -331,6 +331,11 @@ MapPlacementCheckpoints(model) {
     global MAP_GRID
     if !model.baseMarker || !model.nodes.Count
         return []
+    if model.HasProp("crossings") && model.crossings.Length {
+        points := MapCrossingCheckpoints(model)
+        if points.Length=3
+            return points
+    }
     base := MapNearest(model.nodes,model.baseMarker.x,model.baseMarker.y)
     tree := MapDistances(model.nodes,base),entrance := base,longest := -1
     for node,distance in tree.distance
@@ -354,6 +359,50 @@ MapPlacementCheckpoints(model) {
         if points.Length && points[points.Length]=route[best]
             return []
         points.Push(route[best])
+    }
+    return points
+}
+
+; Two-path maps: the purple path meets the green route at crossings and at a
+; merge before the base. Checkpoint 1 is the meeting point furthest from the
+; base along the route (the first crossing the enemies reach); later ones are
+; the next meeting points toward the base. With fewer than three meeting
+; points the rest are spread along the route from the last one to the base.
+MapCrossingCheckpoints(model) {
+    global MAP_GRID
+    base := MapNearest(model.nodes,model.baseMarker.x,model.baseMarker.y)
+    tree := MapDistances(model.nodes,base),meets := []
+    for point in model.crossings {
+        node := MapNearest(model.nodes,point.x,point.y)
+        if node<0 || !tree.distance.Has(node)
+            continue
+        distance := tree.distance[node],duplicate := false
+        for other in meets
+            if Abs(other.distance-distance)<8
+                duplicate := true
+        if duplicate
+            continue
+        at := meets.Length+1
+        for index,other in meets {
+            if distance>other.distance {
+                at := index
+                break
+            }
+        }
+        meets.InsertAt(at,{node:node,distance:distance})
+    }
+    if !meets.Length
+        return []
+    points := []
+    for meet in meets
+        if points.Length<3
+            points.Push(meet.node)
+    if points.Length<3 {
+        route := MapShortestPath(model.nodes,points[points.Length],base),need := 3-points.Length
+        if route.Length<need+2
+            return []
+        Loop need
+            points.Push(route[Max(2,Min(route.Length,Round(route.Length*A_Index/(need+1))))])
     }
     return points
 }
@@ -391,11 +440,29 @@ BuildMapModel(fragments,markers,frame,archive,explained := 0) {
     if fragments.mask.Count<12
         return false
     model := {frame:frame,nodes:MapThin(fragments.mask),raw:MapBits(fragments.mask),inferred:fragments.inferred,player:markers.player,baseMarker:markers.baseMarker,id:"",target:-1,manual:false,explained:explained,source:explained?"vision":"pixels"}
+    model.crossings := markers.HasProp("crossings")?markers.crossings:[]
     if archive
         ArchiveMapModel(model)
     if model.player && model.target<0
         model.target := MapRecommendedTarget(model)
     return model
+}
+
+ParseMapPoints(text) {
+    points := []
+    for pair in StrSplit(text,";") {
+        xy := StrSplit(pair,",")
+        if xy.Length=2 && IsNumber(xy[1]) && IsNumber(xy[2])
+            points.Push({x:Number(xy[1]),y:Number(xy[2])})
+    }
+    return points
+}
+
+MapPointsText(points) {
+    text := ""
+    for point in points
+        text .= (text=""?"":";") Round(point.x,2) "," Round(point.y,2)
+    return text
 }
 
 ArchiveMapModel(model) {
@@ -421,6 +488,12 @@ ArchiveMapModel(model) {
             if base.Length=2
                 model.baseMarker := {x:Number(base[1]),y:Number(base[2])}
         }
+        ; Enemy icons can hide a crossing on this read: keep the fuller set.
+        saved := ParseMapPoints(MemoryRead("minimap." best,"crossings"))
+        if saved.Length>model.crossings.Length
+            model.crossings := saved
+        else if model.crossings.Length>saved.Length
+            IniWrite MapPointsText(model.crossings),LEARNING_FILE,"minimap." best,"crossings"
         target := MemoryRead("minimap." best,"destination","-1")
         if IsNumber(target) && model.nodes.Has(Integer(target))
             model.target := Integer(target),model.manual := true
@@ -433,6 +506,8 @@ ArchiveMapModel(model) {
     IniWrite MapBits(model.nodes),LEARNING_FILE,section,"route"
     if model.baseMarker
         IniWrite Round(model.baseMarker.x,2) "," Round(model.baseMarker.y,2),LEARNING_FILE,section,"base"
+    if model.crossings.Length
+        IniWrite MapPointsText(model.crossings),LEARNING_FILE,section,"crossings"
     IniWrite names="" ? model.id : names "," model.id,LEARNING_FILE,"minimap_catalog","variants"
     Log("Learned minimap variant " model.id " (" model.nodes.Count " route nodes).")
 }
@@ -696,7 +771,9 @@ VisionMapModel(archive := true) {
 }
 
 VisionModelFromScan(scan,archive := true) {
-    markers := {player:false,baseMarker:false}
+    markers := {player:false,baseMarker:false,crossings:[]}
+    if scan.Has("crossings")
+        markers.crossings := ParseMapPoints(scan["crossings"])
     if scan.Has("heart") {
         point := StrSplit(scan["heart"],",")
         markers.baseMarker := {x:Number(point[1]),y:Number(point[2])}

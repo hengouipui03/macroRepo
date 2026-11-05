@@ -224,7 +224,10 @@ RelocatePlacementArea(unit) {
     ; Walking time for this checkpoint accumulates across retries.
     oldDeadline := gPrepDeadline,gPrepDeadline := A_TickCount+Max(3000,RELOCATION_TELEPORT_MS-gRelocationWalkMs)
     try {
-        Log("Follow the drawn route to checkpoint " next "/3 (" (next*25) "% toward base).")
+        if gMapModel.HasProp("crossings") && gMapModel.crossings.Length
+            Log("Follow the drawn route to checkpoint " next "/3 (the next point where the two paths meet).")
+        else
+            Log("Follow the drawn route to checkpoint " next "/3 (" (next*25) "% toward base).")
         started := A_TickCount,cardsBefore := gMovementCardTotalMs
         reached := NavigateDrawing()
         gRelocationWalkMs += Max(0,A_TickCount-started-(gMovementCardTotalMs-cardsBefore))

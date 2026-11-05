@@ -821,7 +821,10 @@ EnsureRouteAndSpawn() {
         return false
     }
     gMapModel.checkpointIndex := 0,gMapModel.target := gMapModel.checkpoints[1]
-    Log("Route divided at 25%, 50%, and 75%; travel to checkpoint 1 before placement.")
+    if gMapModel.HasProp("crossings") && gMapModel.crossings.Length
+        Log("Two paths on the minimap (" gMapModel.crossings.Length " meeting points): travel to their first crossing before placement; later checkpoints are the next meeting points toward the base.")
+    else
+        Log("Route divided at 25%, 50%, and 75%; travel to checkpoint 1 before placement.")
     return true
 }
 

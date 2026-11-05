@@ -14,7 +14,7 @@ fixture = r'''
 #Requires AutoHotkey v2.0
 #SingleInstance Off
 #Warn All, Off
-global gRunning := true,gUnitPanelLayout := 0,gUnitPanelClose := 0,REF_W := 800,REF_H := 600,reads := 0
+global gRunning := true,gUnitPanelLayout := 0,gUnitPanelClose := 0,gUnitPanelSeen := false,REF_W := 800,REF_H := 600,reads := 0,shown := true
 try {
     if HasUnitPanel()
         throw Error("fixture unexpectedly matched the old fixed panel position")
@@ -25,7 +25,11 @@ try {
     previous := reads
     if !WaitForUnitPanel(10) || reads!=previous
         throw Error("known panel performed OCR again instead of reusing its regions")
-    FileAppend "PASS: different-device UPG/Sell/Upgrade layout learned once; the shared pixel detector reuses it for purchase confirmation.`n","*"
+    ; Once recognised, a missed panel (a rejected purchase) never re-runs OCR.
+    shown := false,previous := reads
+    if WaitForUnitPanel(10) || reads!=previous
+        throw Error("a missed panel re-ran the OCR layout learning")
+    FileAppend "PASS: different-device UPG/Sell/Upgrade layout learned once; the shared pixel detector reuses it for purchase confirmation; a later miss never re-runs OCR.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack,"*"
@@ -50,6 +54,8 @@ class RefPixels {
     __New(*) {
     }
     AtRef(x,y) {
+        if !shown
+            return 0x151515
         if x>=140 && x<=210 && y>=300 && y<=320
             return 0xFFD520
         if x>=25 && x<=140 && y>=430 && y<=460

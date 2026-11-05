@@ -7,6 +7,10 @@ global gFailedPlacementSpots := []
 global gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
 global gUnitPanelClose := 0,gPendingPlacement := 0,gPlacementDebugAt := 0
 global gUnitPanelLayout := 0
+; True once the unit panel has been recognised on this device: from then on a
+; missed panel is a real miss, not an unknown layout, so it is never re-learned
+; with OCR (that read cost up to a second after every failed purchase).
+global gUnitPanelSeen := false
 global gUnitPreviewActive := true
 
 ResetPlacementSearch() {
@@ -392,13 +396,13 @@ UnitPanelColourHits(frame,x1,y1,x2,y2,predicate) {
 
 
 HasUnitPanel(frame := 0) {
-    global gUnitPanelClose,gUnitPanelLayout
+    global gUnitPanelClose,gUnitPanelLayout,gUnitPanelSeen
     if gUnitPanelLayout {
         heading := UnitPanelRegion("header"),sell := UnitPanelRegion("sell")
         learned := frame?frame:RefPixels(Min(heading[1],sell[1]),Min(heading[2],sell[2]),Max(heading[3],sell[3]),Max(heading[4],sell[4]))
         if learned.valid && UnitPanelColourHits(learned,heading[1],heading[2],heading[3],heading[4],IsUiYellow)>=4
             && UnitPanelColourHits(learned,sell[1],sell[2],sell[3],sell[4],IsBubbleRed)>=4
-            return true
+            return gUnitPanelSeen := true
     }
     if !frame
         frame := RefPixels(5,185,300,400)
@@ -431,7 +435,7 @@ HasUnitPanel(frame := 0) {
     }
     if hits
         gUnitPanelClose := {x:Round(sumX/hits),y:Round(sumY/hits)}
-    return true
+    return gUnitPanelSeen := true
 }
 
 UnitPanelRegion(name) {
@@ -443,10 +447,10 @@ UnitPanelRegion(name) {
 }
 
 WaitForUnitPanel(timeout := 700,learn := true) {
-    global gRunning,gUnitPanelLayout,REF_W,REF_H
+    global gRunning,gUnitPanelLayout,gUnitPanelSeen,REF_W,REF_H
     if WaitFor(HasUnitPanel,timeout,60)
         return true
-    if !learn || !gRunning || HasCardChoice() || !GetClient(&cx,&cy,&cw,&ch)
+    if !learn || gUnitPanelSeen || !gRunning || HasCardChoice() || !GetClient(&cx,&cy,&cw,&ch)
         return false
     header := 0,sell := 0,button := 0
     for row in ReadOcrRows(0,100,340,520) {

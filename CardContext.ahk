@@ -62,10 +62,14 @@ ParseMatchModifiers(rows) {
 }
 
 RefreshMatchModifiers() {
-    global gRunning,gModifierReadAt,gMatchModifiers
-    if !gRunning || A_TickCount<gModifierReadAt || HasCardChoice()
+    global gRunning,gModifierReadAt,gMatchModifiers,gUnitManagerPhase
+    ; The open F manager covers this panel, so it is never read once upgrades
+    ; start (card effects are still added as they are chosen). During
+    ; placement the values only change with cards, so a 30 s re-read is
+    ; plenty: each OCR read costs up to a second between placement actions.
+    if !gRunning || A_TickCount<gModifierReadAt || HasCardChoice() || (IsSet(gUnitManagerPhase) && gUnitManagerPhase)
         return
-    gModifierReadAt := A_TickCount+8000
+    gModifierReadAt := A_TickCount+30000
     ; This crop is NEVER passed to card selection, card detection or clicking.
     snapshot := ParseMatchModifiers(ReadOcrRows(635,210,785,455))
     if snapshot.healthKnown

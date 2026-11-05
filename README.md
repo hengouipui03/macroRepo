@@ -187,7 +187,11 @@ and action intervals, including F-manager navigation. Other UI actions, P,
 Vote Start retain their existing 300 ms timing; manager Upg clicks use the 150 ms unit timing. Redundant preview
 cancellations are skipped. Menu clicks no longer add multi-second fixed pauses.
 Panel confirmation, OCR, loading, calibrated movement and camera holds retain
-their necessary observation/hold time. Stale panels and
+their necessary observation/hold time. Between placements, the Level Modifiers
+panel is read with OCR at most every 30 seconds (it only changes with cards,
+whose effects are added as they are chosen) and never once the F manager covers
+it; once the unit panel has been recognised on this device, a missed panel no
+longer re-runs the OCR layout learning after each failed purchase. Stale panels and
 late purchase confirmations are still checked before another placement. Every missed neighbouring spot
 is followed by cancelling the old preview before pressing the slot again, so a rejected
 spot cannot toggle placement off and turn the following click into unit selection.
@@ -214,6 +218,19 @@ attempts follow the same edge. Failed searches log whether the path or its
 nearby edge was missing and save placement-search-debug.png for diagnosis.
 Unit settings still autosave in
 unit_settings.ini, and other menu buttons keep their normal pacing.
+
+## Two-path maps
+
+When the minimap shows a second, purple enemy path (for example Shibuya
+District), vision reports every point where it meets the green route: each
+crossing and the merge before the heart. Only long purple lines count, so the
+purple boss and other purple icons are never taken for a path. Checkpoint 1 is
+the first crossing the enemies reach (furthest from the base along the route);
+after six failed purchases the macro moves on to the next meeting point toward
+the base. With fewer than three meeting points, the remaining checkpoints are
+spread along the route from the last one to the base. Meeting points are saved
+with the learned minimap variant, so enemy icons covering a crossing on a later
+read do not lose it. One-path maps keep the 25/50/75% checkpoints.
 
 ## Money units
 
