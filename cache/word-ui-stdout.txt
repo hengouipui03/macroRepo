@@ -1,1 +1,0 @@
-PASS: hidden GUI builds with six Hill/Hybrid rows; fields fit panel; terrain and team checkboxes are exclusive; settings persist in isolated test files.

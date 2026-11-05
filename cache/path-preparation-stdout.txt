@@ -1,1 +1,0 @@
-PASS: P checked on vision and fallback minimaps, even before a missing-arrow failure; unconfirmed P prevents navigation/placement; new game resets one-click guard.

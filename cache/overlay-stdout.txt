@@ -1,1 +1,0 @@
-PASS: world path rejected, real mixed card panels detected in client and window screenshots.

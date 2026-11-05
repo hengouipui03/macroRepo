@@ -1,9 +1,0 @@
-﻿Panel built in 94ms; no game scans or OCR.
-Panel built in 78ms; no game scans or OCR.
-Panel built in 141ms; no game scans or OCR.
-Panel built in 156ms; no game scans or OCR.
-Panel built in 109ms; no game scans or OCR.
-Panel built in 93ms; no game scans or OCR.
-Panel built in 157ms; no game scans or OCR.
-Panel built in 94ms; no game scans or OCR.
-Panel built in 234ms; no game scans or OCR.

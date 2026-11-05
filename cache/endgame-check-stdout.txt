@@ -1,1 +1,0 @@
-PASS: actual Victory/Defeat/Replay images at both sizes; Next-only trigger; caption coordinates; five reward clicks with spacing; Replay once; no fabricated win; next Vote Start; delayed rewards; F7.

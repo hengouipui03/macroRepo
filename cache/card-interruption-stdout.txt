@@ -1,1 +1,0 @@
-PASS: centre-card polling during waits and gaps; Q before choice; same slot/spot resumes; simultaneous purchase recorded once; upgrade panel closes and exact unit reopens; priority and counts retained; no recursive card input.

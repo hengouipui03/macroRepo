@@ -1,1 +1,0 @@
-PASS: five-minute repeat; no early click; completed upgrades only; focus before Q; cards/panels/end screens/missing game guarded; late card and stop respected.

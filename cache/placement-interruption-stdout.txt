@@ -1,1 +1,0 @@
-PASS: interruption during preview/click resumes and records one purchase; world view reaches selection/click; focus precedes slot key; missing preview is skipped; unconfirmed purchase is not saved; enemies are not unit panels; real unit controls accepted.
