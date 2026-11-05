@@ -1089,13 +1089,14 @@ ConfirmLockedCardSelection(cards := 0) {
         return true
     }
     choice := gCardSelection
+    ; A re-click never re-runs OCR: each read costs about a second of the vote,
+    ; and a re-read once mistook a card for green and switched to it. Only a
+    ; fast pixel check remains: one clearly green card that is not the current
+    ; (non-green) choice still takes over.
     if !cards {
-        geometry := WindowGeometry()
-        if geometry {
-            words := ReadOcrRows(125,175,690,445,true)
-            frame := RefPixels(120,175,690,445)
-            cards := ReadWordColourCards(words,frame,geometry)
-        }
+        green := PixelGreenCards(RefPixels(120,175,690,445))
+        if green.Length=1 && green[1]!=choice.index && !CardHasGreenEffect(choice)
+            cards := PixelInkCards(green)
     }
     if cards {
         choice := PreferVerifiedGreenChoice(cards,choice)
@@ -1113,6 +1114,10 @@ ConfirmLockedCardSelection(cards := 0) {
     ; The left card shares screen space with the side unit panel; click its
     ; lower part when that panel is still showing so Upgrade is never hit.
     clickY := choice.index=1 && HasUnitPanel()?405:330
+    ; Each retry clicks a little higher or lower on the card, in case the game
+    ; ignores a repeat click on the same pixel.
+    tries := choice.HasProp("tries")?choice.tries:0,choice.tries := tries+1
+    clickY += [0,14,-14][Mod(tries,3)+1]
     ; Recheck after moving: a closing dialog must not receive another click.
     if !ClickRef((rect[1]+rect[3])//2,clickY,HasCardChoice)
         return true
@@ -1151,13 +1156,14 @@ TryChooseCard() {
     geometry := WindowGeometry()
     if !geometry
         return false
-    ; Red cards are judged on the real match totals: the Level Modifiers panel
-    ; is uncovered while the cards are up, so read it once per card screen.
+    ; One OCR read covers the cards and the Level Modifiers panel to their
+    ; right (uncovered while the cards are up): red cards are judged on the
+    ; real match totals, read once per card screen.
+    words := ReadOcrRows(125,175,785,455,true)
     if !gCardModifiersRead {
         gCardModifiersRead := true
-        ReadModifiersForCards()
+        ReadModifiersForCards(words,geometry)
     }
-    words := ReadOcrRows(125,175,690,445,true)
     cards := ReadWordColourCards(words,frame,geometry)
     for index,card in cards
         if card.stat!="unknown" && card.kind!="unknown" && !CardIsSpeed(card)

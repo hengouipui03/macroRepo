@@ -95,13 +95,51 @@ ApplyModifierSnapshot(snapshot) {
         gMatchModifiers.regen := snapshot.regen
 }
 
+; Level Modifiers lines from the card screen's word boxes: the card OCR read
+; also covers the panel (no second read, which cost about a second of the
+; vote). Words right of the cards are grouped into lines, left to right.
+PanelRowsFromWords(words,geometry) {
+    global REF_W,REF_H
+    lines := []
+    for word in words {
+        x := word.x*REF_W/geometry.cw,y := (word.y+word.h/2)*REF_H/geometry.ch
+        if x<635 || y<210 || y>455
+            continue
+        line := 0
+        for existing in lines
+            if Abs(existing.y-y)<=6 {
+                line := existing
+                break
+            }
+        if !line {
+            line := {y:y,words:[]}
+            lines.Push(line)
+        }
+        at := line.words.Length+1
+        for index,other in line.words
+            if x<other.x {
+                at := index
+                break
+            }
+        line.words.InsertAt(at,{x:x,text:word.text})
+    }
+    rows := []
+    for line in lines {
+        text := ""
+        for item in line.words
+            text .= (text=""?"":" ") item.text
+        rows.Push({text:text})
+    }
+    return rows
+}
+
 ; Once per card screen, after the manager is closed for the cards, the panel is
 ; uncovered. It is the game's own total, so a pick the macro did not see (vote
 ; timer, a lost confirmation) is still counted. A stat with no row keeps the
 ; tracked value (0 at match start), so a missed OCR line never lowers a total.
-ReadModifiersForCards() {
+ReadModifiersForCards(words,geometry) {
     global gModifierReadAt
-    snapshot := ParseMatchModifiers(ReadOcrRows(635,210,785,455))
+    snapshot := ParseMatchModifiers(PanelRowsFromWords(words,geometry))
     ApplyModifierSnapshot(snapshot)
     gModifierReadAt := A_TickCount+30000
     found := snapshot.healthKnown || snapshot.physicalKnown || snapshot.magicalKnown || snapshot.regenKnown

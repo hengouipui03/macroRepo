@@ -7,6 +7,7 @@ logic = '\n'.join(function('Learning.ahk', name) for name in [
     'CardPreferenceScore', 'DebuffOutlook', 'DebuffBetter', 'CardBetter',
     'ChooseBestCard', 'PreferVerifiedGreenChoice', 'FallbackCardChoice'])
 logic += '\n' + function('CardContext.ahk', 'MatchModifier')
+logic += '\n' + function('CardContext.ahk', 'PixelInkCards')
 logic += '\n' + '\n'.join(function('AAPathMacro.ahk', name) for name in [
     'ConfirmLockedCardSelection', 'ResetCardSelection'])
 fixture = r'''
@@ -14,7 +15,7 @@ fixture = r'''
 #SingleInstance Off
 #Warn All, Off
 global gRunning := true,gCardSelection := 0,gCardRetryAt := 0,gCardUnread := 0
-global gMatchModifiers := {healthKnown:false},freshCards := [],clicked := []
+global gMatchModifiers := {healthKnown:false},freshCards := [],clicked := [],ocrReads := 0
 global CARD_HEALTH_CAP := 300,CARD_RESIST_CAP := 150,CARD_REGEN_CAP := 2,CARD_UNKNOWN_HEALTH := 200,CARD_UNKNOWN_RESIST := 100
 try {
     unknown := Card("unknown","buff"),speed := Card("speed","buff")
@@ -50,24 +51,26 @@ try {
     Assert(ChooseBestCard([blankRed,blankRed,blankRed])=2,"three unreadable red cards: middle not chosen")
     Assert(ChooseBestCard([blankRed,blankRed,red])=3,"mixed red cards wrongly took the middle")
     Assert(!ChooseBestCard([redSpeed,redSpeed,redSpeed]),"harmful Speed was selected")
-    for old in [red,yen,boss] {
-        for preferred in [unknown,speed] {
-            freshCards := [old,preferred,redSpeed]
-            gCardSelection := old.Clone(),gCardSelection.index := 1,gCardRetryAt := 0
-            ConfirmLockedCardSelection()
-            Assert(clicked[clicked.Length]=2,"locked choice ignored fresh green priority")
-        }
+    ; Re-clicks never re-run OCR; one clearly green card (pixels) still takes
+    ; over a locked red choice, but a locked green choice is kept.
+    for preferred in [unknown,speed] {
+        freshCards := [red,preferred,redSpeed]
+        gCardSelection := red.Clone(),gCardSelection.index := 1,gCardRetryAt := 0
+        ConfirmLockedCardSelection()
+        Assert(clicked[clicked.Length]=2,"a green card did not take over a locked red choice")
+    }
+    for old in [yen,boss] {
+        freshCards := [old,unknown,redSpeed]
+        gCardSelection := old.Clone(),gCardSelection.index := 1,gCardRetryAt := 0
+        ConfirmLockedCardSelection()
+        Assert(clicked[clicked.Length]=1,"a re-click re-ranked two green cards")
     }
     freshCards := [rangeBuff,attack,yen]
     gCardSelection := rangeBuff.Clone(),gCardSelection.index := 1,gCardRetryAt := 0
     ConfirmLockedCardSelection()
     Assert(clicked[clicked.Length]=1,"ordinary green lock changed unnecessarily")
-    freshCards := [redSpeed,red,redSpeed]
-    gCardSelection := rangeBuff.Clone(),gCardSelection.index := 1,gCardRetryAt := 0
-    count := clicked.Length
-    ConfirmLockedCardSelection()
-    Assert(clicked.Length=count && !gCardSelection,"stale safe lock clicked harmful Speed")
-    FileAppend "PASS: Double Attack > tier > Attack/Cooldown/Range > Random Blessings > other green > Yen > Boss; three unreadable same-colour cards take the middle; green/unknown/Speed before Yen and Boss in every position; green over red; locked-choice revalidation; harmful Speed blocked.`n","*","UTF-8"
+    Assert(ocrReads=0,"a re-click ran OCR")
+    FileAppend "PASS: Double Attack > tier > Attack/Cooldown/Range > Random Blessings > other green > Yen > Boss; three unreadable same-colour cards take the middle; green/unknown/Speed before Yen and Boss in every position; green over red; re-clicks use pixels only (green over a locked red), no OCR; harmful Speed blocked.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -85,7 +88,18 @@ ResistancePreferred(*) => false
 WindowGeometry(*) => true
 ReadOcrRows(*) => []
 RefPixels(*) => true
-ReadWordColourCards(*) => freshCards
+ReadWordColourCards(*) {
+    global ocrReads
+    ocrReads += 1
+    return freshCards
+}
+PixelGreenCards(*) {
+    green := []
+    for index,card in freshCards
+        if card.effectInk="buff"
+            green.Push(index)
+    return green
+}
 HasCardChoice(*) => true
 HasUnitPanel(*) => false
 CardRectangle(*) => [100,100,200,400]
