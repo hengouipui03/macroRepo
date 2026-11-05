@@ -784,6 +784,8 @@ EnsureRouteAndSpawn() {
     if leftover && leftover["open"]="1"
         Log("Unit manager is visible before placement; F is not pressed until all units are placed.")
     gCameraOverheadReady := false,gPathToggleClicked := false
+    ; New match: the vision forgets the last map's path colour (yellow on Sand Village).
+    VisionRequest("worldreset")
     gMapModel := VisionMapModel()
     if !gMapModel {
         frame := CaptureMiniMap()

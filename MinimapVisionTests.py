@@ -174,6 +174,15 @@ check(state["on"] == 1 and state["path"] > 20000, "yellow Sand Village path not 
 check(all(sand.onpath(x, y)["on"] == 1 for x, y in [(735, 457), (490, 375), (960, 620)]), "yellow chevrons not counted as path")
 check(sand.onpath(605, 590)["on"] == 0 and sand.onpath(200, 350)["on"] == 0, "Sand Village wall or sand counted as path")
 check(sand.beside(12)["count"] >= 8, "no path-side spots beside the yellow path")
+# Later in the same match a Hybrid unit is selected and the green Hill
+# highlight outweighs the paler yellow chevrons. The match already showed a
+# yellow path, so the highlight is not path and the road beside the player is.
+check(sand.yellow_path, "clear yellow path frame did not mark the match as yellow-path")
+sand.static = mv.read_image(os.path.join(HERE, "path-world-sand-village-hill.png"))
+sand.world(0, 0, sand.static.shape[1], sand.static.shape[0])
+check(sand.onpath(800, 449)["on"] == 1 and sand.onpath(965, 620)["on"] == 1, "pale yellow chevrons beside the player not counted as path")
+check(sand.onpath(480, 380)["on"] == 0, "green Hill highlight counted as path on a yellow-path map")
+check(sand.reset()["reset"] == 1 and not sand.yellow_path, "worldreset did not clear the path colour")
 
 world.static = shot
 

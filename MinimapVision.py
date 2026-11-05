@@ -487,6 +487,12 @@ class World:
         self.image = None
         self.area = None
         self.saved_view = None
+        self.yellow_path = False
+
+    def reset(self):
+        """New match: forget this map's path colour."""
+        self.yellow_path = False
+        return {"reset": 1}
 
     def grab(self, cx, cy, cw, ch):
         if self.static is not None:
@@ -604,8 +610,17 @@ class World:
         # 28-31, instead of lime; the sand stays at hue 17-23. Yellow counts
         # only when it outweighs lime in the play area, so yellow HUD text and
         # unit effects never add to a lime path on other maps.
-        yellow = (h >= 27) & (h < 32) & (s >= 150) & (v >= 200) & (keep > 0)
-        if np.count_nonzero(yellow) > 2 * np.count_nonzero(lime & (keep > 0)):
+        yellow = (h >= 27) & (h < 32) & (s >= 100) & (v >= 220) & (keep > 0)
+        lime_n, yellow_n = np.count_nonzero(lime & (keep > 0)), np.count_nonzero(yellow)
+        # Once a frame clearly shows a yellow path, the rest of the match keeps
+        # yellow only: green Hill highlights (shown while a Hill/Hybrid unit is
+        # selected), green crate lids and unit effects then never become path.
+        # "worldreset" clears this at each match start.
+        if not self.yellow_path and yellow_n >= height * width * 0.008 and yellow_n > 3 * lime_n:
+            self.yellow_path = True
+        if self.yellow_path:
+            lime = yellow
+        elif yellow_n > 2 * lime_n:
             lime = lime | yellow
         mask = (lime | arrow).astype(np.uint8) & keep
         # Cyan alone (unit rings, scenery) cannot establish a road. Preserve
@@ -1276,7 +1291,7 @@ def main():
     world = World(vision)
     commands = {"ping": vision.ping, "load": vision.load, "box": vision.use_box, "locate": vision.locate,
                 "scan": vision.scan, "mark": vision.mark, "moved": vision.moved, "track": vision.track,
-                "debug": vision.debug, "loadworld": world.load, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
+                "debug": vision.debug, "loadworld": world.load, "worldreset": world.reset, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
                 "follow": world.follow, "beside": world.beside, "placementline": world.placement_line, "placementneighbours": world.placement_neighbours, "hillspots": world.hill_spots, "validateplacements": world.validate_placements, "placementvalid": world.placement_valid, "onpath": world.onpath, "worlddebug": world.debug,
                 "relocation": world.relocation, "rememberview": world.remember_view, "viewshift": world.view_shift,
                 "unitmanager": world.unit_manager, "cardboxes": world.card_boxes,
