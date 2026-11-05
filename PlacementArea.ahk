@@ -1,7 +1,7 @@
 ﻿; Quarter-path checkpoints and consecutive placement failures.
 global gPlacementAreaFailures := Map(),gRunViewMoved := false
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
-global PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
+global PLACEMENT_FAILURE_LIMIT := 6,gConsecutivePlacementFailures := 0
 ; Relocation walking (card time excluded) past 20 s without reaching the
 ; checkpoint teleports back to spawn via Settings, then walks again from there.
 global RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0
@@ -90,7 +90,7 @@ PlacementCopyFailures(unit,add := false) {
         gConsecutivePlacementFailures += 1
         Log("Failed purchase " gConsecutivePlacementFailures "/" PLACEMENT_FAILURE_LIMIT " consecutive | slot " unit.slot " copy " copy)
         if PlacementFailureLimitReached()
-            Log("Five consecutive failed purchases: travel to the next baseward checkpoint before another purchase.")
+            Log(PLACEMENT_FAILURE_LIMIT " consecutive failed purchases: travel to the next baseward checkpoint before another purchase.")
         else if gConsecutivePlacementFailures=PLACEMENT_FAILURE_LIMIT
             Log("Final checkpoint: keep retrying placement until the build is complete or the match ends.")
     }

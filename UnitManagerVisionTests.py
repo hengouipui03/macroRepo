@@ -74,8 +74,12 @@ full=reference.copy();light(full,segments)
 assert tiles(full)[1][1][4:7]==['8','8','0'],'bright segments were not all counted'
 grey=reference.copy();grey[198:228,1040:1118]=(90,90,90);grey[208:216,1065:1095]=(200,200,200)
 assert tiles(grey)[1][0][6]=='1','grey Max button not recognised'
+# A dimmed Upg button (next upgrade unaffordable) still has its long "Upg: 7500"
+# text and must never read as MAX: that ended Bulby's MAX target at 3 of 6.
+dim=reference.copy();dim[198:228,1040:1118]=(90,90,90);dim[208:216,1044:1114]=(200,200,200)
+assert tiles(dim)[1][0][6]=='0','dimmed Upg button was read as MAX'
 odd=reference.copy();odd[600:711,1140:]=20
 state,cells=tiles(odd)
 assert state['lastcount']==1 and cells[-1][0]=='0',('odd unit count: #1 must be the lone bottom-LEFT tile',state)
-print('PASS: tile segments (bright = done; dark body, with or without white outline = not done), grey Max, Upg click point, portrait colours, odd-count bottom row.')
+print('PASS: tile segments (bright = done; dark body, with or without white outline = not done), Max read from the short word on a grey button, Upg click point, portrait colours, odd-count bottom row.')
 print('PASS: bottom-row portrait click patches remain clear; physical left/right columns; reference/client-crop/resize; disabled buttons and closed-manager rejection.')

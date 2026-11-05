@@ -177,16 +177,15 @@ print('PASS: normal candidates stay within 18 reference pixels of the road; bloc
 # Second row: one unit spacing outward from a confirmed first-row placement.
 world.area=np.zeros((300,400),np.uint8);world.area[:,180:220]=1
 reply=world.placement_neighbours('348,310','-','348,310')
-assert reply['count']>=1 and np.allclose(points(reply)[0],[320,310]), reply
+assert reply['count']==1 and np.allclose(points(reply)[0],[320,310]), ('exactly one partner spot, straight behind',reply)
 for x,y in points(reply):
     assert 22<=cv2.distanceTransform((1-world.area).astype(np.uint8),cv2.DIST_L2,5)[int(y/2),int(x/2)]*2<=48
     assert np.linalg.norm(np.array([x,y])-[348,310])>=24
 assert world.placement_neighbours('320,310')['count']==0, 'second-row unit created a third row'
 assert world.placement_neighbours('50,310')['count']==0, 'unrelated far unit became a placement origin'
-blocked=world.placement_neighbours('348,310','320,310','348,310')
-assert all(np.linalg.norm(p-[320,310])>14 for p in points(blocked)), 'failed patch reused by neighbour placement'
-occupied=world.placement_neighbours('348,310','-','348,310;320,310')
-assert all(np.linalg.norm(p-[320,310])>=24 for p in points(occupied)), 'second-row unit overlap'
+# The single partner spot is never swapped for a diagonal one.
+assert world.placement_neighbours('348,310','320,310','348,310')['count']==0, 'failed partner spot replaced by another spot'
+assert world.placement_neighbours('348,310','-','348,310;320,310')['count']==0, 'filled partner spot gave a second partner'
 line=world.placement_line(48,'348,310')
 assert all(np.linalg.norm(p-[348,310])>14 for p in points(line)), 'failed patch reused by edge search'
 assert world.validate_placements('348,310;320,310')['match']==1, 'anchored second-row cache rejected'
@@ -194,4 +193,4 @@ assert world.validate_placements('320,310')['match']==0, 'unanchored off-edge ca
 assert world.validate_placements('348,310;320,310;292,310')['match']==0, 'third-row cache accepted'
 world.area[:]=0
 assert world.placement_neighbours('348,310')['count']==0, 'neighbours invented without visible road'
-print('PASS: 14-pixel rejected areas; anchored second row beside confirmed units; no third row, distant origin, overlap or unanchored saved positions.')
+print('PASS: 14-pixel rejected areas; one partner spot straight behind each confirmed edge unit; no third row, distant origin, overlap or unanchored saved positions.')

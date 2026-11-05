@@ -22,7 +22,7 @@ SavePlacementRun() {
     text := "[Run]`r`nmap_id=" gRunMap "`r`nprofile=" gPlacementProfile "`r`ncount=" gPlacements.Length "`r`n"
     for item in gPlacements {
         text .= "`r`n[Placement" item.id "]`r`n"
-        for key in ["id","slot","name","priority","target","x","y","selectX","selectY","upgrades","complete","hill","row"]
+        for key in ["id","slot","name","priority","target","x","y","selectX","selectY","upgrades","complete","hill","row","money","anchor","partner"]
             text .= key "=" item.%key% "`r`n"
     }
     file := FileOpen(PLACEMENT_RUN_FILE ".tmp","w","UTF-16")
@@ -59,7 +59,13 @@ RegisterPlacedUnit(unit,point) {
         return false
     }
     item := {id:gPlacements.Length+1,slot:unit.slot,name:unit.name,priority:unit.priority,
-        target:unit.target,hill:point.HasProp("hill") && point.hill,row:point.HasProp("hill") && point.hill?0:point.HasProp("row")?point.row:1,upgrades:0,x:point.x,y:point.y,selectX:point.x,selectY:point.y,complete:unit.target=0}
+        target:unit.target,hill:point.HasProp("hill") && point.hill,row:point.HasProp("hill") && point.hill?0:point.HasProp("row")?point.row:1,upgrades:0,x:point.x,y:point.y,selectX:point.x,selectY:point.y,complete:unit.target=0,
+        money:unit.HasProp("money") && unit.money,anchor:point.HasProp("anchor")?point.anchor:0,partner:""}
+    ; A row-2 unit fills its edge unit's single partner spot.
+    if item.anchor
+        for other in gPlacements
+            if other.id=item.anchor
+                other.partner := item.id
     gPlacements.Push(item)
     RememberPlacement(unit,point,true)
     SaveLayoutPoint(item)

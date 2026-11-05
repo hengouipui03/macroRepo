@@ -11,10 +11,10 @@ to the live Roblox client area at run time. Roblox is sized to 1401 x 975 outer 
 | File | Role |
 |---|---|
 | `AAPathMacro.ahk` | Entry point, GUI, hotkeys, input primitives, colour helpers, card detection/choice, lobby/vote flow, the match state machine (`RunMacro`), idle keep-alive, self-tests. |
-| `UnitSettings.ahk` | Six unit slots (enabled, name, count, priority, target, Hill, Hybrid) saved to `unit_settings.ini`. |
+| `UnitSettings.ahk` | Six unit slots (enabled, name, count, priority, target, Hill only / Hybrid / Money, mutually exclusive) saved to `unit_settings.ini`. |
 | `MapNavigation.ahk` | Minimap reading (Python vision or AHK fallback), route graph, checkpoints, player probing, movement, obstacle escape, P (path light) toggle. |
 | `Placement.ahk` | Placement candidates, purchase clicks, unit-panel detection, click-away, pending-purchase recovery, the build loop. |
-| `PlacementArea.ahk` | Five-failure streak, checkpoint relocation (25% → 50% → 75% of the route). |
+| `PlacementArea.ahk` | Six-failure streak, checkpoint relocation (25% → 50% → 75% of the route). |
 | `PlacedUnits.ahk` | Numbered purchase record, upgrade queue, tile-based upgrades (segments, Max, Upg clicks), identity guard, back-off. |
 | `UnitManager.ahk` | F unit manager: when F may be pressed, keeping it open, scrolling, finding purchase #N's tile (odd/even layout). |
 | `Learning.ahk` | OCR, learned buttons, card text policy and ranking, placement memory. |
@@ -108,11 +108,15 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 ## 5. Placement
 
 - **Order:** slots in order, copies in order. Each copy is bound to its slot and copy number before the mouse-down (`PlacementPurchaseReady`).
-- **Where:** first a point beside the lit path, closest to the player. Then it follows the same side of the road. Units sit 12 px outside the road, and only an 8–18 px edge gap is accepted. A second row is allowed behind a confirmed first-row unit, never a third. Every point must be within 180 px of the player.
-- **Hill-only / Hybrid:** Hill-only needs highlighted Hill terrain and never falls back to ground. Hybrid tries Hill, then ground.
+- **Where:** the first edge unit goes beside the lit path, closest to the player. Units sit 12 px outside the road, and only an 8–18 px edge gap is accepted. Every point must be within 180 px of the player.
+- **Pairs (`PlaceUnitAction`):** row 1 is the path edge; row 2 is one partner spot straight behind a row-1 unit. For each unit: if the newest edge unit's partner spot is open, one try there (`TryPartnerPlacement`); otherwise along the edge beside the newest edge unit. A failed partner try closes only that spot and never counts against the edge. Rows and partners are recorded (`row`, `anchor`, `partner`), so a row-2 unit never anchors. When one side of the edge is used up, open partner spots of older edge units are filled oldest first before crossing the road.
+- **Continuing:** a rescanned line starts beside the newest edge unit (`StartLineAtNewestEdgeUnit`), onward along the edge and then back along it.
+- **Edge blocking:** 3 misses on one edge block the whole stretch they walked (48 px either way of every miss, `RegisterPlacementEdgeMiss`); the next tries go to the opposite side or another edge.
+- **Money:** on the path edge, the free spot farthest from all placed units (or from the player if first). Others keep 48 px from it (normal 24). Never an anchor; the line keeps growing from the last ordinary edge unit.
+- **Hill-only / Hybrid:** Hill-only needs highlighted Hill terrain and never falls back to ground. Hybrid tries the green Hill highlights (nearest the path first), then ground. Hill units are never anchors.
 - **Purchase confirmation:** the side unit panel opening after the click confirms the purchase. Before buying, a selection-only click rejects spots that already hold a unit. Failed spots (14 px radius) are skipped for the rest of the game.
 - **Recovery:** a purchase hidden by cards is re-checked with selection-only clicks and never bought twice (`RecoverPendingPlacement`).
-- **Relocation:** 5 consecutive failed purchases move the player to the next route checkpoint (25% → 50% → 75%). At checkpoint 3 it keeps trying locally.
+- **Relocation:** 6 consecutive failed purchases move the player to the next route checkpoint (25% → 50% → 75%). At checkpoint 3 it keeps trying locally.
   - **Cards while walking:** every movement key is released *before* the card is chosen (`MovementHoldUntil`, `MovementCardPause`), so the player stands still during card selection. Afterwards the walk resumes toward the same checkpoint from the player's actual position, and card time does not count against the walk.
   - **20-second rule:** if relocation walking (card time excluded, added up across retries for the same checkpoint) passes 20 s without arriving, `TeleportBackToSpawn()` clicks the Settings gear (bottom left), then the arrow button on the row OCR confirms as "Teleport back to Spawn", then Settings' red X. It then re-finds the player and walks to the same checkpoint from spawn. "Return to Lobby" (the next row down) is never clicked. At most 2 teleports per checkpoint.
 - **Speed:** unit placement/selection holds, gaps and cursor travel are 150 ms (was 200 ms), and the pause after a confirmed placement is 100 ms (was 180 ms). Panel-confirmation waits are unchanged, so purchases are still verified.
@@ -226,7 +230,9 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 ### Placement.ahk
 | Function | What it does |
 |---|---|
-| `ResetPlacementSearch`, `RefreshPlacementSearch`, `FindPlacementCandidates`, `FindNeighbourPlacementCandidates`, `PlacementSearchExclusions`, `UsablePlacementPoint`, `PlacementSearchDiagnostic` | Candidate search along the lit path edge. |
+| `ResetPlacementSearch`, `RefreshPlacementSearch`, `FindPlacementCandidates`, `StartLineAtNewestEdgeUnit`, `PlacementSearchExclusions`, `UsablePlacementPoint`, `PlacementSearchDiagnostic` | Candidate search along the lit path edge. |
+| `EdgeAnchors`, `NewestEdgeAnchor`, `PartnerOpen`, `FindPartnerCandidate`, `TryPartnerPlacement` | Edge/partner pairs. |
+| `MoneySpotScore`, `PlaceMoneyUnit` | Money units. |
 | `PlacementTerrain`, `FailedPlacementSpot`, `RememberFailedPlacementSpot`, `ForgetFailedPlacementSpot` | Per-game rejected spots (14 px radius). |
 | `PlacementClickRef`, `PlacementPurchaseReady` | Guarded click: no click if a card, panel or end screen appears. Binds the purchase. |
 | `SelectPlacementUnit`, `CancelUnitPreview` | Slot key and Q (only when a preview is active). |
@@ -242,7 +248,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 ### PlacementArea.ahk
 | Function | What it does |
 |---|---|
-| `ResetPlacementArea`, `PlacementFailureLimitReached`, `ResetPlacementFailureStreak`, `RecordFailedPlacement`, `PlacementCopyFailures` | Five-consecutive-failure streak. |
+| `ResetPlacementArea`, `PlacementFailureLimitReached`, `ResetPlacementFailureStreak`, `RecordFailedPlacement`, `PlacementCopyFailures` | Six-consecutive-failure streak. |
 | `PlacementAnchorKnown`, `PlacementViewCanShift`, `ShiftRecordedPlacements`, `ContinuePlacementInCurrentView`, `RecoverPlacementView` | Keep recorded coordinates valid when the view moves. |
 | `PlacementRelocationDirection`, `PlacementFarthestUnit`, `PlacementRelocationRoom`, `CheckRelocationUnit`, `RelocatePlacementArea`, `RetryFinalCheckpointPlacement` | Move to the next checkpoint (20 s walking rule, then teleport and resume). Keep trying locally at checkpoint 3. |
 | `TeleportBackToSpawn`, `CloseSettingsAfterTeleport` | Settings gear → OCR-confirmed "Teleport back to Spawn" arrow → close Settings with its red X. |

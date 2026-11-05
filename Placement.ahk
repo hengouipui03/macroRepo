@@ -23,7 +23,7 @@ RefreshPlacementSearch() {
     gLayoutValidation := Map()
 }
 
-FindPlacementCandidates() {
+FindPlacementCandidates(acrossRoad := true) {
     global gPlacementLine,gLastPlacedIndex,gPlacementPreferredSide,REF_W,REF_H
     if !gPlacementLine.Length {
         if !GetClient(&cx,&cy,&cw,&ch)
@@ -46,21 +46,29 @@ FindPlacementCandidates() {
             gPlacementLine.Push(point)
         }
         first := gPlacementLine[1]
-        Log("Start beside the player at " first.x "," first.y "; follow one path edge in adjacent steps.")
+        if !StartLineAtNewestEdgeUnit()
+            Log("Start beside the player at " first.x "," first.y "; follow one path edge in adjacent steps.")
     }
     points := []
-    ; Every new unit stays on the same path edge, advancing past used spots.
+    ; Every new unit stays on the same path edge: first onward from the last
+    ; placed edge unit, then back along the same edge. Never away from the road.
+    order := []
     index := gLastPlacedIndex+1
-    while index<=gPlacementLine.Length {
-        point := gPlacementLine[index++]
+    while index<=gPlacementLine.Length
+        order.Push(index++)
+    index := gLastPlacedIndex-1
+    while index>=1
+        order.Push(index--)
+    for index in order {
+        point := gPlacementLine[index]
         if gPlacementPreferredSide=1 && point.HasProp("other")
             point := OppositePlacementPoint(point)
-        point := UsablePlacementPoint(point)
+        point := UsablePlacementPoint(point,acrossRoad)
         if point
             points.Push(point)
     }
-    ; A completed short line can still have free positions across the road.
-    if !points.Length {
+    ; A used-up edge can still have free positions across the road.
+    if !points.Length && acrossRoad {
         for original in gPlacementLine {
             if !original.HasProp("other")
                 continue
@@ -72,32 +80,153 @@ FindPlacementCandidates() {
     return points
 }
 
-FindNeighbourPlacementCandidates() {
-    global gPlacements,REF_W,REF_H
-    seeds := "",points := []
+; Two rows only. Row 1 sits on the path edge; row 2 is ONE partner spot
+; straight behind a row-1 unit. Roles come from the record (item.row), never
+; from re-measuring the road, so a row-2 unit can never anchor anything.
+; Hill and Money units are never anchors.
+EdgeAnchors() {
+    global gPlacements
+    anchors := []
+    for item in gPlacements {
+        if !PlacementAnchorKnown(item) || !item.HasProp("row") || item.row!=1
+            || (item.HasProp("hill") && item.hill) || (item.HasProp("money") && item.money)
+            continue
+        anchors.Push(item)
+    }
+    return anchors
+}
+
+NewestEdgeAnchor() {
+    anchors := EdgeAnchors()
+    return anchors.Length?anchors[anchors.Length]:0
+}
+
+PartnerOpen(anchor) => !anchor.HasProp("partner") || anchor.partner=""
+
+; A rebuilt line continues beside the newest edge unit instead of beside the
+; player, when that unit is on the visible edge (or across the same road).
+StartLineAtNewestEdgeUnit() {
+    global gPlacementLine,gLastPlacedIndex,gPlacementPreferredSide
+    anchor := NewestEdgeAnchor()
+    if !anchor
+        return false
+    best := 0,bestDistance := 30**2,side := 0
+    for point in gPlacementLine {
+        for candidate in [point,point.HasProp("other")?point.other:0] {
+            if !candidate
+                continue
+            distance := (candidate.x-anchor.x)**2+(candidate.y-anchor.y)**2
+            if distance<bestDistance
+                best := point,bestDistance := distance,side := candidate=point?0:1
+        }
+    }
+    if !best
+        return false
+    gLastPlacedIndex := best.index,gPlacementPreferredSide := side
+    Log("Continue along the edge beside #" anchor.id " " anchor.name " at " anchor.x "," anchor.y ".")
+    return true
+}
+
+; The single spot straight behind an edge unit: [] when there is none, false
+; when the view cannot be read right now (the spot then stays open).
+FindPartnerCandidate(anchor) {
+    global REF_W,REF_H
+    if !GetClient(&cx,&cy,&cw,&ch)
+        return false
+    scene := VisionRequest("world " cx " " cy " " cw " " ch)
+    if !VisionOk(scene) || scene["path"]="0"
+        return false
+    reply := VisionRequest("placementneighbours " Round(anchor.x) "," Round(anchor.y) " " PlacementSearchExclusions(false) " " PlacementSearchExclusions(true) " " PlacementBlockedEdgeExclusions())
+    if !VisionOk(reply)
+        return false
+    points := []
+    if !reply.Has("points") || reply["points"]=""
+        return points
+    xy := StrSplit(StrSplit(reply["points"],";")[1],",")
+    point := {x:Round(Number(xy[1])*REF_W/cw),y:Round(Number(xy[2])*REF_H/ch),side:0,row:2,anchor:anchor.id}
+    AddPlacementGeometry(point,reply,1,cw,ch)
+    ; A partner never crosses the road.
+    if point.HasProp("other")
+        point.DeleteProp("other")
+    if !CandidateOccupied(point.x,point.y) && !FailedPlacementSpot(point) && !BlockedPlacementEdge(point)
+        points.Push(point)
+    return points
+}
+
+; One try behind this edge unit. A miss closes only that partner spot; it
+; never blocks the edge, and the next unit continues along the edge.
+TryPartnerPlacement(unit,anchor) {
+    global gPendingPlacement,gCardInterruptEpoch
+    ; At the failure limit relocation comes first; the spot stays open.
+    if PlacementFailureLimitReached()
+        return false
+    points := FindPartnerCandidate(anchor)
+    if !IsObject(points)
+        return false
+    if !points.Length {
+        anchor.partner := "closed"
+        Log(unit.name ": no free spot straight behind #" anchor.id "; that partner spot is closed for this game.")
+        SavePlacementRun()
+        return false
+    }
+    Log(unit.name ": one try straight behind #" anchor.id " " anchor.name ".")
+    before := CountSlotPlacements(unit.slot),epoch := gCardInterruptEpoch
+    if TryPlacementPoints(unit,points)
+        return true
+    if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
+        return FinishPlacement(unit,gPendingPlacement)
+    ; Unresolved purchases and card interruptions keep the spot open.
+    if gPendingPlacement || CountSlotPlacements(unit.slot)>before || epoch!=gCardInterruptEpoch
+        return false
+    anchor.partner := "closed"
+    Log(unit.name ": the spot behind #" anchor.id " did not take a unit; closed for this game. Continue along the edge.")
+    SavePlacementRun()
+    return false
+}
+
+; Money units have a large area: a path-edge spot as far as possible from
+; every placed unit (or from the player when nothing is placed yet).
+MoneySpotScore(point) {
+    global gPlacements
+    best := -1
     for item in gPlacements {
         if !PlacementAnchorKnown(item)
             continue
-        if !item.HasProp("x") || (item.HasProp("hill") && item.hill) || (item.HasProp("row") && item.row!=1)
-            continue
-        seeds .= (seeds=""?"":";") Round(item.x) "," Round(item.y)
+        distance := Sqrt((point.x-item.x)**2+(point.y-item.y)**2)
+        best := best<0?distance:Min(best,distance)
     }
-    if seeds="" || !GetClient(&cx,&cy,&cw,&ch)
-        return points
-    scene := VisionRequest("world " cx " " cy " " cw " " ch)
-    if !VisionOk(scene) || scene["path"]="0"
-        return points
-    reply := VisionRequest("placementneighbours " seeds " " PlacementSearchExclusions(false) " " PlacementSearchExclusions(true) " " PlacementBlockedEdgeExclusions())
-    if !VisionOk(reply) || !reply.Has("points") || reply["points"]=""
-        return points
-    for index,text in StrSplit(reply["points"],";") {
-        xy := StrSplit(text,",")
-        point := {x:Round(Number(xy[1])*REF_W/cw),y:Round(Number(xy[2])*REF_H/ch),side:0,row:2}
-        AddPlacementGeometry(point,reply,index,cw,ch)
-        if !CandidateOccupied(point.x,point.y) && !FailedPlacementSpot(point) && !BlockedPlacementEdge(point)
-            points.Push(point)
+    return best<0?Sqrt((point.x-400)**2+(point.y-300)**2):best
+}
+
+PlaceMoneyUnit(unit) {
+    global gPendingPlacement,gRunning
+    points := FindPlacementCandidates(true)
+    if !points.Length {
+        Log(unit.name ": no untried local path-side spots for the Money unit.")
+        return false
     }
-    return points
+    ranked := []
+    for point in points {
+        score := MoneySpotScore(point),at := ranked.Length+1
+        for index,entry in ranked {
+            if score>entry.score {
+                at := index
+                break
+            }
+        }
+        ranked.InsertAt(at,{point:point,score:score})
+    }
+    ordered := []
+    for entry in ranked
+        ordered.Push(entry.point)
+    Log(unit.name ": Money unit; path-edge spot farthest from the other units first.")
+    if TryPlacementPoints(unit,ordered)
+        return true
+    if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
+        return FinishPlacement(unit,gPendingPlacement)
+    if gRunning
+        CancelUnitPreview()
+    return false
 }
 
 PlacementTerrain(point) => point.HasProp("hill") && point.hill?"hill":"ground"
@@ -139,17 +268,22 @@ PlacementSearchExclusions(occupied) {
         if !occupied && point.terrain!="ground"
             continue
         text .= (text=""?"":";") Round(point.x) "," Round(point.y)
+        ; A Money unit is about 3 units across: ring its centre so vision keeps
+        ; the same wider gap as CandidateOccupied.
+        if occupied && point.HasProp("money") && point.money
+            for offset in [[24,0],[-24,0],[0,24],[0,-24]]
+                text .= ";" Round(point.x+offset[1]) "," Round(point.y+offset[2])
     }
     return text=""?"-":text
 }
 
-UsablePlacementPoint(point) {
+UsablePlacementPoint(point,acrossRoad := true) {
     ; Skip the whole rejected patch; do not test tiny shifts inside it.
     if FailedPlacementSpot(point)
         return 0
     if !CandidateOccupied(point.x,point.y) && !FailedPlacementSpot(point) && !BlockedPlacementEdge(point)
         return point
-    if point.HasProp("other") {
+    if acrossRoad && point.HasProp("other") {
         other := OppositePlacementPoint(point)
         if !CandidateOccupied(other.x,other.y) && !FailedPlacementSpot(other) && !BlockedPlacementEdge(other)
             return other
@@ -391,7 +525,9 @@ FinishPlacement(unit,point) {
     terrain := PlacementTerrain(point)
     if gPlacementEdgeMisses.Has(terrain)
         gPlacementEdgeMisses.Delete(terrain)
-    if point.HasProp("index") {
+    ; A Money unit sits apart on purpose; the line keeps growing from the
+    ; last ordinary edge unit, not from her.
+    if point.HasProp("index") && !(unit.HasProp("money") && unit.money) {
         gLastPlacedIndex := point.index
         gPlacementPreferredSide := point.HasProp("side")?point.side:0
     }
@@ -538,6 +674,7 @@ PlacementStillBesidePath(candidate) {
         if !PlacementAnchorKnown(item)
             continue
         if (item.HasProp("hill") && item.hill) || (item.HasProp("row") && item.row!=1)
+            || (item.HasProp("money") && item.money)
             continue
         seeds .= (seeds=""?"":";") item.x "," item.y
     }
@@ -639,7 +776,10 @@ RegisterPlacementEdgeMiss(point) {
     state.attempts.Push(point)
     if state.attempts.Length<3
         return []
-    gPlacementBlockedEdges.Push({point:state.point,terrain:terrain})
+    ; Each miss blocks 48 px either way along the edge, so the whole stretch
+    ; the misses walked (a building wall) is blocked end to end.
+    for attempted in state.attempts
+        gPlacementBlockedEdges.Push({point:attempted,terrain:terrain})
     gPlacementEdgeMisses.Delete(terrain)
     return state.attempts
 }
@@ -667,10 +807,12 @@ TryPlacementPoints(unit,points) {
             return true
         if !gPlacementAttemptClicked
             continue
+        if point.HasProp("row") && point.row=2
+            continue
         misses := RegisterPlacementEdgeMiss(point)
         if !misses.Length
             continue
-        Log(unit.name ": 3 failed placement clicks on this edge. Block this section for this game; switch to the opposite side now.")
+        Log(unit.name ": 3 failed placement clicks on this edge. Block that whole stretch for this game; the next tries go to the opposite side or another edge.")
         alternates := []
         for attempted in misses {
             if attempted.HasProp("other") {
@@ -771,7 +913,7 @@ PlaceUnit(unit) {
 }
 
 PlaceUnitAction(unit) {
-    global gRunning,gPendingPlacement,gHillPlacementUnavailable
+    global gRunning,gPendingPlacement,gHillPlacementUnavailable,gPlacementLine
     gHillPlacementUnavailable := false
     ; No F here: the unit manager is only opened after every unit is placed.
     if !gRunning || IsEndGameBlocking()
@@ -813,15 +955,31 @@ PlaceUnitAction(unit) {
         if gPendingPlacement
             return false
     }
-    neighbours := FindNeighbourPlacementCandidates()
-    if neighbours.Length {
-        Log(unit.name ": try the second row beside confirmed path-side units.")
-        if TryPlacementPoints(unit,MatchSavedPlacementsToPath(unit,neighbours))
+    if unit.HasProp("money") && unit.money
+        return PlaceMoneyUnit(unit)
+    ; Pairs: the newest edge unit gets one try at a partner straight behind it,
+    ; otherwise the unit goes along the edge beside the newest edge unit.
+    anchor := NewestEdgeAnchor()
+    if anchor && PartnerOpen(anchor) {
+        if TryPartnerPlacement(unit,anchor)
             return true
-        if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
-            return FinishPlacement(unit,gPendingPlacement)
+        if gPendingPlacement || HasCardChoice()
+            return false
     }
-    points := FindPlacementCandidates()
+    points := FindPlacementCandidates(false)
+    if !points.Length && gPlacementLine.Length {
+        ; This side of the edge is used up: fill open partner spots behind older
+        ; edge units, oldest first, before crossing the road.
+        for older in EdgeAnchors() {
+            if !PartnerOpen(older)
+                continue
+            if TryPartnerPlacement(unit,older)
+                return true
+            if gPendingPlacement || HasCardChoice()
+                return false
+        }
+        points := FindPlacementCandidates(true)
+    }
     if !points.Length {
         Log(unit.name ": no untried local path-side spots; rescans will avoid this game's rejected coordinates.")
         return false

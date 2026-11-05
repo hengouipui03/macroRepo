@@ -1017,7 +1017,8 @@ CandidateOccupied(x, y) {
     for item in gPlacements {
         if !PlacementAnchorKnown(item)
             continue
-        if MapDistance(x,y,item.x,item.y) < 24
+        ; A Money unit is about 3 units across: others keep ~2 spacings away.
+        if MapDistance(x,y,item.x,item.y) < (item.HasProp("money") && item.money?48:24)
             return true
     }
     return false

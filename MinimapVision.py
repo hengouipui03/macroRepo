@@ -675,14 +675,18 @@ class World:
                                 segments.append(bool(v.size) and float(np.median(v))>=150)
                         if 1<=len(segments)<=20:
                             total=len(segments);filled=sum(segments)
-        # Upg button: green/yellow when upgradable, grey "Max" when maxed.
-        bx0,bx1=int(x+bw*2.95),min(w,int(x+bw*4.75));by0,by1=int(y+bh*1.2),int(y+bh*1.9)
+        # MAX is the word on the button: a grey button whose text is short
+        # ("Max", about 0.56 of the button) rather than "Upg: 7500" (0.9-1.0,
+        # even when dimmed because the next upgrade is unaffordable).
+        bx0,bx1=int(x+bw*2.95),min(w,int(x+bw*4.75));by0,by1=int(y+bh*1.25),int(y+bh*1.85)
         maxed=0
         if by0>=top and by1<=bottom and bx1>bx0:
             ys,xs=slice(by0,by1),slice(bx0,bx1)
             colour=((sat[ys,xs]>=110)&(val[ys,xs]>=90)&(hue[ys,xs]>=15)&(hue[ys,xs]<=85)).mean()
-            grey=((sat[ys,xs]<60)&(val[ys,xs]>=60)&(val[ys,xs]<=235)).mean()
-            maxed=int(colour<.06 and grey>.3)
+            v=val[ys,xs];text=v>np.median(v)+35
+            cols=np.nonzero(text.sum(axis=0)>=2)[0]
+            span=(cols[-1]-cols[0]+1)/float(bx1-bx0) if cols.size>=10 else 1.0
+            maxed=int(colour<.10 and span<.75)
         ux,uy=x+bw*3.85,y+bh*1.55
         # Portrait colours below the Lv label and above the name label:
         # 12 hue bins of coloured pixels, then dark and neutral-light shares.
@@ -958,7 +962,7 @@ class World:
         return reply
 
     def placement_neighbours(self, seeds, rejected="-", occupied="-", blocked_edges="-"):
-        """One extra row, rooted only in confirmed first-row ground units.
+        """One partner spot straight behind each confirmed first-row ground unit.
 
         All request coordinates are 800x600 reference coordinates. Replies
         use native client coordinates like placement_line. Never root another
@@ -982,7 +986,8 @@ class World:
             norm=float(np.hypot(nx,ny))
             if norm<1:continue
             nx,ny=nx/norm,ny/norm
-            for along in [0,28,-28]:
+            # One partner spot per edge unit: straight behind it, never beside.
+            for along in [0]:
                 qx,qy=rx+nx*28-ny*along,ry+ny*28+nx*along
                 ix,iy=int(round(qx/sx)),int(round(qy/sy))
                 if not(0<=ix<width and 0<=iy<height):continue

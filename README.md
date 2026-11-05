@@ -18,7 +18,7 @@ positions are detected and learned at the new size; unit settings are retained.
 ## Saved unit settings
 
 All six slots save automatically after edits and when the macro closes: enabled
-state, name, placement count, priority, upgrade target, Hill-only and Hybrid modes. Reopening restores the
+state, name, placement count, priority, upgrade target, Hill-only, Hybrid and Money modes. Reopening restores the
 same setup from unit_settings.ini. Keep that file when updating the macro.
 
 ## Lobby sequence
@@ -128,18 +128,26 @@ when closing unit panels. Each attempt presses the configured slot, then sends o
 waits up to 0.8 seconds for the unit panel;
 a miss pauses briefly before moving to the next neighbouring spot. A confirmed
 unit is recorded for upgrades, and the next unit starts at the next free spot
-beside that unit on the same line. After three unsuccessful clicks on the same
-edge, including steps along that edge, it blocks that section for this game and
-tries the opposite side before any further click on the failed face. If there
-is no valid opposite-side position, it rescans another path edge. Counters and
+beside that unit on the same line. A rescan continues beside the newest edge
+unit (onward along the edge, then back along it), not beside the player. After
+three unsuccessful clicks on the same edge, the whole stretch those clicks walked
+(48 reference pixels either way of each miss) is blocked for this game, so a
+building wall is blocked end to end, and the next tries go to the opposite side
+or another edge. If there is no valid opposite-side position, it rescans another
+path edge. Counters and
 blocked sections survive retries and rescans. Normal placement aims 12 reference
 pixels outside the detected road and accepts only an 8–18 pixel edge gap; saved
 coordinates for the first row must fit that tighter gap too.
-After a confirmed first-row ground placement, the next unit may use one extra
-row about one unit spacing behind it (or alongside that second row). These
-positions are checked against the visible road and confirmed units; they stay
-within a two-row corridor. Second-row units cannot seed a third row, and saved
-second-row coordinates require a nearby saved first-row anchor. A successful opposite-side placement becomes the side used for following copies. It does not scatter clicks
+Units are placed in pairs. Row 1 is the path edge; row 2 is ONE partner spot
+straight behind a row-1 unit (one unit spacing away from the road). The newest
+edge unit gets one try at its partner; otherwise the unit goes along the edge
+beside the newest edge unit. So: edge, behind, edge, behind, ... A failed
+partner try closes only that spot (never the edge) and the same unit continues
+along the edge. Each unit's row and partner are recorded, so a row-2 unit never
+anchors anything, whatever its distance to the road. When one side of the edge
+is used up, open partner spots behind older edge units are filled, oldest first,
+before crossing the road. Saved second-row coordinates require a nearby saved
+first-row anchor. Hill and Money units are never anchors. A successful opposite-side placement becomes the side used for following copies. It does not scatter clicks
 around the screen, or fall back to unrelated ground when the nearby line ends.
 Failed placement coordinates are remembered in memory for the current game,
 across copies, slots, card interruptions and rescans. After an actual placement
@@ -162,16 +170,16 @@ Temporarily unavailable Hill units remain pending too. The full upgrade phase
 starts only when every enabled slot has its configured number of confirmed
 copies; the status lists the exact missing counts during retries.
 All new placement points must lie within a circle of radius 180 reference pixels
-around the stopped player. The debug image shows that circle. Five consecutive failed purchase clicks, across slots, trigger DOWN/baseward
+around the stopped player. The debug image shows that circle. Six consecutive failed purchase clicks, across slots, trigger DOWN/baseward
 relocation before another purchase. Recovery/selection clicks are not additional
 purchase attempts. A successful placement or an actual relocation resets the
 streak; rescans, switching slots, and declined relocation do not reset it.
 The connected minimap route is divided by route length into three checkpoints
 at 25%, 50%, and 75%, from its entrance toward the base. The first placement
-destination is checkpoint 1. Five consecutive failed purchase attempts advance
+destination is checkpoint 1. Six consecutive failed purchase attempts advance
 to checkpoint 2, then checkpoint 3 along the drawn path. Checkpoint travel does
 not depend on old units staying on screen: upgrades select their purchase
-numbers in the F manager. At checkpoint 3, five misses refresh the local search
+numbers in the F manager. At checkpoint 3, six misses refresh the local search
 and placement continues until the build is complete or the match ends.
 
 Unit selection and placement clicks, keys and cursor travel use 150 ms holds
@@ -206,6 +214,15 @@ attempts follow the same edge. Failed searches log whether the path or its
 nearby edge was missing and save placement-search-debug.png for diagnosis.
 Unit settings still autosave in
 unit_settings.ini, and other menu buttons keep their normal pacing.
+
+## Money units
+
+A slot marked Money (exclusive with Hill-only and Hybrid) is still placed on the
+path edge, at the free edge spot farthest from every placed unit (or farthest
+from the player when it is placed first). Its footprint is about three units
+across, so other units keep 48 reference pixels from its centre instead of 24.
+It never anchors a partner or the edge line; the line keeps growing from the
+last ordinary edge unit. Placement order still follows the slot priorities.
 
 ## Hill-only and Hybrid placement
 
@@ -405,7 +422,7 @@ VisionRecoveryTests.py verifies black-frame fallback, the placement circle and
 camera translation. UnitPanelRegressionTests.py checks a second device layout.
 The shared screen reader rejects blank/wrong-size frames, falls back from DX
 capture to MSS, and recreates MSS once before reporting a capture failure.
-Capture failures never count as five failed purchases or authorize movement.
+Capture failures never count as failed purchases or authorize movement.
 
 
 Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model and no panel has ever been seen. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.

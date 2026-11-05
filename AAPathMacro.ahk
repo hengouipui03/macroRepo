@@ -148,15 +148,16 @@ BuildGui() {
         app.AddUpDown("Range1-99", saved.priority)
         hill := app.AddCheckbox("x" (gx+10) " y" (gy+128) " w70" (saved.hill?" Checked":""), "Hill only")
         hybrid := app.AddCheckbox("x" (gx+85) " y" (gy+128) " w65" (saved.hybrid && !saved.hill?" Checked":""), "Hybrid")
-        app.AddText("x" (gx+152) " y" (gy+129) " w65", "Off: ground")
+        money := app.AddCheckbox("x" (gx+152) " y" (gy+128) " w62" (saved.money && !saved.hill && !saved.hybrid?" Checked":""), "Money")
         app.AddText("x" (gx + 10) " y" (gy + 105) " w106", "Upgrade target")
         target := AddReadableEdit(app, "x" (gx + 120) " y" (gy + 101) " w45 Number", saved.target)
         app.AddUpDown("Range0-99", saved.target)
         app.AddText("x" (gx + 170) " y" (gy + 105) " w38", "99=MAX")
-        gUnitControls.Push({slot: slot, enabled: enabled, name: name, count: count, priority: priority, target: target, hill: hill, hybrid:hybrid})
+        gUnitControls.Push({slot: slot, enabled: enabled, name: name, count: count, priority: priority, target: target, hill: hill, hybrid:hybrid, money:money})
         enabled.OnEvent("Click",QueueUnitSettingsSave)
         hill.OnEvent("Click",UnitPlacementModeChanged.Bind(slot,"hill"))
         hybrid.OnEvent("Click",UnitPlacementModeChanged.Bind(slot,"hybrid"))
+        money.OnEvent("Click",UnitPlacementModeChanged.Bind(slot,"money"))
         for control in [name,count,priority,target]
             control.OnEvent("Change",QueueUnitSettingsSave)
     }
@@ -1221,6 +1222,7 @@ ReadUnitPlan() {
             enabled: controls.enabled.Value,
             hill: controls.hill.Value,
             hybrid: controls.hybrid.Value,
+            money: controls.money.Value,
             name: controls.name.Value,
             count: count,
             priority: priority,

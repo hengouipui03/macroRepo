@@ -15,7 +15,7 @@ LoadUnitSettings(slot) {
     try name := IniRead(UNIT_SETTINGS_FILE,"Unit" slot,"name","Unit " slot)
     catch
         name := "Unit " slot
-    return {enabled:SavedUnitNumber(slot,"enabled",1,0,1),hill:SavedUnitNumber(slot,"hill",0,0,1),hybrid:SavedUnitNumber(slot,"hybrid",0,0,1),name:name,
+    return {enabled:SavedUnitNumber(slot,"enabled",1,0,1),hill:SavedUnitNumber(slot,"hill",0,0,1),hybrid:SavedUnitNumber(slot,"hybrid",0,0,1),money:SavedUnitNumber(slot,"money",0,0,1),name:name,
         count:SavedUnitNumber(slot,"count",1,0,30),
         priority:SavedUnitNumber(slot,"priority",slot,1,99),
         target:SavedUnitNumber(slot,"target",99,0,99)}
@@ -40,6 +40,8 @@ SaveUnitSettings(*) {
                 IniWrite unit.hill.Value,UNIT_SETTINGS_FILE,section,"hill"
             if unit.HasProp("hybrid")
                 IniWrite unit.hybrid.Value && !unit.hill.Value,UNIT_SETTINGS_FILE,section,"hybrid"
+            if unit.HasProp("money")
+                IniWrite unit.money.Value && !unit.hill.Value && !unit.hybrid.Value,UNIT_SETTINGS_FILE,section,"money"
             IniWrite unit.name.Value,UNIT_SETTINGS_FILE,section,"name"
             for field,bounds in Map("count",[0,30],"priority",[1,99],"target",[0,99]) {
                 value := unit.%field%.Value
@@ -63,7 +65,10 @@ FlushUnitSettings(*) {
 UnitPlacementModeChanged(slot,mode,*) {
     global gUnitControls
     unit := gUnitControls[slot]
+    ; Hill only, Hybrid and Money are mutually exclusive.
     if unit.%mode%.Value
-        unit.%(mode="hill"?"hybrid":"hill")%.Value := 0
+        for other in ["hill","hybrid","money"]
+            if other!=mode && unit.HasProp(other)
+                unit.%other%.Value := 0
     QueueUnitSettingsSave()
 }
