@@ -189,8 +189,9 @@ check(sand.reset()["reset"] == 1 and not sand.yellow_path, "worldreset did not c
 for name in ("path-world-sand-village.png", "path-world-sand-village-hill.png"):
     sand.static = mv.read_image(os.path.join(HERE, name))
     check(sand.unit_manager(0, 0, sand.static.shape[1], sand.static.shape[0])["open"] == 0, "closed manager read as open: " + name)
-# Path-side lanes walk upstream (toward the enemies) when AHK gives the
-# direction: on Sand Village that is to the right, into the open space.
+# With the enemy direction from AHK the reply holds a front lane (toward the
+# enemies: right, into the open space on Sand Village) and a behind lane
+# (toward the base), each starting at the free edge spot nearest the player.
 sand.static = mv.read_image(os.path.join(HERE, "path-world-sand-village.png"))
 sand.world(0, 0, sand.static.shape[1], sand.static.shape[0])
 sand.static = mv.read_image(os.path.join(HERE, "path-world-sand-village-hill.png"))
@@ -202,6 +203,13 @@ for ux, uy in ((1, 0), (0, 1)):
     check(len(lane) >= 3 and (ahead[0] - lane[0][0]) * ux + (ahead[1] - lane[0][1]) * uy > 0, "lane did not run upstream for %s: %s" % ((ux, uy), lane[:4]))
     lanes[(ux, uy)] = lane
 check(lanes[(1, 0)][1] != lanes[(0, 1)][1], "the upstream direction did not change which way the lane runs")
+reply = sand.placement_line(48, "-", "-", "-", "1", "0")
+lane = [tuple(map(int, p.split(","))) for p in reply["points"].split(";")]
+front = int(reply["front"])
+cx = sand.static.shape[1] / 2.0
+check(3 <= front < len(lane) - 2, "front and behind lanes not both returned: %s of %s" % (front, len(lane)))
+check(all(x >= cx for x, _ in lane[:front]) and all(x < cx for x, _ in lane[front:]), "front/behind lanes on the wrong side of the player")
+check(len(reply["normals"].split(";")) == len(lane), "geometry not returned for every lane point")
 sand.reset()
 
 # Sky Island: green, crimson and blue paths form one route; other maps do not.

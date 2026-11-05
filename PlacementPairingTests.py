@@ -13,7 +13,7 @@ def arrow(file, name):
 
 
 assert "PLACEMENT_FAILURE_LIMIT := 6" in (ROOT / "PlacementArea.ahk").read_text(encoding="utf-8-sig")
-names = ["EdgeAnchors", "NewestEdgeAnchor", "StartLineAtNewestEdgeUnit", "FindPlacementCandidates",
+names = ["EdgeAnchors", "NewestEdgeAnchor", "StartLineAtNewestEdgeUnit", "FindPlacementCandidates", "PlacementLaneOrder",
          "TryPartnerPlacement", "MoneySpotScore", "PlaceMoneyUnit", "PlaceUnitAction",
          "UsablePlacementPoint", "OppositePlacementPoint", "FailedPlacementSpot", "PlacementEdgeNormal",
          "SamePlacementEdge", "BlockedPlacementEdge", "RegisterPlacementEdgeMiss", "TryPlacementPoints",

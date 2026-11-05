@@ -1,5 +1,7 @@
 ﻿; Deliberate placement along one local side of the in-game path.
 global gPlacementLine := [],gLastPlacedIndex := 0,gPlacementPreferredSide := 0
+; Screen direction toward where the enemies come from, for the current lanes.
+global gPlacementUp := {x:0,y:0}
 global gHillPlacementUnavailable := false
 global gPlacementAttemptClicked := false
 global FAILED_PLACEMENT_RADIUS := 14
@@ -31,7 +33,7 @@ RefreshPlacementSearch() {
 }
 
 FindPlacementCandidates(acrossRoad := true) {
-    global gPlacementLine,gLastPlacedIndex,gPlacementPreferredSide,REF_W,REF_H
+    global gPlacementLine,gLastPlacedIndex,gPlacementPreferredSide,REF_W,REF_H,gPlacementUp
     if !gPlacementLine.Length {
         if !GetClient(&cx,&cy,&cw,&ch)
             return []
@@ -40,8 +42,9 @@ FindPlacementCandidates(acrossRoad := true) {
             PlacementSearchDiagnostic("No illuminated world path detected; no slot or placement click sent.")
             return []
         }
-        ; The lane runs upstream first, toward where the enemies come from.
-        up := PlacementUpstreamDirection()
+        ; With a known enemy direction the vision returns a front lane (toward
+        ; the enemies) and a behind lane (toward the base).
+        up := PlacementUpstreamDirection(),gPlacementUp := up
         reply := VisionRequest("placementline 48 " PlacementSearchExclusions(false) " " PlacementSearchExclusions(true) " " PlacementBlockedEdgeExclusions() " " Round(up.x,3) " " Round(up.y,3))
         if !VisionOk(reply) || !reply.Has("points") || reply["points"]="" || !reply.Has("count") || Number(reply["count"])<1 {
             PlacementSearchDiagnostic("Visible path found, but no nearby edge fits the player view; no slot or placement click sent.")
@@ -51,24 +54,19 @@ FindPlacementCandidates(acrossRoad := true) {
             xy := StrSplit(text,",")
             point := {x:Round(Number(xy[1])*REF_W/cw),
                 y:Round(Number(xy[2])*REF_H/ch),index:gPlacementLine.Length+1,side:0,row:1}
+            if reply.Has("front")
+                point.lane := point.index<=Number(reply["front"])?"front":"behind"
             AddPlacementGeometry(point,reply,point.index,cw,ch)
             gPlacementLine.Push(point)
         }
         first := gPlacementLine[1]
-        if !StartLineAtNewestEdgeUnit()
+        if reply.Has("front")
+            Log("Path-side lanes: " reply["front"] " spots in front (toward the enemies), " (gPlacementLine.Length-Number(reply["front"])) " behind; the less filled side goes first.")
+        else if !StartLineAtNewestEdgeUnit()
             Log("Start beside the player at " first.x "," first.y "; follow one path edge in adjacent steps.")
     }
     points := []
-    ; Every new unit stays on the same path edge: first onward from the last
-    ; placed edge unit, then back along the same edge. Never away from the road.
-    order := []
-    index := gLastPlacedIndex+1
-    while index<=gPlacementLine.Length
-        order.Push(index++)
-    index := gLastPlacedIndex-1
-    while index>=1
-        order.Push(index--)
-    for index in order {
+    for index in PlacementLaneOrder() {
         point := gPlacementLine[index]
         if gPlacementPreferredSide=1 && point.HasProp("other")
             point := OppositePlacementPoint(point)
@@ -87,6 +85,49 @@ FindPlacementCandidates(acrossRoad := true) {
         }
     }
     return points
+}
+
+; Order of edge spots to try. With front/behind lanes: the side holding fewer
+; edge units goes first (front on a tie), then the two sides alternate,
+; nearest the player first, so a miss on one side is followed by a try on the
+; other instead of squeezing further into the same area. Without lanes: onward
+; from the last placed edge unit, then back along the same edge.
+PlacementLaneOrder() {
+    global gPlacementLine,gLastPlacedIndex,gPlacementUp
+    order := []
+    if !gPlacementLine.Length || !gPlacementLine[1].HasProp("lane") {
+        index := gLastPlacedIndex+1
+        while index<=gPlacementLine.Length
+            order.Push(index++)
+        index := gLastPlacedIndex-1
+        while index>=1
+            order.Push(index--)
+        return order
+    }
+    front := [],behind := []
+    for point in gPlacementLine {
+        if point.lane="front"
+            front.Push(point.index)
+        else
+            behind.Push(point.index)
+    }
+    ; Which side each edge unit is on, seen from the player (screen centre).
+    inFront := 0,inBehind := 0
+    for item in EdgeAnchors() {
+        if (item.x-400)*gPlacementUp.x+(item.y-300)*gPlacementUp.y>=0
+            inFront += 1
+        else
+            inBehind += 1
+    }
+    first := inBehind<inFront?behind:front
+    second := inBehind<inFront?front:behind
+    Loop Max(first.Length,second.Length) {
+        if A_Index<=first.Length
+            order.Push(first[A_Index])
+        if A_Index<=second.Length
+            order.Push(second[A_Index])
+    }
+    return order
 }
 
 ; Two rows only. Row 1 sits on the path edge; row 2 is ONE partner spot
@@ -1121,29 +1162,24 @@ PlaceUnitAction(unit) {
     }
     if unit.HasProp("money") && unit.money
         return PlaceMoneyUnit(unit)
-    ; Pairs: the newest edge unit gets one try at a partner straight behind it,
-    ; otherwise the unit goes along the edge beside the newest edge unit.
-    anchor := NewestEdgeAnchor()
-    if anchor && PartnerOpen(anchor) {
+    ; Partners first: every edge unit with an open partner spot (straight
+    ; behind it) gets one try, newest first, before any new edge spot.
+    anchors := EdgeAnchors()
+    index := anchors.Length
+    while index>=1 {
+        anchor := anchors[index--]
+        if !PartnerOpen(anchor)
+            continue
         if TryPartnerPlacement(unit,anchor)
             return true
         if gPendingPlacement || HasCardChoice() || (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
             return false
     }
+    ; Then edge spots in front of or behind the player, whichever side is
+    ; less filled; across the road only when this side is used up.
     points := FindPlacementCandidates(false)
-    if !points.Length && gPlacementLine.Length {
-        ; This side of the edge is used up: fill open partner spots behind older
-        ; edge units, oldest first, before crossing the road.
-        for older in EdgeAnchors() {
-            if !PartnerOpen(older)
-                continue
-            if TryPartnerPlacement(unit,older)
-                return true
-            if gPendingPlacement || HasCardChoice() || (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
-                return false
-        }
+    if !points.Length && gPlacementLine.Length
         points := FindPlacementCandidates(true)
-    }
     if !points.Length {
         Log(unit.name ": no untried local path-side spots; rescans will avoid this game's rejected coordinates.")
         return false

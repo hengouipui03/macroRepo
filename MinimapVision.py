@@ -1,4 +1,4 @@
-﻿"""Minimap vision service for AAPathMacro.ahk.
+"""Minimap vision service for AAPathMacro.ahk.
 
 AHK keeps all keyboard and mouse input. This process only captures the
 bottom-right minimap and answers one request per line on stdin with one
@@ -1074,7 +1074,7 @@ class World:
             return None
         limit = max(1, min(96, int(count)))
 
-        def walk(direction):
+        def walk(contour, start, direction):
             result = [contour[start].astype(float)]
             arc = 0.0
             previous = contour[start]
@@ -1094,18 +1094,46 @@ class World:
 
         ux, uy = float(ux), float(uy)
 
+        def along(line):
+            ahead = line[min(3, len(line) - 1)] - line[0]
+            return float(ahead[0] * sx * ux + ahead[1] * sy * uy)
+
         def direction_score(line):
             ahead = line[min(3, len(line) - 1)] - line[0]
-            if ux or uy:
-                # Upstream, toward where the enemies come from (AHK measures it
-                # on the minimap route): a usable lane that way comes first.
-                along = float(ahead[0] * sx * ux + ahead[1] * sy * uy)
-                return (len(line) >= 3 and along > 0, len(line) >= 8, along, len(line))
             return (len(line) >= 8, float(ahead[1] * sy + ahead[0] * sx * 0.15), len(line))
+
+        def nearest_lane(sign):
+            """The lane on one side of the player: it starts at the nearest
+            usable edge point on that side (sign 1 = toward where the enemies
+            come from, -1 = toward the base) and runs away from the player."""
+            best = None
+            for score, contour, start in candidates[:240]:
+                x, y = contour[start]
+                if ((x - cx) * sx * ux + (y - cy) * sy * uy) * sign < 0:
+                    continue
+                line = max([walk(contour, start, 1), walk(contour, start, -1)], key=lambda l: sign * along(l))
+                rank = (len(line) >= 3, -score, len(line))
+                if best is None or rank > best[0]:
+                    best = (rank, line)
+                if best[1] is line and len(line) >= 6:
+                    break
+            return best[1] if best else []
+
+        if ux or uy:
+            # Front and behind lanes; AHK starts with the emptier side and then
+            # alternates, so a miss on one side is followed by a try on the other.
+            front, behind = nearest_lane(1), nearest_lane(-1)
+            line = front + behind
+            if not line:
+                return None
+            reply = {"count": len(line), "front": len(front), "points": ";".join("%d,%d" % (x * 2, y * 2) for x, y in line),
+                     "player": "%d,%d" % (cx * 2, cy * 2)}
+            reply.update(self.placement_geometry(line))
+            return reply
 
         best = None
         for score, contour, start in candidates[:240]:
-            line = max([walk(1), walk(-1)], key=direction_score)
+            line = max([walk(contour, start, 1), walk(contour, start, -1)], key=direction_score)
             # A short visible edge is usable too. Start with the nearest
             # continuous local edge instead of refusing to attempt placement.
             rank = (len(line) >= 3, -score, direction_score(line)[1], len(line))
