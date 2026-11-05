@@ -183,6 +183,45 @@ sand.world(0, 0, sand.static.shape[1], sand.static.shape[0])
 check(sand.onpath(800, 449)["on"] == 1 and sand.onpath(965, 620)["on"] == 1, "pale yellow chevrons beside the player not counted as path")
 check(sand.onpath(480, 380)["on"] == 0, "green Hill highlight counted as path on a yellow-path map")
 check(sand.reset()["reset"] == 1 and not sand.yellow_path, "worldreset did not clear the path colour")
+# With the manager closed, Sand Village's yellow path in the top-right corner
+# is not the manager's "Unit Overview" heading (it caused F to be skipped,
+# then pressed during cards, which opened the manager over the right card).
+for name in ("path-world-sand-village.png", "path-world-sand-village-hill.png"):
+    sand.static = mv.read_image(os.path.join(HERE, name))
+    check(sand.unit_manager(0, 0, sand.static.shape[1], sand.static.shape[0])["open"] == 0, "closed manager read as open: " + name)
+# Path-side lanes walk upstream (toward the enemies) when AHK gives the
+# direction: on Sand Village that is to the right, into the open space.
+sand.static = mv.read_image(os.path.join(HERE, "path-world-sand-village.png"))
+sand.world(0, 0, sand.static.shape[1], sand.static.shape[0])
+sand.static = mv.read_image(os.path.join(HERE, "path-world-sand-village-hill.png"))
+sand.world(0, 0, sand.static.shape[1], sand.static.shape[0])
+lanes = {}
+for ux, uy in ((1, 0), (0, 1)):
+    lane = [tuple(map(int, p.split(","))) for p in sand.placement_line(48, "-", "-", "-", str(ux), str(uy))["points"].split(";")]
+    ahead = lane[min(3, len(lane) - 1)]
+    check(len(lane) >= 3 and (ahead[0] - lane[0][0]) * ux + (ahead[1] - lane[0][1]) * uy > 0, "lane did not run upstream for %s: %s" % ((ux, uy), lane[:4]))
+    lanes[(ux, uy)] = lane
+check(lanes[(1, 0)][1] != lanes[(0, 1)][1], "the upstream direction did not change which way the lane runs")
+sand.reset()
+
+# Sky Island: green, crimson and blue paths form one route; other maps do not.
+sky_map = mv.Vision()
+sky_map.static = mv.read_image(os.path.join(HERE, "sky-island-minimap.png"))
+sky_map.box = (0, 0, sky_map.static.shape[1], sky_map.static.shape[0])
+reply = sky_map.scan()
+route_cells = reply["route"].count("1")
+check(reply.get("paths") == 3 and route_cells > 600, "three-path Sky Island minimap not read: %s cells" % route_cells)
+for name in ("minimap-screenshot.png", "two-path-minimap.jpg", "player-on-heart-minimap.png"):
+    other = mv.Vision()
+    other.static = mv.read_image(os.path.join(HERE, name))
+    other.box = (0, 0, other.static.shape[1], other.static.shape[0])
+    check("paths" not in other.scan(), name + " read as a three-path map")
+
+# P off on Sky Island during a Blizzard: the yellow Weather Alert banner is
+# not a lit road (it let the macro carry on as if P had lit the path).
+sky = mv.World(mv.Vision())
+sky.static = mv.read_image(os.path.join(HERE, "path-world-sky-island-p-off.png"))
+check(sky.world(0, 0, sky.static.shape[1], sky.static.shape[0])["path"] == 0, "Weather Alert banner read as a lit path")
 
 world.static = shot
 

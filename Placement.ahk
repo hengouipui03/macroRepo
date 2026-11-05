@@ -40,7 +40,9 @@ FindPlacementCandidates(acrossRoad := true) {
             PlacementSearchDiagnostic("No illuminated world path detected; no slot or placement click sent.")
             return []
         }
-        reply := VisionRequest("placementline 48 " PlacementSearchExclusions(false) " " PlacementSearchExclusions(true) " " PlacementBlockedEdgeExclusions())
+        ; The lane runs upstream first, toward where the enemies come from.
+        up := PlacementUpstreamDirection()
+        reply := VisionRequest("placementline 48 " PlacementSearchExclusions(false) " " PlacementSearchExclusions(true) " " PlacementBlockedEdgeExclusions() " " Round(up.x,3) " " Round(up.y,3))
         if !VisionOk(reply) || !reply.Has("points") || reply["points"]="" || !reply.Has("count") || Number(reply["count"])<1 {
             PlacementSearchDiagnostic("Visible path found, but no nearby edge fits the player view; no slot or placement click sent.")
             return []

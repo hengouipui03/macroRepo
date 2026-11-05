@@ -180,6 +180,9 @@ GetClient(&cx,&cy,&cw,&ch) {
 VisionRequest(*) => false
 VisionOk(*) => false
 PlacementSearchDiagnostic(*) => 0
+PlacementUpstreamDirection(*) {
+    return {x:0,y:0}
+}
 '''
 
 if __name__ == "__main__":

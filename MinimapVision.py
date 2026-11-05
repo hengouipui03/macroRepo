@@ -148,6 +148,24 @@ def second_route(image):
     return path
 
 
+def three_paths(image):
+    """Sky Island has three enemy paths, green, crimson and blue, that all end
+    at the base. Returns the long crimson and blue lines when BOTH are present
+    (small red skull or blue enemy icons are never long lines), else None."""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    scale = image.shape[1] / REF_SIDE
+    lines = []
+    for mask in (((h >= 165) & (s >= 150) & (v >= 120)), ((h >= 100) & (h <= 122) & (s >= 150) & (v >= 120))):
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+        path = np.zeros(mask.shape, bool)
+        for index in range(1, count):
+            if max(stats[index][2], stats[index][3]) >= 60 * scale:
+                path |= labels == index
+        lines.append(path)
+    return lines[0] | lines[1] if lines[0].any() and lines[1].any() else None
+
+
 def path_crossings(image, route, purple):
     """Grid points where the purple path meets the green route: every crossing
     and the merge before the base, nearby contacts merged into one point."""
@@ -356,6 +374,11 @@ class Vision:
         image = self.capture()
         route, white, icon = masks(image)
         scale = image.shape[1] / REF_SIDE
+        # Three-path map: all three lines are one walkable route to the base.
+        extra = three_paths(image)
+        if extra is not None:
+            route = route | extra
+            icon = icon & ~extra
         # Enemy and player icons interrupt the line; AHK only bridges gaps
         # where this occlusion map shows an icon was in the way.
         occluded = cv2.dilate((icon | white).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
@@ -364,6 +387,8 @@ class Vision:
                  "size": "%d,%d" % (image.shape[1], image.shape[0]), "arrows": len(arrows)}
         if heart:
             reply["heart"] = "%.2f,%.2f" % grid_point(image, heart["x"], heart["y"])
+        if extra is not None:
+            reply["paths"] = 3
         crossings = path_crossings(image, route, second_route(image))
         if crossings:
             reply["crossings"] = ";".join("%.2f,%.2f" % point for point in crossings)
@@ -611,6 +636,9 @@ class World:
         # only when it outweighs lime in the play area, so yellow HUD text and
         # unit effects never add to a lime path on other maps.
         yellow = (h >= 27) & (h < 32) & (s >= 100) & (v >= 220) & (keep > 0)
+        # The yellow Weather Alert banner sits just above the unit bar; units
+        # are never placed that low, so yellow there is never path.
+        yellow[int(height * 0.74):] = False
         lime_n, yellow_n = np.count_nonzero(lime & (keep > 0)), np.count_nonzero(yellow)
         # Once a frame clearly shows a yellow path, the rest of the match keeps
         # yellow only: green Hill highlights (shown while a Hill/Hybrid unit is
@@ -708,7 +736,13 @@ class World:
         title[:int(h*.065)]=0;title[int(h*.17):]=0;title[:,:int(w*.66)]=0
         title=cv2.morphologyEx(title,cv2.MORPH_CLOSE,np.ones((3,max(3,int(w*.025))),np.uint8))
         _,_,stats,_=cv2.connectedComponentsWithStats(title,8)
-        headings=[s for s in stats[1:] if s[2]>w*.18 and s[3]>h*.015]
+        # The "Unit Overview" heading is a thin line of text on the manager's
+        # dark panel. Bright yellow scenery in the same corner (Sand Village's
+        # path) is a tall blob on a bright background and is not a heading.
+        def on_dark_panel(s):
+            box=image[max(0,s[1]-int(h*.01)):s[1]+s[3]+int(h*.01),s[0]:s[0]+s[2]]
+            return box.size>0 and (np.max(box,axis=2)<85).mean()>=.35
+        headings=[s for s in stats[1:] if s[2]>w*.18 and h*.015<s[3]<h*.07 and on_dark_panel(s)]
         if not headings:return {"open":0}
         heading=max(headings,key=lambda s:s[1])
         top=int(heading[1]+heading[3]+h*.02);bottom=int(h*.735)
@@ -970,7 +1004,7 @@ class World:
             opposites.append("%d,%d"%(opposite[0]*2,opposite[1]*2) if opposite else "-")
         return {"normals":";".join(normals),"opposites":";".join(opposites)}
 
-    def placement_line(self, count=48, rejected="-", occupied="-", blocked_edges="-"):
+    def placement_line(self, count=48, rejected="-", occupied="-", blocked_edges="-", ux="0", uy="0"):
         """One continuous lane outside the path, beginning near the player.
 
         Follow one boundary in one direction; never sort unrelated ground
@@ -1058,8 +1092,15 @@ class World:
                         break
             return result
 
+        ux, uy = float(ux), float(uy)
+
         def direction_score(line):
             ahead = line[min(3, len(line) - 1)] - line[0]
+            if ux or uy:
+                # Upstream, toward where the enemies come from (AHK measures it
+                # on the minimap route): a usable lane that way comes first.
+                along = float(ahead[0] * sx * ux + ahead[1] * sy * uy)
+                return (len(line) >= 3 and along > 0, len(line) >= 8, along, len(line))
             return (len(line) >= 8, float(ahead[1] * sy + ahead[0] * sx * 0.15), len(line))
 
         best = None

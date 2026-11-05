@@ -777,7 +777,7 @@ HoldCameraKey(key,duration,epoch) {
 }
 
 EnsureRouteAndSpawn() {
-    global gMapModel,gCameraOverheadReady,gPathToggleClicked
+    global gMapModel,gCameraOverheadReady,gPathToggleClicked,THREE_PATH_STAND
     ; F belongs to the upgrade phase only: never pressed before every unit is placed.
     EndUnitManagerPhase()
     leftover := ReadUnitManager()
@@ -817,7 +817,17 @@ EnsureRouteAndSpawn() {
             return false
     } else if !ProbePlayer()
         return false
-    gMapModel.checkpoints := MapPlacementCheckpoints(gMapModel),gMapModel.baseHidden := false
+    gMapModel.baseHidden := false
+    if gMapModel.HasProp("threePaths") && gMapModel.threePaths {
+        ; Sky Island: all three paths meet beside the base. Walk to that exact
+        ; spot and place there; relocation never leaves it.
+        stand := MapNearest(gMapModel.nodes,THREE_PATH_STAND.x,THREE_PATH_STAND.y)
+        gMapModel.standPoint := THREE_PATH_STAND,gMapModel.checkpoints := [stand,stand,stand]
+        gMapModel.checkpointIndex := 0,gMapModel.target := stand
+        Log("Three-path map: walk to the fixed spot where the paths meet beside the base (" THREE_PATH_STAND.x "," THREE_PATH_STAND.y ").")
+        return true
+    }
+    gMapModel.checkpoints := MapPlacementCheckpoints(gMapModel)
     if gMapModel.checkpoints.Length!=3 && !gMapModel.baseMarker && gMapModel.player {
         ; The heart is hidden (the player spawns standing on it). The 25/50/75%
         ; points are the same from either end, so draw them now, walk to the
@@ -1304,7 +1314,10 @@ IdleKeepAliveTick() {
 NavigateForPlacement() {
     global gRunning,gNavigationTimedOut,gMapModel
     if NavigateAlongRoute() {
-        if gMapModel && gMapModel.HasProp("checkpoints")
+        ; At a fixed spot (Sky Island) placement stays put: no relocation.
+        if gMapModel && gMapModel.HasProp("standPoint")
+            gMapModel.checkpointIndex := 3
+        else if gMapModel && gMapModel.HasProp("checkpoints")
             gMapModel.checkpointIndex := 1
         Log("Mapped destination reached; continuing into placement preparation.")
         return true

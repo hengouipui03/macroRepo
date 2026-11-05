@@ -1,6 +1,9 @@
 ﻿; The minimap is the navigation model. Coordinates are normalized to a 96x96
 ; drawing; no world illumination or map-name OCR is needed to navigate.
 global MAP_GRID := 96
+; Sky Island (the only three-path map): stand exactly here, where the green,
+; crimson and blue paths meet beside the base (minimap grid units).
+global THREE_PATH_STAND := {x:20.26,y:22.10}
 global gMapModel := 0
 global gPrepDeadline := 0, gCameraOverheadReady := false
 global PREPARATION_BUDGET_MS := 50000,gNavigationTimedOut := false
@@ -503,6 +506,7 @@ BuildMapModel(fragments,markers,frame,archive,explained := 0) {
         return false
     model := {frame:frame,nodes:MapThin(fragments.mask),raw:MapBits(fragments.mask),inferred:fragments.inferred,player:markers.player,baseMarker:markers.baseMarker,id:"",target:-1,manual:false,explained:explained,source:explained?"vision":"pixels"}
     model.crossings := markers.HasProp("crossings")?markers.crossings:[]
+    model.threePaths := markers.HasProp("threePaths") && markers.threePaths
     if archive
         ArchiveMapModel(model)
     if model.player && model.target<0
@@ -836,7 +840,7 @@ VisionMapModel(archive := true) {
 }
 
 VisionModelFromScan(scan,archive := true) {
-    markers := {player:false,baseMarker:false,crossings:[]}
+    markers := {player:false,baseMarker:false,crossings:[],threePaths:scan.Has("paths") && scan["paths"]="3"}
     if scan.Has("crossings")
         markers.crossings := ParseMapPoints(scan["crossings"])
     if scan.Has("heart") {
@@ -1124,7 +1128,11 @@ NavigateWithKeys() {
             }
             p := gMapModel.player,target := gMapModel.target
             tx := Mod(target,MAP_GRID),ty := target//MAP_GRID
-            if MapDistance(p.x,p.y,tx,ty)<2.2 {
+            ; A fixed spot (Sky Island) is the exact point, not the nearest line cell.
+            stand := gMapModel.HasProp("standPoint")?gMapModel.standPoint:0
+            if stand
+                tx := stand.x,ty := stand.y
+            if MapDistance(p.x,p.y,tx,ty)<(stand?1.5:2.2) {
                 if ResolveHiddenBase(true) {
                     toTarget := MapDistances(gMapModel.nodes,gMapModel.target),escape := 0
                     continue
@@ -1142,7 +1150,11 @@ NavigateWithKeys() {
             joining := MapDistance(p.x,p.y,sx,sy)>10
             ; While getting around an obstacle, aim ahead along the route
             ; rather than back at the nearest point, which is the obstacle.
-            if MapDistance(p.x,p.y,sx,sy)>2.2 && !escape {
+            if stand && MapDistance(p.x,p.y,tx,ty)<=6 {
+                ; The last few cells go straight to the exact spot, even where
+                ; an icon hid the line on the drawing.
+                wx := tx,wy := ty
+            } else if MapDistance(p.x,p.y,sx,sy)>2.2 && !escape {
                 wx := sx,wy := sy
             } else {
                 path := MapShortestPath(gMapModel.nodes,start,target)
@@ -1327,11 +1339,10 @@ EnsurePathLit() {
             return gPathLit := true
         }
     }
-    ; A hidden glyph must not block preparation when the road itself is lit.
-    reply := VisionRequest("world " cx " " cy " " cw " " ch)
-    if VisionOk(reply) && Number(reply["path"])>0
-        return gPathLit := true
-    Log("P clicked once; visual confirmation delayed. No second toggle sent.")
+    ; Only the P glyph confirms it (dim when off, white when on). The road is
+    ; no proof: the player can spawn far from it, and yellow HUD text such as
+    ; the Weather Alert banner once passed for a lit road.
+    Log("P clicked once, but the P button is still dim. No second toggle sent.")
     return false
 }
 

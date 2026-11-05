@@ -155,6 +155,30 @@ PlacementRelocationDirection() {
     return {x:0,y:1}
 }
 
+; Screen direction (x right, y down) leading up the route toward where the
+; enemies come from, measured from the player on the minimap. Path-side
+; placement walks the lane this way first. {x:0,y:0} when unknown.
+PlacementUpstreamDirection() {
+    global gMapModel,gMoveKeys,MAP_GRID
+    if !gMapModel || !gMapModel.baseMarker || !gMapModel.player || !gMoveKeys || !gMapModel.nodes.Count
+        return {x:0,y:0}
+    p := gMapModel.player
+    base := MapNearest(gMapModel.nodes,gMapModel.baseMarker.x,gMapModel.baseMarker.y)
+    route := MapShortestPath(gMapModel.nodes,MapNearest(gMapModel.nodes,p.x,p.y),MapFarthestNode(gMapModel.nodes,base))
+    if route.Length<2
+        return {x:0,y:0}
+    node := route[Min(6,route.Length)]
+    mx := Mod(node,MAP_GRID)-p.x,my := node//MAP_GRID-p.y
+    ; Solve minimap = a*W + b*D; D is screen right, W is screen up.
+    w := gMoveKeys.w,d := gMoveKeys.d,det := w.x*d.y-w.y*d.x
+    if Abs(det)<0.01
+        return {x:0,y:0}
+    a := (mx*d.y-my*d.x)/det,b := (w.x*my-w.y*mx)/det,length := Sqrt(a*a+b*b)
+    if !length
+        return {x:0,y:0}
+    return {x:b/length,y:-a/length}
+}
+
 PlacementFarthestUnit() {
     global gPlacements
     farthest := 0,distance := -1

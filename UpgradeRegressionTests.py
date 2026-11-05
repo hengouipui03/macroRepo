@@ -205,7 +205,8 @@ try {
     gPathToggleClicked := false,pOn := false
     Assert(EnsurePathLit() && findCalls=1 && pClicks=2,"saved P coordinate required rediscovery")
     gPathToggleClicked := false,pOn := false,pVisible := false
-    Assert(EnsurePathLit() && findCalls=1 && pClicks=3,"missing glyph blocked the static coordinate click")
+    ; Only the P glyph confirms the click; a visible road is not proof.
+    Assert(!EnsurePathLit() && findCalls=1 && pClicks=3,"P accepted as lit while its glyph never lit up")
     Assert(!EnsurePathLit() && pClicks=3,"delayed confirmation toggled P a second time")
     panel := false
     candidate := {x:450,y:400,row:1}
