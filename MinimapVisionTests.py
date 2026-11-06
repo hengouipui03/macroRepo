@@ -230,6 +230,11 @@ sky_map.box = (0, 0, sky_map.static.shape[1], sky_map.static.shape[0])
 reply = sky_map.scan()
 route_cells = reply["route"].count("1")
 check(reply.get("paths") == 3 and route_cells > 600, "three-path Sky Island minimap not read: %s cells" % route_cells)
+# Same map, but the green and blue lines cut the crimson one into short pieces.
+crossed = mv.Vision()
+crossed.static = mv.read_image(os.path.join(HERE, "sky-island-crossed-minimap.png"))
+crossed.box = (0, 0, crossed.static.shape[1], crossed.static.shape[0])
+check(crossed.scan().get("paths") == 3, "Sky Island with its crimson line cut at the crossings not read as three paths")
 for name in ("minimap-screenshot.png", "two-path-minimap.jpg", "player-on-heart-minimap.png"):
     other = mv.Vision()
     other.static = mv.read_image(os.path.join(HERE, name))

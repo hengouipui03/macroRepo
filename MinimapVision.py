@@ -150,8 +150,14 @@ def second_route(image):
 
 def three_paths(image):
     """Sky Island has three enemy paths, green, crimson and blue, that all end
-    at the base. Returns the long crimson and blue lines when BOTH are present
-    (small red skull or blue enemy icons are never long lines), else None."""
+    at the base. Returns the crimson and blue lines when BOTH are present,
+    else None.
+
+    The other lines are drawn over the crimson one where they cross, cutting
+    it into pieces (38, 31, 31 and 24 px on one capture, none 60 px long), so
+    a colour counts by the summed length of its line pieces. A piece must be
+    at least 20 px long: the red and blue enemy icons and the skull are
+    smaller blobs."""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
     scale = image.shape[1] / REF_SIDE
@@ -159,11 +165,14 @@ def three_paths(image):
     for mask in (((h >= 165) & (s >= 150) & (v >= 120)), ((h >= 100) & (h <= 122) & (s >= 150) & (v >= 120))):
         count, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
         path = np.zeros(mask.shape, bool)
+        length = 0
         for index in range(1, count):
-            if max(stats[index][2], stats[index][3]) >= 60 * scale:
+            side = max(stats[index][2], stats[index][3])
+            if side >= 20 * scale:
                 path |= labels == index
-        lines.append(path)
-    return lines[0] | lines[1] if lines[0].any() and lines[1].any() else None
+                length += side
+        lines.append(path if length >= 60 * scale else None)
+    return lines[0] | lines[1] if lines[0] is not None and lines[1] is not None else None
 
 
 def red_overlay(small, keep):
