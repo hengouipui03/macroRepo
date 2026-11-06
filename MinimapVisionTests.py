@@ -264,6 +264,24 @@ sky = mv.World(mv.Vision())
 sky.static = mv.read_image(os.path.join(HERE, "path-world-sky-island-p-off.png"))
 check(sky.world(0, 0, sky.static.shape[1], sky.static.shape[0])["path"] == 0, "Weather Alert banner read as a lit path")
 
+# Sandstorm on Alien Spaceship, P on, nothing held: the haze shifts the lit
+# path toward yellow (and turns the red overlay orange, so pathview fails
+# there), but the lit path still reads, well above RefreshPathView's 1% of the
+# client (LIT_PATH_MIN_FRACTION), with no sandy wall or floor counted.
+storm = mv.World(mv.Vision())
+storm.static = mv.read_image(os.path.join(HERE, "path-world-sandstorm-p-on.png"))
+storm_h, storm_w = storm.static.shape[:2]
+lit_read = storm.world(0, 0, storm_w, storm_h)
+check(lit_read["path"] >= storm_w * storm_h * 0.01 and lit_read["on"] == 1, "sandstorm lit path (P on) not read: %s" % lit_read)
+check(not storm.yellow_path, "sandstorm lime path latched as a yellow Sand Village path")
+check(storm.onpath(1100, 220)["on"] == 0 and storm.onpath(300, 400)["on"] == 0, "sandy wall read as the sandstorm lit path")
+# pathviewclear: an earlier red view no longer stands in for a fresh lit read.
+storm.view_area = np.zeros_like(storm.area)
+storm.view_area[0, 0] = 1
+check(storm.world(0, 0, storm_w, storm_h)["path"] == 4, "red view did not replace the lit read")
+check(storm.clear_view()["cleared"] == 1 and storm.world(0, 0, storm_w, storm_h)["path"] == lit_read["path"], "pathviewclear kept the old red view")
+check(storm.path_fail_debug("unused.png")["saved"] == 0, "a fail frame was saved without a failed red read")
+
 world.static = shot
 
 state = world.world(0, 0, width, height)

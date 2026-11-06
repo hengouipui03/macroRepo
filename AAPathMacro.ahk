@@ -805,9 +805,9 @@ EnsureRouteAndSpawn() {
     if gMapModel.source="vision"
         VisionRequest("debug " A_ScriptDir "\minimap-debug.png")
     BeginTimedPreparation()
-    ; P is switched OFF (placement reads the red overlay; walking uses the
-    ; minimap). Only a stop or a lost Roblox window ends preparation here.
-    if !EnsurePathOff()
+    ; P is switched ON (placement reads the lit path first, the red overlay
+    ; only as fallback). Only a stop or a lost Roblox window ends preparation.
+    if !EnsurePathLit()
         return false
     ; Even fallback minimap detection must enable P before checking the arrow.
     if gMapModel.source!="vision" && !gMapModel.player {
@@ -1304,6 +1304,9 @@ SitOutMatch(reason) {
 ; match already running -> sit it out. F7 and disconnects still end this.
 RecoverVoteStart() {
     global gRunning,gReconnecting,gAwaitingReplayMap
+    ; F7 also ends the Vote Start wait; that is a stop, not a timeout.
+    if !gRunning || gReconnecting
+        return ""
     ; A stale replay latch would make every end-screen check pass at once.
     gAwaitingReplayMap := false
     Notify("Vote Start not seen in time. Watching the screen to recover.")

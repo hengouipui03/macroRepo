@@ -579,7 +579,9 @@ class World:
             raise RuntimeError("path view capture is blank")
         small = cv2.resize(image, (image.shape[1] // 2, image.shape[0] // 2), interpolation=cv2.INTER_AREA)
         path, blocked = red_overlay(small, self.hud_keep(*small.shape[:2]))
+        self.failed_image = None
         if not path.any():
+            self.failed_image = image
             return {"path": 0, "on": 0}
         self.view_area, self.blocked, self.view_image = path, blocked, image
         self.area = path
@@ -599,6 +601,19 @@ class World:
         small[road] = (small[road] * 0.2 + np.array([255, 0, 255]) * 0.8).astype(np.uint8)
         cv2.circle(small, tuple(int(v) for v in self.centre()), 5, (255, 255, 255), 2)
         cv2.imwrite(" ".join(path), small)
+        return {"saved": 1}
+
+    def clear_view(self):
+        """Forget the red path view so the next world read is the lit path
+        (P path first; the red overlay is only the fallback)."""
+        self.view_area = self.blocked = None
+        return {"cleared": 1}
+
+    def path_fail_debug(self, *path):
+        """Save the raw frame of the last red read that found no road."""
+        if getattr(self, "failed_image", None) is None:
+            return {"saved": 0}
+        cv2.imwrite(" ".join(path), self.failed_image)
         return {"saved": 1}
 
     def on_red(self, x, y):
@@ -1459,7 +1474,7 @@ def main():
     world = World(vision)
     commands = {"ping": vision.ping, "load": vision.load, "box": vision.use_box, "locate": vision.locate,
                 "scan": vision.scan, "mark": vision.mark, "moved": vision.moved, "track": vision.track,
-                "debug": vision.debug, "loadworld": world.load, "worldreset": world.reset, "pathview": world.path_view, "pathdebug": world.path_debug, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
+                "debug": vision.debug, "loadworld": world.load, "worldreset": world.reset, "pathview": world.path_view, "pathdebug": world.path_debug, "pathviewclear": world.clear_view, "pathfaildebug": world.path_fail_debug, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
                 "follow": world.follow, "beside": world.beside, "placementline": world.placement_line, "placementneighbours": world.placement_neighbours, "hillspots": world.hill_spots, "validateplacements": world.validate_placements, "placementvalid": world.placement_valid, "onpath": world.onpath, "worlddebug": world.debug,
                 "relocation": world.relocation, "rememberview": world.remember_view, "viewshift": world.view_shift,
                 "unitmanager": world.unit_manager, "cardboxes": world.card_boxes,

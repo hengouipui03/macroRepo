@@ -2,8 +2,14 @@
 global gPlacementLine := [],gLastPlacedIndex := 0,gPlacementPreferredSide := 0
 ; Screen direction toward where the enemies come from, for the current lanes.
 global gPlacementUp := {x:0,y:0}
-; True once the red no-place overlay has been read for the current view.
+; True once the path (lit P path, else the red no-place overlay) has been
+; read for the current view.
 global gPathViewReady := false,gPathViewSavedThisGame := false
+; A lit path counts once it covers this share of the client: real lit paths
+; measure 2.4-5% in the fixtures, maps without one read 0.
+global LIT_PATH_MIN_FRACTION := 0.01
+; Reads in a row with neither a lit path nor a red road before giving up.
+global PATH_READ_ATTEMPTS := 3,gPathReadFailures := 0,gPathReadGaveUp := false
 global gHillPlacementUnavailable := false
 global gPlacementAttemptClicked := false
 global FAILED_PLACEMENT_RADIUS := 14
@@ -21,7 +27,9 @@ global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),g
 
 ResetPlacementSearch() {
     global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
+    global gPathReadFailures,gPathReadGaveUp
     gPathViewReady := false,gPathViewSavedThisGame := false
+    gPathReadFailures := 0,gPathReadGaveUp := false
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
     gPlacementYenWait := 0,gLastYenRead := 0
@@ -1120,17 +1128,29 @@ PlaceUnit(unit) {
     }
 }
 
-; The path comes from the red no-place overlay, shown only while a unit is
-; held: select the slot, move the cursor onto the HUD so the held unit's own
-; preview ring does not cover the road, read the road and every red area
-; (pathview), then cancel the hold. Every later placement check reuses this
-; view until a rescan or a moved view.
+; The path comes from the lit P path FIRST, read with nothing held so green
+; Hill highlights never count. Only when no lit path shows (maps without one)
+; does the red no-place overlay take over, shown only while a unit is held:
+; select the slot, move the cursor onto the HUD so the held unit's own preview
+; ring does not cover the road, read the road and every red area (pathview),
+; then cancel the hold. Every later placement check reuses this view until a
+; rescan or a moved view. PATH_READ_ATTEMPTS reads in a row with neither
+; source save the frame and give up (the build then sits the match out).
 RefreshPathView(unit) {
-    global gPathViewReady,gPathViewSavedThisGame
+    global gPathViewReady,gPathViewSavedThisGame,gPathReadFailures,gPathReadGaveUp,PATH_READ_ATTEMPTS,LIT_PATH_MIN_FRACTION
     if gPathViewReady
         return true
     if !GetClient(&cx,&cy,&cw,&ch) || !CloseUnitPanel() || !CancelUnitPreview() || HasCardChoice()
         return false
+    ; Drop any earlier red view first, or the lit read would just return it.
+    VisionRequest("pathviewclear")
+    lit := VisionRequest("world " cx " " cy " " cw " " ch)
+    if VisionOk(lit) && Number(lit["path"])>=cw*ch*LIT_PATH_MIN_FRACTION {
+        gPathViewReady := true,gPathReadFailures := 0
+        Log("Path read from the lit P path.")
+        return true
+    }
+    Log("No lit P path in view; fall back to the red no-place overlay.")
     if !SelectPlacementUnit(unit)
         return false
     if ToScreen(400,60,&sx,&sy)
@@ -1139,7 +1159,7 @@ RefreshPathView(unit) {
     reply := ok?VisionRequest("pathview " cx " " cy " " cw " " ch):false
     CancelUnitPreview()
     if VisionOk(reply) && reply["path"]!="0" {
-        gPathViewReady := true
+        gPathViewReady := true,gPathReadFailures := 0
         Log("Path read from the red no-place overlay while holding " unit.name ".")
         ; One debug image per game: the first read, as the macro saw it.
         if !gPathViewSavedThisGame {
@@ -1149,10 +1169,46 @@ RefreshPathView(unit) {
         return true
     }
     if ok {
-        Log("No red road in the no-place overlay; no placement click sent. Retry shortly.")
+        ; Only a completed read that found nothing counts toward giving up.
+        if VisionOk(reply) {
+            gPathReadFailures += 1
+            Log("No lit P path and no red road (" gPathReadFailures "/" PATH_READ_ATTEMPTS "); no placement click sent.")
+            if gPathReadFailures>=PATH_READ_ATTEMPTS {
+                gPathReadGaveUp := true
+                SavePathReadFailure()
+                return false
+            }
+        }
         ActionPause(1000)
     }
     return false
+}
+
+; cache\pathfail-<date_time>.png: the raw frame of the last failed red read
+; (unit held), for checking why neither path source was found.
+SavePathReadFailure() {
+    DirCreate A_ScriptDir "\cache"
+    file := A_ScriptDir "\cache\pathfail-" FormatTime(A_Now,"yyyy-MM-dd_HH-mm-ss") ".png"
+    reply := VisionRequest("pathfaildebug " file)
+    if VisionOk(reply) && reply["saved"]="1"
+        Log("Saved the frame where no path was found: " file)
+    PruneCacheImages("pathfail-*.png",10)
+}
+
+; Names sort by time: delete the oldest matching cache images beyond keep.
+PruneCacheImages(pattern,keep) {
+    files := []
+    try Loop Files A_ScriptDir "\cache\" pattern
+        files.Push(A_LoopFileFullPath)
+    if files.Length<=keep
+        return
+    sorted := ""
+    for path in files
+        sorted .= (sorted=""?"":"`n") path
+    sorted := Sort(sorted)
+    for index,path in StrSplit(sorted,"`n")
+        if index<=files.Length-keep
+            try FileDelete path
 }
 
 ; cache\pathview-<date_time>.png: road magenta, other red no-place areas
@@ -1163,19 +1219,7 @@ SavePathViewDebug() {
     reply := VisionRequest("pathdebug " file)
     if VisionOk(reply) && reply["saved"]="1"
         Log("Saved this game's path read: " file)
-    files := []
-    try Loop Files A_ScriptDir "\cache\pathview-*.png"
-        files.Push(A_LoopFileFullPath)
-    ; Names sort by time: delete the oldest beyond 10.
-    if files.Length>10 {
-        sorted := ""
-        for path in files
-            sorted .= (sorted=""?"":"`n") path
-        sorted := Sort(sorted)
-        for index,path in StrSplit(sorted,"`n")
-            if index<=files.Length-10
-                try FileDelete path
-    }
+    PruneCacheImages("pathview-*.png",10)
 }
 
 PlaceUnitAction(unit) {
@@ -1278,7 +1322,7 @@ PlaceConfiguredBuild(plan) {
 }
 
 PlaceConfiguredBuildAction(plan) {
-    global gRunning,gHillPlacementUnavailable
+    global gRunning,gHillPlacementUnavailable,gPathReadGaveUp
     retryAt := Map(),pendingLogAt := 0
     while gRunning {
         RetryFinalCheckpointPlacement()
@@ -1307,6 +1351,10 @@ PlaceConfiguredBuildAction(plan) {
                 }
                 if !gRunning
                     return "stopped"
+                ; Neither a lit path nor a red road after repeated reads:
+                ; sit the match out (Replay follows) instead of looping.
+                if gPathReadGaveUp
+                    return SitOutMatch("No path found (lit P path or red overlay); the frame is in cache.")
                 ; Short of Yen: wait until affordable, then the same unit again.
                 ; Not a failure, so it never moves the player to a checkpoint.
                 if WaitForPlacementYen(unit)

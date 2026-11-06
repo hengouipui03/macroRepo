@@ -23,7 +23,7 @@ names = ["UpgradeQueue", "ResetUpgradeSelection", "ResetUpgradeTracking",
          "TileIdentityMismatch", "StableTileRead", "UpgradeOnceAction"]
 logic = "\n\n".join(function("PlacedUnits.ahk", name) for name in names)
 logic += "\n" + function("Learning.ahk", "NormalizeWords")
-logic += "\n" + function("MapNavigation.ahk", "EnsurePathOff")
+logic += "\n" + function("MapNavigation.ahk", "EnsurePathLit")
 logic += "\n" + function("Placement.ahk", "PlacementStillBesidePath")
 logic += "\n" + function("Placement.ahk", "TryPlacementCandidateAction")
 logic += "\n" + function("Placement.ahk", "TrySelectUnitAt")
@@ -46,7 +46,7 @@ global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUnitManage
 global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
 global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true
 global placeTries := 0,lagMs := 0,opened := [],flashLevel := Map(),warnings := 0
-global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := true,pVisible := true
+global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,gPathReadGaveUp := false
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
 global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
@@ -200,15 +200,15 @@ try {
     Assert(clicks=1,"a slightly different portrait of the right unit was refused")
     sigs := Map(),gSlotPortraits := Map()
 
-    ; P must end up OFF (its arrows hide the red overlay). Discovered once;
-    ; later calls use the exact saved coordinate. Never stops the macro.
-    Assert(EnsurePathOff() && findCalls=1 && pClicks=1 && !pOn,"lit P was not switched off with one saved click")
-    gPathToggleClicked := false
-    Assert(EnsurePathOff() && findCalls=1 && pClicks=1,"P already off was clicked, or its coordinate rediscovered")
-    gPathToggleClicked := true,pOn := true
-    Assert(EnsurePathOff() && pClicks=1,"P was toggled a second time in one game")
+    ; P must end up ON (lit path first, red overlay as fallback). Discovered
+    ; once; later calls use the exact saved coordinate. Never stops the macro.
+    Assert(EnsurePathLit() && findCalls=1 && pClicks=1 && pOn && gPathLit,"dim P was not lit with one saved click")
+    gPathToggleClicked := false,gPathLit := false
+    Assert(EnsurePathLit() && findCalls=1 && pClicks=1 && gPathLit,"P already on was clicked, or its coordinate rediscovered")
+    gPathToggleClicked := true,pOn := false,gPathLit := false
+    Assert(EnsurePathLit() && pClicks=1 && !gPathLit,"P was toggled a second time in one game")
     gPathToggleClicked := false,pVisible := false
-    Assert(EnsurePathOff() && pClicks=1,"an unreadable P button was clicked")
+    Assert(EnsurePathLit() && pClicks=1,"an unreadable P button was clicked")
     pVisible := true,pOn := false
     panel := false
     candidate := {x:450,y:400,row:1}
@@ -467,6 +467,7 @@ ClickRef(x,y,stillValid := 0) {
     return true
 }
 IsEndGameBlocking(*) => false
+SitOutMatch(reason) => "replay"
 CloseUnitPanel(*) => true
 CancelUnitPreview(*) => true
 PlacementPanelClosedStable(*) => true

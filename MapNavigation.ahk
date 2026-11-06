@@ -1292,11 +1292,12 @@ EscapeObstacle(dx,dy,attempt) {
 
 ; A toggle receives at most one click. Subsequent reads only wait for the
 ; visual state to catch up; a delayed grey reading must never turn P back off.
-; P must be OFF: its lit arrows cover the red no-place overlay that placement
-; reads (RefreshPathView). Walking needs only the minimap. Only the P glyph is
-; trusted (white = on, dim = off): at most one click per game, and an unread
-; or unconfirmed state never stops the macro.
-EnsurePathOff() {
+; P is switched ON: the lit path is placement's first source (RefreshPathView)
+; and steers walking (FollowLitPath). On maps with no lit path, P being on
+; draws nothing, so the red no-place overlay fallback works with P left on.
+; Only the P glyph is trusted (white = on, dim = off): at most one click per
+; game, and an unread or unconfirmed state never stops the macro.
+EnsurePathLit() {
     global gPathLit,REF_W,REF_H,gPathToggleClicked,gRunning
     if !gRunning
         return false
@@ -1323,18 +1324,18 @@ EnsurePathOff() {
     command := "toolbarfixed " cx " " cy " " cw " " ch " " px " " py
     reply := VisionRequest(command)
     if !VisionOk(reply) {
-        Log("P button unreadable; leaving P as it is.")
+        Log("P button unreadable; leaving P as it is. Placement still tries the lit path first.")
         return true
     }
-    if reply["on"]="0" {
-        Log("P is off; placement reads the red no-place overlay.")
-        return true
+    if reply["on"]="1" {
+        Log("P is on; placement reads the lit path first, the red overlay only as fallback.")
+        return gPathLit := true
     }
     if gPathToggleClicked {
-        Log("P still looks on, but it was already clicked this game; no second toggle.")
+        Log("P still looks off, but it was already clicked this game; no second toggle.")
         return true
     }
-    Log("P is on; click it once to turn the lit path off (its arrows hide the red overlay).")
+    Log("P is off; click it once to light the path.")
     if !ClickRef(px*REF_W/cw,py*REF_H/ch)
         return gRunning
     gPathToggleClicked := true
@@ -1342,12 +1343,12 @@ EnsurePathOff() {
         if !ActionPause(700) || !GetClient(&cx,&cy,&cw,&ch)
             return gRunning
         reply := VisionRequest(command)
-        if VisionOk(reply) && reply["on"]="0" {
-            Log("P is off.")
-            return true
+        if VisionOk(reply) && reply["on"]="1" {
+            Log("P is on; placement reads the lit path first, the red overlay only as fallback.")
+            return gPathLit := true
         }
     }
-    Log("P still looks on after one click; no second toggle. Placement may not see the road.")
+    Log("P still looks off after one click; no second toggle. Placement falls back to the red overlay if no lit path shows.")
     return true
 }
 
