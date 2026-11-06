@@ -3,7 +3,7 @@ global gPlacementLine := [],gLastPlacedIndex := 0,gPlacementPreferredSide := 0
 ; Screen direction toward where the enemies come from, for the current lanes.
 global gPlacementUp := {x:0,y:0}
 ; True once the red no-place overlay has been read for the current view.
-global gPathViewReady := false
+global gPathViewReady := false,gPathViewSavedThisGame := false
 global gHillPlacementUnavailable := false
 global gPlacementAttemptClicked := false
 global FAILED_PLACEMENT_RADIUS := 14
@@ -20,8 +20,8 @@ global gUnitPreviewActive := true
 global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gLastYenRead := 0
 
 ResetPlacementSearch() {
-    global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady
-    gPathViewReady := false
+    global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
+    gPathViewReady := false,gPathViewSavedThisGame := false
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
     gPlacementYenWait := 0,gLastYenRead := 0
@@ -1126,7 +1126,7 @@ PlaceUnit(unit) {
 ; (pathview), then cancel the hold. Every later placement check reuses this
 ; view until a rescan or a moved view.
 RefreshPathView(unit) {
-    global gPathViewReady
+    global gPathViewReady,gPathViewSavedThisGame
     if gPathViewReady
         return true
     if !GetClient(&cx,&cy,&cw,&ch) || !CloseUnitPanel() || !CancelUnitPreview() || HasCardChoice()
@@ -1141,6 +1141,11 @@ RefreshPathView(unit) {
     if VisionOk(reply) && reply["path"]!="0" {
         gPathViewReady := true
         Log("Path read from the red no-place overlay while holding " unit.name ".")
+        ; One debug image per game: the first read, as the macro saw it.
+        if !gPathViewSavedThisGame {
+            gPathViewSavedThisGame := true
+            SavePathViewDebug()
+        }
         return true
     }
     if ok {
@@ -1148,6 +1153,29 @@ RefreshPathView(unit) {
         ActionPause(1000)
     }
     return false
+}
+
+; cache\pathview-<date_time>.png: road magenta, other red no-place areas
+; blue, player centre white. The newest 10 are kept.
+SavePathViewDebug() {
+    DirCreate A_ScriptDir "\cache"
+    file := A_ScriptDir "\cache\pathview-" FormatTime(A_Now,"yyyy-MM-dd_HH-mm-ss") ".png"
+    reply := VisionRequest("pathdebug " file)
+    if VisionOk(reply) && reply["saved"]="1"
+        Log("Saved this game's path read: " file)
+    files := []
+    try Loop Files A_ScriptDir "\cache\pathview-*.png"
+        files.Push(A_LoopFileFullPath)
+    ; Names sort by time: delete the oldest beyond 10.
+    if files.Length>10 {
+        sorted := ""
+        for path in files
+            sorted .= (sorted=""?"":"`n") path
+        sorted := Sort(sorted)
+        for index,path in StrSplit(sorted,"`n")
+            if index<=files.Length-10
+                try FileDelete path
+    }
 }
 
 PlaceUnitAction(unit) {

@@ -580,10 +580,25 @@ class World:
         path, blocked = red_overlay(small, self.hud_keep(*small.shape[:2]))
         if not path.any():
             return {"path": 0, "on": 0}
-        self.view_area, self.blocked = path, blocked
+        self.view_area, self.blocked, self.view_image = path, blocked, image
         self.area = path
         centre = self.centre()
         return {"path": int(path.sum() * 4), "on": int(self.near_path(*centre, radius=path.shape[1] * 0.02))}
+
+    def path_debug(self, *path):
+        """Save the last path view: road magenta, other red no-place blue,
+        player centre white."""
+        if self.view_area is None or getattr(self, "view_image", None) is None:
+            return {"saved": 0}
+        image = self.view_image
+        small = cv2.resize(image, (image.shape[1] // 2, image.shape[0] // 2), interpolation=cv2.INTER_AREA)
+        other = self.blocked & (self.view_area == 0)
+        small[other] = (small[other] * 0.4 + np.array([255, 0, 0]) * 0.6).astype(np.uint8)
+        road = self.view_area > 0
+        small[road] = (small[road] * 0.2 + np.array([255, 0, 255]) * 0.8).astype(np.uint8)
+        cv2.circle(small, tuple(int(v) for v in self.centre()), 5, (255, 255, 255), 2)
+        cv2.imwrite(" ".join(path), small)
+        return {"saved": 1}
 
     def on_red(self, x, y):
         """True where the last path view showed red (half-size coordinates)."""
@@ -1177,27 +1192,31 @@ class World:
             ahead = line[min(3, len(line) - 1)] - line[0]
             return (len(line) >= 8, float(ahead[1] * sy + ahead[0] * sx * 0.15), len(line))
 
-        def nearest_lane(sign):
-            """The lane on one side of the player: it starts at the nearest
-            usable edge point on that side (sign 1 = toward where the enemies
-            come from, -1 = toward the base) and runs away from the player."""
-            best = None
-            for score, contour, start in candidates[:240]:
-                x, y = contour[start]
-                if ((x - cx) * sx * ux + (y - cy) * sy * uy) * sign < 0:
-                    continue
-                line = max([walk(contour, start, 1), walk(contour, start, -1)], key=lambda l: sign * along(l))
-                rank = (len(line) >= 3, -score, len(line))
-                if best is None or rank > best[0]:
-                    best = (rank, line)
-                if best[1] is line and len(line) >= 6:
-                    break
-            return best[1] if best else []
-
         if ux or uy:
-            # Front and behind lanes; AHK starts with the emptier side and then
-            # alternates, so a miss on one side is followed by a try on the other.
-            front, behind = nearest_lane(1), nearest_lane(-1)
+            # Front and behind lanes from ONE start, the free edge spot nearest
+            # the player, running both ways along the same side of the road
+            # (front = toward where the enemies come from). Separate starts
+            # could sit on opposite sides of the road, and alternating between
+            # them stacked edge + partner units on both sides in one place.
+            # AHK starts with the emptier lane and then alternates.
+            chosen = None
+            for score, contour, start in candidates[:240]:
+                ways = [walk(contour, start, 1), walk(contour, start, -1)]
+                if chosen is None:
+                    chosen = ways
+                if len(ways[0]) + len(ways[1]) - 1 >= 3:
+                    chosen = ways
+                    break
+            first, second = chosen
+            if along(second) > along(first):
+                first, second = second, first
+            front, behind = first, second[1:]
+            # From the end of a visible stretch the second walk wraps around
+            # the road's end to its OTHER side and heads the same way as the
+            # front lane: that is not a behind lane. The other side of the
+            # road stays for when this side is used up.
+            if along(second) >= 0:
+                behind = []
             line = front + behind
             if not line:
                 return None
@@ -1439,7 +1458,7 @@ def main():
     world = World(vision)
     commands = {"ping": vision.ping, "load": vision.load, "box": vision.use_box, "locate": vision.locate,
                 "scan": vision.scan, "mark": vision.mark, "moved": vision.moved, "track": vision.track,
-                "debug": vision.debug, "loadworld": world.load, "worldreset": world.reset, "pathview": world.path_view, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
+                "debug": vision.debug, "loadworld": world.load, "worldreset": world.reset, "pathview": world.path_view, "pathdebug": world.path_debug, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
                 "follow": world.follow, "beside": world.beside, "placementline": world.placement_line, "placementneighbours": world.placement_neighbours, "hillspots": world.hill_spots, "validateplacements": world.validate_placements, "placementvalid": world.placement_valid, "onpath": world.onpath, "worlddebug": world.debug,
                 "relocation": world.relocation, "rememberview": world.remember_view, "viewshift": world.view_shift,
                 "unitmanager": world.unit_manager, "cardboxes": world.card_boxes,

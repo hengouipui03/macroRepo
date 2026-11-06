@@ -206,10 +206,21 @@ check(lanes[(1, 0)][1] != lanes[(0, 1)][1], "the upstream direction did not chan
 reply = sand.placement_line(48, "-", "-", "-", "1", "0")
 lane = [tuple(map(int, p.split(","))) for p in reply["points"].split(";")]
 front = int(reply["front"])
-cx = sand.static.shape[1] / 2.0
-check(3 <= front < len(lane) - 2, "front and behind lanes not both returned: %s of %s" % (front, len(lane)))
-check(all(x >= cx for x, _ in lane[:front]) and all(x < cx for x, _ in lane[front:]), "front/behind lanes on the wrong side of the player")
+# One start, the free edge spot nearest the player. Here it is the end of the
+# visible road: the other walk wraps around that end to the far side of the
+# road, so there is no behind lane and nothing is placed across the road.
+check(front == len(lane) and front >= 8, "lane crossed to the other side of the road: front %s of %s" % (front, len(lane)))
 check(len(reply["normals"].split(";")) == len(lane), "geometry not returned for every lane point")
+# Where the road continues both ways the behind lane starts beside the shared
+# start (same side of the road) and runs away from the enemies.
+city = mv.World(mv.Vision())
+city.static = mv.read_image(os.path.join(HERE, "hover-future-city-hill.png"))
+city.path_view(0, 0, city.static.shape[1], city.static.shape[0])
+reply = city.placement_line(48, "-", "-", "-", "-1", "0")
+lane = [tuple(map(int, p.split(","))) for p in reply["points"].split(";")]
+front = int(reply["front"])
+check(front < len(lane) and (lane[front][0] - lane[0][0]) ** 2 + (lane[front][1] - lane[0][1]) ** 2 <= 30 ** 2
+      and lane[min(len(lane) - 1, front + 3)][0] > lane[0][0], "behind lane not beside the start or not running away from the enemies")
 sand.reset()
 
 # Sky Island: green, crimson and blue paths form one route; other maps do not.
