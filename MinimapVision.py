@@ -1139,7 +1139,7 @@ class World:
         distance = cv2.distanceTransform((1 - self.area).astype(np.uint8), cv2.DIST_L2, 5)
 
         excluded = np.zeros_like(self.area,np.uint8)
-        for text,radius in [(rejected,14.0),(occupied,24.0)]:
+        for text,radius in [(rejected,28.0),(occupied,24.0)]:
             if not text or text=="-":continue
             for item in text.split(";"):
                 rx,ry=map(float,item.split(","))
@@ -1304,7 +1304,7 @@ class World:
                 nearest=labels[iy,ix];ox,oy=(ix-lx[nearest])*sx,(iy-ly[nearest])*sy
                 length=float(np.hypot(ox,oy))
                 if length<1 or (ox*nx+oy*ny)/length<0.7:continue
-                if any((qx-ax)**2+(qy-ay)**2<=14**2 for ax,ay in rejected_points):continue
+                if any((qx-ax)**2+(qy-ay)**2<=28**2 for ax,ay in rejected_points):continue
                 if any((qx-ax)**2+(qy-ay)**2<24**2 for ax,ay in units):continue
                 if any((qx-ax)**2+(qy-ay)**2<20**2 for ax,ay in chosen):continue
                 blocked=False

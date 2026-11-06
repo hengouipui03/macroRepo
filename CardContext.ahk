@@ -2,6 +2,8 @@
 global CARD_PREFS_FILE := A_ScriptDir "\card_preferences.ini"
 global gResistancePreference := "balanced",gMagicTeamControl := 0,gPhysicalTeamControl := 0
 global gMatchModifiers := {health:0,healthKnown:false,physical:0,magical:0,regen:0},gModifierReadAt := 0
+; Weather text from the Level Modifiers panel.
+global gMatchWeather := ""
 ; Red-card ceilings, checked against the total AFTER taking the card (Level
 ; Modifiers value + card amount). Health is the displayed %, resistance a flat
 ; value per type, regen a %. An unreadable amount assumes the worst case below.
@@ -34,8 +36,24 @@ CardDamagePreferenceChanged(which,*) {
 }
 
 ResetMatchCardContext() {
-    global gMatchModifiers,gModifierReadAt
+    global gMatchModifiers,gModifierReadAt,gMatchWeather
     gMatchModifiers := {health:0,healthKnown:false,physical:0,magical:0,regen:0},gModifierReadAt := 0
+    gMatchWeather := ""
+}
+
+; Read weather and enemy totals from the same panel capture.
+ReadMatchConditions() {
+    global gRunning,gModifierReadAt,gMatchWeather
+    if !gRunning
+        return
+    ApplyModifierSnapshot(ParseMatchModifiers(ReadOcrRows(635,210,785,455)))
+    gModifierReadAt := A_TickCount+30000
+    Log("Weather: " (gMatchWeather=""?"not shown":gMatchWeather) ".")
+}
+
+SandstormWeather() {
+    global gMatchWeather
+    return RegExMatch(gMatchWeather,"^sand\s*sto(?:rm|rrn|rn)\b")>0
 }
 
 MatchModifier(name) {
@@ -66,8 +84,10 @@ PanelPercent(text,label,&found) {
 }
 
 ParseMatchModifiers(rows) {
-    result := {health:0,healthKnown:false,physical:0,magical:0,physicalKnown:false,magicalKnown:false,regen:0,regenKnown:false}
+    result := {health:0,healthKnown:false,physical:0,magical:0,physicalKnown:false,magicalKnown:false,regen:0,regenKnown:false,weather:""}
     for row in rows {
+        if RegExMatch(NormalizeWords(row.text),"^weather\s+([a-z][a-z ]*)",&w)
+            result.weather := Trim(w[1])
         value := PanelPercent(row.text,"health",&found)
         if found
             result.health := value,result.healthKnown := true
@@ -84,7 +104,9 @@ ParseMatchModifiers(rows) {
 }
 
 ApplyModifierSnapshot(snapshot) {
-    global gMatchModifiers
+    global gMatchModifiers,gMatchWeather
+    if snapshot.HasProp("weather") && snapshot.weather!=""
+        gMatchWeather := snapshot.weather
     if snapshot.healthKnown
         gMatchModifiers.health := snapshot.health,gMatchModifiers.healthKnown := true
     if snapshot.physicalKnown

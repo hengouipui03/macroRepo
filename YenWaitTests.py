@@ -16,7 +16,7 @@ fixture = r'''
 #SingleInstance Off
 #Warn All, Off
 global testNow := 10000,gRunning := true,REF_W := 800,REF_H := 600,LEARNING_FILE := A_Temp "\yen-wait-test.ini"
-global gLastYenRead := 0,gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gPendingPlacement := 0,gCardInterruptEpoch := 0
+global gLastOcrRect := "",gLastYenRead := 0,gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gPendingPlacement := 0,gCardInterruptEpoch := 0
 global gPlacementAreaFailures := Map(),gConsecutivePlacementFailures := 0,PLACEMENT_FAILURE_LIMIT := 6,gMapModel := 0,gPlacements := []
 global yen := 9401,costs := ["2000","1400","800","",  "1000","1300"],ocrCalls := 0,remembered := 0,yenSchedule := 0
 try {
@@ -34,13 +34,18 @@ try {
     Assert(!PlacementShortOfYen(dark) && ocrCalls=2 && gUnitCosts["dark_mage"]=1350,"first cost sighting was not confirmed by a second read")
     Assert(IniRead(LEARNING_FILE,"UnitCosts","dark_mage","")="1350","cost was not remembered")
     ; Short of Yen: not counted, spot kept, the build waits.
-    yen := 900,ocrCalls := 0
+    yen := 900,ocrCalls := 0,gLastYenRead := 0
     point := {x:400,y:330,pendingSlot:4,pendingCopy:1}
-    Assert(!RecordFailedPlacement(dark,point) && point.yenShort && gConsecutivePlacementFailures=0 && ocrCalls=1,"a Yen-short miss was counted or read twice")
+    Assert(!RecordFailedPlacement(dark,point) && point.yenShort && gConsecutivePlacementFailures=0 && ocrCalls=2,"a Yen-short miss was counted or not confirmed by a second read")
     Assert(gPlacementYenWait && gPlacementYenWait.slot=4 && gPlacementYenWait.cost=1350,"Yen wait not set")
     gPendingPlacement := point
     RecoverPendingPlacement(dark)
     Assert(!gPendingPlacement && remembered=0 && gConsecutivePlacementFailures=0,"Yen-short spot was rejected or counted")
+    ; One misread ("5") is overruled by the confirming read: a real miss.
+    gPlacementYenWait := 0,gLastYenRead := 0,gConsecutivePlacementFailures := 0,yenSchedule := [5,9401]
+    point := {x:405,y:330,pendingSlot:4,pendingCopy:1}
+    Assert(RecordFailedPlacement(dark,point) && gConsecutivePlacementFailures=1 && !gPlacementYenWait,"a single Yen misread excused a bad spot")
+    yenSchedule := 0,gConsecutivePlacementFailures := 0,gLastYenRead := 0
     ; Enough Yen: an ordinary failure, counted once.
     gPlacementYenWait := 0,yen := 5000
     point := {x:410,y:330,pendingSlot:4,pendingCopy:1}
@@ -62,6 +67,7 @@ try {
     ; Waiting: polls about once a second until affordable, then clears.
     gPlacementYenWait := {slot:4,cost:1350,since:testNow},yenSchedule := [600,900,1200,1400],ocrCalls := 0,start := testNow
     Assert(WaitForPlacementYen(dark) && !gPlacementYenWait && ocrCalls=4 && testNow-start<=4500,"Yen wait did not stop once affordable (" ocrCalls " reads)")
+    Assert(gLastYenRead.yen=1400 && gLastYenRead.placements=gPlacements.Length,"affordable Yen read was not retained for the retry")
     Assert(!WaitForPlacementYen(dark),"no wait pending, yet it waited")
     ; Never longer than 20 s.
     gPlacementYenWait := {slot:4,cost:1350,since:testNow},yenSchedule := 0,yen := 10,start := testNow

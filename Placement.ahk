@@ -12,7 +12,7 @@ global LIT_PATH_MIN_FRACTION := 0.01
 global PATH_READ_ATTEMPTS := 3,gPathReadFailures := 0,gPathReadGaveUp := false
 global gHillPlacementUnavailable := false
 global gPlacementAttemptClicked := false
-global FAILED_PLACEMENT_RADIUS := 14
+global FAILED_PLACEMENT_RADIUS := 28
 global gFailedPlacementSpots := []
 global gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
 global gUnitPanelClose := 0,gPendingPlacement := 0,gPlacementDebugAt := 0
@@ -389,7 +389,7 @@ UnitPlacementCost(unit,read) {
 ; then the failure is not counted, the spot stays usable, and the build loop
 ; waits for Yen. Anything unreadable counts as an ordinary failure.
 PlacementShortOfYen(unit) {
-    global gPlacementYenWait,gLastYenRead,gPlacements
+    global gPlacementYenWait,gLastYenRead,gPlacements,gLastOcrRect
     ; Yen only rises between purchases (no upgrades during placement): once it
     ; was seen to cover this cost, later misses need no new read.
     known := UnitPlacementCost(unit,{yen:-1,costs:Map()})
@@ -399,8 +399,15 @@ PlacementShortOfYen(unit) {
     cost := UnitPlacementCost(unit,read)
     if !cost && read.costs.Has(unit.slot) {
         ; First sighting of this cost: confirm it with a second read now.
+        gLastOcrRect := ""
         read := ReadPlacementMoney()
         cost := UnitPlacementCost(unit,read)
+    }
+    ; One OCR misread (e.g. "5" for 9,401) must not excuse a bad spot: a fresh
+    ; read (cache bypassed) has to agree that Yen is short.
+    if cost>0 && read.yen>=0 && read.yen<cost {
+        gLastOcrRect := ""
+        read.yen := ReadPlacementMoney().yen
     }
     if read.yen>=0
         gLastYenRead := {yen:read.yen,placements:gPlacements.Length}
@@ -414,7 +421,7 @@ PlacementShortOfYen(unit) {
 ; After a Yen-short purchase: re-read the counter about once a second until
 ; the unit is affordable (at most 20 s, or 3 unreadable reads), then retry.
 WaitForPlacementYen(unit) {
-    global gPlacementYenWait,gRunning
+    global gPlacementYenWait,gRunning,gLastYenRead,gPlacements
     if !IsSet(gPlacementYenWait) || !gPlacementYenWait || gPlacementYenWait.slot!=unit.slot
         return false
     wait := gPlacementYenWait,unread := 0
@@ -428,6 +435,7 @@ WaitForPlacementYen(unit) {
             break
         yen := ReadPlacementMoney().yen
         if yen>=wait.cost {
+            gLastYenRead := {yen:yen,placements:gPlacements.Length}
             Log(unit.name ": " yen " Yen; affordable now.")
             break
         }
@@ -456,17 +464,6 @@ RememberFailedPlacementSpot(point) {
     Log("Rejected " PlacementTerrain(point) " spot " point.x "," point.y "; skip its surrounding area for the rest of this game.")
 }
 
-ForgetFailedPlacementSpot(point) {
-    global gFailedPlacementSpots,FAILED_PLACEMENT_RADIUS
-    index := gFailedPlacementSpots.Length,terrain := PlacementTerrain(point)
-    while index>=1 {
-        rejected := gFailedPlacementSpots[index]
-        if rejected.terrain=terrain && (point.x-rejected.x)**2+(point.y-rejected.y)**2<=FAILED_PLACEMENT_RADIUS**2
-            gFailedPlacementSpots.RemoveAt(index)
-        index -= 1
-    }
-}
-
 PlacementSearchExclusions(occupied) {
     global gFailedPlacementSpots,gPlacements
     text := "",points := occupied?gPlacements:gFailedPlacementSpots
@@ -489,7 +486,7 @@ UsablePlacementPoint(point,acrossRoad := true) {
     ; Skip the whole rejected patch; do not test tiny shifts inside it.
     if FailedPlacementSpot(point)
         return 0
-    if !CandidateOccupied(point.x,point.y) && !FailedPlacementSpot(point) && !BlockedPlacementEdge(point)
+    if !CandidateOccupied(point.x,point.y) && !BlockedPlacementEdge(point)
         return point
     if acrossRoad && point.HasProp("other") {
         other := OppositePlacementPoint(point)
@@ -715,7 +712,7 @@ CountSlotPlacements(slot) {
 }
 
 FinishPlacement(unit,point) {
-    global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses
+    global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses,gLastYenRead,gPlacements
     if !point || CandidateOccupied(point.x,point.y)
         return false
     if HasCardChoice() || !HasUnitPanel()
@@ -726,11 +723,19 @@ FinishPlacement(unit,point) {
         Log("Ignored unit panel without the matching pending slot/copy purchase.")
         return false
     }
+    ; The purchase is confirmed: drop the hovering ghost before bookkeeping.
+    if !CancelUnitPreview() || gPendingPlacement!=point || HasCardChoice()
+        return false
     if !RegisterPlacedUnit(unit,point)
         return false
+    ; Yen seen before this purchase minus its cost still bounds Yen from below
+    ; (income only adds), so the next miss needs no Yen OCR.
+    if gLastYenRead && gLastYenRead.placements=gPlacements.Length-1 {
+        cost := UnitPlacementCost(unit,{yen:-1,costs:Map()})
+        gLastYenRead := cost?{yen:gLastYenRead.yen-cost,placements:gPlacements.Length}:0
+    }
     gPlacementYenWait := 0
     ResetPlacementFailureStreak()
-    ForgetFailedPlacementSpot(point)
     terrain := PlacementTerrain(point)
     if gPlacementEdgeMisses.Has(terrain)
         gPlacementEdgeMisses.Delete(terrain)
@@ -753,8 +758,6 @@ TryPlacementCandidate(unit,candidate) {
         return false
     if gPendingPlacement
         return RecoverPendingPlacement(unit)
-    if FailedPlacementSpot(candidate)
-        return false
     loop {
         epoch := gCardInterruptEpoch,before := CountSlotPlacements(unit.slot)
         result := TryPlacementCandidateAction(unit,candidate)
@@ -789,7 +792,7 @@ TryPlacementCandidateAction(unit,candidate) {
         if CountSlotPlacements(unit.slot)>before
             return true
     }
-    if PlacementFailureLimitReached()
+    if PlacementFailureLimitReached() || FailedPlacementSpot(candidate)
         return false
     ; A rejected spot leaves the ghost active. Cancel it first so pressing
     ; the same slot cannot toggle placement OFF and select an existing unit.
@@ -813,12 +816,11 @@ TryPlacementCandidateAction(unit,candidate) {
         return false
     purchase := candidate.Clone()
     purchase.pendingSlot := unit.slot,purchase.pendingCopy := before+1,purchase.pendingTarget := unit.count
-    if !PlacementClickRef(candidate.x,candidate.y,true,purchase)
+    if PlacementClickRef(candidate.x,candidate.y,true,purchase) && WaitForUnitPanel(300,false) && FinishPlacement(unit,gPendingPlacement)
+        return true
+    ; Drop the preview before any selection probes or Yen OCR.
+    if !CancelUnitPreview()
         return false
-    if WaitForUnitPanel(300,false)
-        return FinishPlacement(unit,gPendingPlacement)
-    if gRunning && !HasCardChoice() && !IsEndGameBlocking()
-        RecordFailedPlacement(unit,gPendingPlacement)
     return RecoverPendingPlacement(unit)
 }
 
@@ -862,11 +864,10 @@ RecoverPendingPlacement(unit) {
     }
     ; Two completed selection-only probes found no model after the purchase wait.
     gPendingPlacement := 0
-    ; Short of Yen: the spot itself was never tested, so it stays usable.
-    if point.HasProp("yenShort") && point.yenShort
-        return false
-    RememberFailedPlacementSpot(point)
     RecordFailedPlacement(unit,point)
+    ; Short of Yen: the spot itself was never tested, so it stays usable.
+    if !point.HasProp("yenShort") || !point.yenShort
+        RememberFailedPlacementSpot(point)
     return false
 }
 
@@ -1069,7 +1070,7 @@ MatchSavedPlacementsToPath(unit,pathPoints) {
         best := 0,bestDistance := 6**2
         for candidate in saved {
             distance := (candidate.x-point.x)**2+(candidate.y-point.y)**2
-            if distance<=bestDistance && !CandidateOccupied(candidate.x,candidate.y)
+            if distance<=bestDistance && !CandidateOccupied(candidate.x,candidate.y) && !FailedPlacementSpot(candidate)
                 best := candidate,bestDistance := distance
         }
         if best {

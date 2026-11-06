@@ -193,4 +193,4 @@ assert world.validate_placements('320,310')['match']==0, 'unanchored off-edge ca
 assert world.validate_placements('348,310;320,310;292,310')['match']==0, 'third-row cache accepted'
 world.area[:]=0
 assert world.placement_neighbours('348,310')['count']==0, 'neighbours invented without visible road'
-print('PASS: 14-pixel rejected areas; one partner spot straight behind each confirmed edge unit; no third row, distant origin, overlap or unanchored saved positions.')
+print('PASS: one partner spot straight behind each confirmed edge unit; rejected areas, third rows, distant origins, overlaps and unanchored saved positions excluded.')

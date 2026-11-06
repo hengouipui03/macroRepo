@@ -853,7 +853,7 @@ EnsureRouteAndSpawn() {
     if gMapModel.HasProp("crossings") && gMapModel.crossings.Length
         Log("Two paths on the minimap (" gMapModel.crossings.Length " meeting points): travel to their first crossing before placement; later checkpoints are the next meeting points toward the base.")
     else
-        Log("Route divided at 25%, 50%, and 75%; travel to checkpoint 1 before placement.")
+        Log((SandstormWeather()?"Sandstorm: route checkpoints at 37.5% (between 25% and 50%), 50%, and 75%":"Route divided at 25%, 50%, and 75%") "; travel to checkpoint 1 before placement.")
     return true
 }
 
@@ -1474,6 +1474,7 @@ NavigateForPlacement() {
 
 RunMacro() {
     global gRunning, gPlacements, gMatchReported,gAwaitingReplayMap,gEndHandling
+    global gMatchWeather,gMapModel
     SaveUnitSettings()
     ResetIdleKeepAlive()
     EndUnitManagerPhase()
@@ -1514,6 +1515,7 @@ RunMacro() {
     gMatchReported := false
     ResetCardSelection()
     ResetMatchCardContext()
+    ReadMatchConditions()
     if !EnsureRouteAndSpawn()
         return SitOutMatch("Minimap preparation stopped. The Activity tab and minimap-debug.png show the missing signal.")
     Notify("Following the green minimap route into position.")
@@ -1523,6 +1525,19 @@ RunMacro() {
         if !gRunning
             return
         return SitOutMatch("Vote Start stayed open for over a minute after clicking Yes.")
+    }
+    ; If the vote obscured the weather, read the panel once more before buying.
+    if !gMatchWeather && !gMapModel.HasProp("standPoint") {
+        ReadMatchConditions()
+        if SandstormWeather() {
+            points := MapPlacementCheckpoints(gMapModel)
+            if points.Length=3 && points[1]!=gMapModel.checkpoints[1] {
+                gMapModel.checkpoints := points,gMapModel.checkpointIndex := 0,gMapModel.target := points[1]
+                Log("Sandstorm: travel to the 37.5% waypoint before placement.")
+                if !NavigateForPlacement()
+                    return SitOutMatch("Navigation to the Sandstorm waypoint failed.")
+            }
+        }
     }
     Log("Starting ordered placement from the player along one side of the illuminated path.")
     PreparePlacementMemory()

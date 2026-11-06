@@ -7,6 +7,7 @@ logic = '\n'.join(function(file,name) for file,name in [
     ('Placement.ahk','RecoverPendingPlacement'),
     ('Placement.ahk','RefreshPlacementSearch'),('Placement.ahk','PlacementPurchaseReady'),
     ('Placement.ahk','FinishPlacement'),('Placement.ahk','CountSlotPlacements'),
+    ('Placement.ahk','FailedPlacementSpot'),('Placement.ahk','RememberFailedPlacementSpot'),
     ('Placement.ahk','MissingBuildPlacements'),('AAPathMacro.ahk','CheckCardInterruption')])
 logic += '\n' + function('PlacedUnits.ahk','OpenRecordedUnit')
 for name in ['PlacementFailureLimitReached','ResetPlacementFailureStreak','RecordFailedPlacement','PlacementCopyFailures']:
@@ -17,7 +18,8 @@ fixture = r'''
 #Requires AutoHotkey v2.0
 #SingleInstance Off
 #Warn All, Off
-global gMapModel := 0
+global gMapModel := 0,gLastYenRead := 0
+global gFailedPlacementSpots := [],FAILED_PLACEMENT_RADIUS := 28
 global gRunning := true,gPlacements := [],gPendingPlacement := 0,gPlacementAttemptClicked := false
 global gLastPlacedIndex := 0,gPlacementPreferredSide := 0,gPlacementEdgeMisses := Map()
 global gCardHandling := false,gCardAction := "placement",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0,testNow := 10000
@@ -28,7 +30,7 @@ try {
     unit := {slot:1,name:"Unit 1",count:2,enabled:true},point := {x:400,y:330}
     existingModel := true
     Assert(!TryPlacementCandidateAction(unit,point) && buys=0 && slots=0 && registrations=0,"selecting an old model counted as a new purchase")
-    existingModel := false
+    existingModel := false,gFailedPlacementSpots := []
     Assert(TryPlacementCandidateAction(unit,point) && buys=1 && registrations=1,"real purchase did not bind and confirm its slot/copy")
     Assert(CountSlotPlacements(1)=1,"real purchase was counted more than once")
 
@@ -51,7 +53,7 @@ try {
     Assert(InStr(missing,"slot 1 1/2") && InStr(missing,"slot 2 0/1") && !InStr(missing,"slot 3"),"build completion ignored missing enabled copies")
 
     ; A bound purchase is confirmed by its side panel, with no UPG OCR.
-    unit.count := 4,modelMode := true,models := Map(),panel := false
+    unit.count := 4,modelMode := true,models := Map(),panel := false,gFailedPlacementSpots := []
     gPlacements := [{slot:1},{slot:1},{slot:1}],registrations := 3,buys := 3,gPendingPlacement := 0
     Assert(TryPlacementCandidateAction(unit,point) && buys=4 && CountSlotPlacements(1)=4 && !gPendingPlacement,"side panel did not immediately confirm the fourth purchase")
     RefreshPlacementSearch()
@@ -61,8 +63,8 @@ try {
     Assert(!TryPlacementCandidateAction(unit,{x:480,y:330}) && buys=4,"configured target four allowed a fifth purchase")
 
     ; A delayed panel is recovered at the exact purchase coordinate, without buying.
-    unit.count := 1,gPlacements := [],registrations := 0,buys := 0,models := Map(),delayPanel := true
-    Assert(TryPlacementCandidateAction(unit,point) && buys=1 && CountSlotPlacements(1)=1,"delayed purchase panel caused a replacement purchase")
+    unit.count := 1,gPlacements := [],registrations := 0,buys := 0,models := Map(),delayPanel := true,failures := 0
+    Assert(TryPlacementCandidateAction(unit,point) && buys=1 && CountSlotPlacements(1)=1 && failures=0,"delayed purchase triggered a replacement or failure check")
 
     ; A card may open during mouse-up/confirmation, before the click call returns.
     gPlacements := [],registrations := 0,buys := 0,models := Map(),cardDuringPurchase := true
@@ -73,20 +75,23 @@ try {
 
     ; A rejected spot remains retryable elsewhere after two completed no-model probes.
     gPlacements := [],registrations := 0,buys := 0,models := Map(),rejectPurchase := true,failures := 0
-    Assert(!TryPlacementCandidateAction(unit,point) && !gPendingPlacement && gConsecutivePlacementFailures=1,"confirmed empty spot stayed pending or failure was counted twice")
+    Assert(!TryPlacementCandidateAction(unit,point) && !gPendingPlacement && !preview && gConsecutivePlacementFailures=1,"confirmed empty spot stayed pending, kept its preview, or counted twice")
     rejectPurchase := false
+    unit.count := 2
     Assert(TryPlacementCandidateAction(unit,{x:450,y:330}) && CountSlotPlacements(1)=1,"a failed purchase prevented the next valid placement")
+    RefreshPlacementSearch()
+    Assert(!TryPlacementCandidateAction(unit,point) && !TryPlacementCandidateAction(unit,{x:425,y:330}) && buys=2,"the next copy retried a rejected patch after placement and rescan")
 
     ; Five actual rejected purchase clicks, including their recovery probes,
     ; count once each. A sixth buy must be blocked at the transaction boundary.
-    gPlacements := [],registrations := 0,buys := 0,models := Map(),rejectPurchase := true
+    gPlacements := [],registrations := 0,buys := 0,models := Map(),rejectPurchase := true,gFailedPlacementSpots := []
     ResetPlacementFailureStreak()
     Loop 5
         Assert(!TryPlacementCandidateAction(unit,{x:250+A_Index*30,y:330}),"rejected purchase was registered")
     Assert(buys=5 && gConsecutivePlacementFailures=5,"recovery clicks double-counted or dropped failed purchases")
     RefreshPlacementSearch()
     Assert(!TryPlacementCandidateAction(unit,{x:500,y:330}) && buys=5,"rescan allowed a sixth purchase without relocation")
-    ResetPlacementFailureStreak(),rejectPurchase := false
+    ResetPlacementFailureStreak(),rejectPurchase := false,gFailedPlacementSpots := []
 
     ; Reproduce the start-of-game setup in the user's log. All 16 purchases
     ; across six slots must advance on the panel alone, with OCR unavailable.
@@ -175,6 +180,7 @@ ClearCardChoice(*) {
 }
 RegisterPlacedUnit(unit,point) {
     global registrations,gPlacements
+    Assert(!preview,"preview was active during successful placement bookkeeping")
     registrations += 1
     item := {slot:unit.slot,x:point.x,y:point.y}
     gPlacements.Push(item)
@@ -182,9 +188,13 @@ RegisterPlacedUnit(unit,point) {
 }
 CandidateOccupied(*) => false
 PlacementTerrain(*) => "ground"
-RememberFailedPlacementSpot(*) => 0
-PlacementShortOfYen(*) => false
-ForgetFailedPlacementSpot(*) => 0
+PlacementShortOfYen(*) {
+    global failures
+    Assert(!preview,"preview was active during Yen OCR")
+    failures += 1
+    return false
+}
+UnitPlacementCost(*) => 1350
 ClickAwayFromUnitPanel(*) => CloseUnitPanel()
 ActionPause(*) => true
 Log(*) => 0

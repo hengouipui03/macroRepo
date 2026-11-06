@@ -389,12 +389,17 @@
     ; Card wording ("+50% Enemy Health") leaking into the panel crop is not a total.
     modifiers := ParseMatchModifiers([{text:"+50% Enemy Health"},{text:"+75 Enemy Magic Resist"},{text:"+0.5% Enemy Regen"}])
     AssertLearning(!modifiers.healthKnown && !modifiers.magicalKnown && !modifiers.regenKnown,"Card text was read as a Level Modifiers total")
+    ; Weather row from the Sky Aircraft screenshot moves checkpoint 1 in a sandstorm.
+    ApplyModifierSnapshot(ParseMatchModifiers([{text:"SummerPearls Multiplier: x1.30"},{text:"Weather: Sandstorm"},{text:"Cooldown Time: -5.0%"}]))
+    AssertLearning(SandstormWeather(),"Weather: Sandstorm was not recognised")
+    ResetMatchCardContext()
+    AssertLearning(!SandstormWeather(),"weather leaked into the next match")
     if FileExist(A_ScriptDir "\cache\provided-modifiers-upscaled.tsv") {
         actual := ParseMatchModifiers(ParseOcrRows(FileRead(A_ScriptDir "\cache\provided-modifiers-upscaled.tsv","UTF-8"),0,0))
         AssertLearning(actual.healthKnown && actual.health=100 && actual.physical=200 && actual.magical=50,"Actual attached screenshot OCR: health=" actual.health " known=" actual.healthKnown " physical=" actual.physical " magical=" actual.magical)
         count += 1
     }
-    count += 16
+    count += 18
     parsed := ParseOcrRows("33`t22`t72`t38`tPlay`n33`t92`t166`t38`tPlay Here",100,200)
     AssertLearning(parsed.Length=2 && parsed[1].x=133 && parsed[1].y=222 && parsed[2].text="Play Here","OCR crop coordinates were translated incorrectly")
     count += 1

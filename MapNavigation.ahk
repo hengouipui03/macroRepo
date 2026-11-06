@@ -356,6 +356,9 @@ MapFarthestNode(nodes,start) {
 ; from the node nearest the player) and the points come back unordered.
 MapRouteQuarters(model,base := -1) {
     global MAP_GRID
+    ; Sandstorm: checkpoint 1 is a new point halfway between the 25% and 50%
+    ; marks (37.5%). It needs the base, so the share counts from the enemy end.
+    first := base>=0 && SandstormWeather()?.375:.25
     if base<0 {
         seed := model.player?MapNearest(model.nodes,model.player.x,model.player.y):-1
         if seed<0
@@ -377,7 +380,7 @@ MapRouteQuarters(model,base := -1) {
         lengths.Push(total)
     }
     points := []
-    for share in [.25,.5,.75] {
+    for share in [first,.5,.75] {
         best := 1,error := 1.0e30
         for index,length in lengths
             if Abs(length-total*share)<error
