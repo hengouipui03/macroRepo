@@ -344,6 +344,11 @@ CardPixelInk(frame,index) {
     if !frame || !frame.valid
         return ink
     bounds := CardEffectBounds(index)
+    if !DetectedCardSpans() {
+        ; Without measured edges, sample inside the overlap of the known card layouts.
+        bounds[1] := [164,330,512][index]
+        bounds[3] := [290,472,637][index]
+    }
     y := bounds[2]+10
     while y<=bounds[2]+122 {
         x := bounds[1]+10

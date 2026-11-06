@@ -1298,6 +1298,47 @@ SitOutMatch(reason) {
     return ""
 }
 
+; Vote Start did not appear in time (slow teleport, missed frame). Instead of
+; ending the run, keep reading the screen until it shows something to act on:
+; Vote Start -> continue, lobby -> restart from LobbyPlay, end screen -> Replay,
+; match already running -> sit it out. F7 and disconnects still end this.
+RecoverVoteStart() {
+    global gRunning,gReconnecting,gAwaitingReplayMap
+    ; A stale replay latch would make every end-screen check pass at once.
+    gAwaitingReplayMap := false
+    Notify("Vote Start not seen in time. Watching the screen to recover.")
+    matchSince := 0,nextNote := A_TickCount+30000
+    while gRunning && !gReconnecting {
+        if HasVoteStart() {
+            matchSince := 0
+            if WaitForVoteStart(5000)
+                return "vote"
+        } else if HasLobbyPlay() {
+            ResetEndGameFlow()
+            Notify("Recovery: back in the lobby. Restarting from LobbyPlay.")
+            return "restart"
+        } else if ReadEndScreen().stage!="none" {
+            matchSince := 0
+            if TryEndState()
+                return "replay"
+        } else if GetMiniMapRoutePoints().Length>=8 {
+            ; The minimap also shows during the vote countdown, so the match
+            ; only counts as started after 10 s with no Vote Start panel.
+            if !matchSince
+                matchSince := A_TickCount
+            else if A_TickCount-matchSince>=10000
+                return SitOutMatch("Recovery: the match started without a confirmed Vote Start.")
+        } else
+            matchSince := 0
+        if A_TickCount>=nextNote {
+            Log("Recovery: still no Vote Start, lobby, end screen or running match on screen.")
+            nextNote := A_TickCount+30000
+        }
+        ActionPause(500)
+    }
+    return ""
+}
+
 
 ReadUnitPlan() {
     global gUnitControls
@@ -1398,8 +1439,11 @@ RunMacro() {
     EndUnitManagerPhase()
     plan := ReadUnitPlan()
     if gAwaitingReplayMap {
-        if !WaitForReplayVoteStart()
-            return
+        if !WaitForReplayVoteStart() {
+            outcome := RecoverVoteStart()
+            if outcome!="vote"
+                return outcome
+        }
     } else {
         if !HasVoteStart() {
             if IsEndGameBlocking() {
@@ -1418,8 +1462,9 @@ RunMacro() {
         }
         Notify("Waiting for Vote Start before any map preparation.")
         if !WaitForVoteStart(45000) {
-            Notify("Vote Start was not confirmed.")
-            return
+            outcome := RecoverVoteStart()
+            if outcome!="vote"
+                return outcome
         }
     }
     ; Only a fresh Vote Start releases the old endgame state. The map is
@@ -1537,7 +1582,9 @@ RunMacroSafely() {
     gMacroThreadActive := true
     try {
         while gRunning {
-            if RunMacro() != "replay"
+            ; "replay" = next match after Replay; "restart" = recovered to the lobby.
+            result := RunMacro()
+            if result!="replay" && result!="restart"
                 break
         }
     }

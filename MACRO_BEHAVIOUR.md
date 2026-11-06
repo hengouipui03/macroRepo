@@ -32,10 +32,10 @@ Hotkeys: **F6** start, **F7** stop (releases every key), **F8** overhead camera 
 ## 2. One match, start to finish
 
 ```
-F6 → StartMacro → RunMacro (loops on "replay")
+F6 → StartMacro → RunMacro (loops on "replay" and "restart")
   ├─ EndUnitManagerPhase            F is forbidden from here until the build is placed
   ├─ Lobby: Play → hold W → Play Here → Open → Start   (TryStartFromLobby)
-  ├─ Wait for Vote Start (45 s)
+  ├─ Wait for Vote Start (45 s); on timeout → RecoverVoteStart
   ├─ EnsureRouteAndSpawn            minimap → P lit → overhead camera → find player → 3 checkpoints
   ├─ NavigateForPlacement           walk to checkpoint 1 (50 s prep budget)
   ├─ TryVoteStart                   click the green Yes
@@ -49,6 +49,7 @@ F6 → StartMacro → RunMacro (loops on "replay")
 
 ### Decisions in the flow
 - If a match is already running (route on the minimap, no Vote Start), the macro refuses to build into it.
+- If Vote Start is not confirmed in time (45 s from the lobby, 3 min after Replay), `RecoverVoteStart` keeps reading the screen instead of ending the run: Vote Start → continue as normal; lobby → restart from LobbyPlay; end screen → Replay flow; minimap route with no Vote Start for 10 s → sit the match out until its end screen. It logs every 30 s while nothing recognisable is on screen. Only F7 or a disconnect ends it.
 - An end screen visible at start is handled first (Replay).
 - Navigation timeout is not a failure: placement starts from where the player is.
 - If Vote Start is still showing after the click, the macro stops before buying anything.
@@ -201,7 +202,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `GetMiniMapRoutePoints`, `FindNearestRoutePoint`, `FindNextRouteWaypoint`, `FindMiniMapPlayer`, `ArrowPose`, `MapDistance`, `HoldArrow`, `NavigateAlongRoute` | AHK fallback minimap reading and route following. |
 | `CameraReset`, `InputPause`, `HoldCameraKey` | Overhead camera (hold I, tilt, hold O). |
 | `EnsureRouteAndSpawn` | Match preparation. Clears the manager phase, never presses F, then minimap, P, camera, player and checkpoints. |
-| `HasVoteStart`, `HasLobbyPlay`, `IsLobbyCyan`, `HasMatchmakingPanel`, `HasOpenPortal`, `TryStartPortal`, `TryStartFromLobby`, `TryVoteStart`, `VoteStartClosed` | Lobby and vote flow. |
+| `HasVoteStart`, `HasLobbyPlay`, `IsLobbyCyan`, `HasMatchmakingPanel`, `HasOpenPortal`, `TryStartPortal`, `TryStartFromLobby`, `TryVoteStart`, `VoteStartClosed`, `RecoverVoteStart` | Lobby and vote flow; recovery when Vote Start times out. |
 | `HasCardChoice`, `HasCardBorder` | Card screen detection. |
 | `IsCardColour`, `CardBorderKind`, `CardColourKind` | Legacy border classification (not used to decide). |
 | `CheckCardInterruption` | Polled during waits. Pauses the current action, chooses the card, resumes the same unit/purchase. |

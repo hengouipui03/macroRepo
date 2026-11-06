@@ -231,12 +231,12 @@ WaitForReplayVoteStart() {
     deadline := A_TickCount+180000
     Notify("Replay clicked: waiting for the Replay button to disappear.")
     if !WaitFor(() => !HasReplayButton(),180000,250) {
-        Notify("The Replay button did not clear. Stopped before map preparation.")
+        Notify("The Replay button did not clear.")
         return false
     }
     Notify("Replay loading: waiting for the next Vote Start, on the same or a new map.")
     if !WaitForVoteStart(Max(1000,deadline-A_TickCount)) {
-        Notify("Vote Start after Replay was not confirmed. Stopped before map preparation.")
+        Notify("Vote Start after Replay was not confirmed.")
         return false
     }
     gAwaitingReplayMap := false

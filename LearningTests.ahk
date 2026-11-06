@@ -186,6 +186,9 @@
         count += 2
     }
     AssertLearning(PixelGreenCards(PixelOnlyInkFixture(0)).Length=0,"Red-only cards were read as green")
+    green := PixelGreenCards(PixelOnlyInkFixture(3,true))
+    AssertLearning(green.Length=1 && green[1]=3,"Red scenery outside the right card hid its green effect")
+    count += 1
     AssertLearning(ChooseBestCard([CardPolicy("150% physical resist",false,"debuff"),CardPolicy("50% magical resist",false,"debuff")])=2,"Fixed physical/magical order overrode resistance amount")
     for wording in ["50% physical and magical resist","Physical and Magical Resist III +50%","Physical Resist +50% Magical Resist +50%","+50 Enemy Physical Resist +50 Enemy Magic Resist","Resistant Enemies I +50% physical resist and +50% magical resist"] {
         combined := CardPolicy(wording,false,"debuff")
@@ -522,10 +525,13 @@ class WordInkFixture {
 }
 class PixelOnlyInkFixture {
     valid := true
-    __New(greenIndex) {
+    __New(greenIndex,rightScenery := false) {
         this.greenIndex := greenIndex
+        this.rightScenery := rightScenery
     }
     AtRef(x,y) {
+        if this.rightScenery && x>=643
+            return 0xF01818
         for index,left in [129,320,512]
             if x>=left+30 && x<=left+130 && y>=205 && y<=250
                 return index=this.greenIndex?0x10F010:0xF01818

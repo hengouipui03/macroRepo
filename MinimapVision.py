@@ -226,7 +226,8 @@ def card_boxes(image):
     its left. The right card is placed one pitch right of the middle card and
     is never measured, because the Level Modifiers panel can touch it."""
     h, w = image.shape[:2]
-    y0, y1 = int(h * .40), int(h * .62)
+    # Lower parts of the cards can fade to red and fail the dark-pixel test.
+    y0, y1 = int(h * .36), int(h * .55)
     cols = (image[y0:y1].max(axis=2) < 45).mean(axis=0) > .55
     raw = []
     start = None
