@@ -225,6 +225,28 @@ for name in ("minimap-screenshot.png", "two-path-minimap.jpg", "player-on-heart-
     other.box = (0, 0, other.static.shape[1], other.static.shape[0])
     check("paths" not in other.scan(), name + " read as a three-path map")
 
+# Red no-place overlay (a unit held, P off): the road is the long band of
+# constant width; wider red Hill ground and thin health bars are not road, and
+# no placement spot lands on any red.
+for name, hill_point in (("hover-future-city-hill.png", (900, 569)), ("hover-planet-greenie-p-off.png", None)):
+    hover = mv.World(mv.Vision())
+    hover.static = mv.read_image(os.path.join(HERE, name))
+    view = hover.path_view(0, 0, hover.static.shape[1], hover.static.shape[0])
+    check(view["path"] > 10000, "red road not read from the overlay: %s %s" % (name, view))
+    lane = [tuple(map(int, p.split(","))) for p in hover.placement_line(48, "-", "-", "-")["points"].split(";")]
+    check(len(lane) >= 8 and not any(hover.on_red(x // 2, y // 2) for x, y in lane), "lane spots missing or on red: " + name)
+    if hill_point:
+        check(hover.onpath(*hill_point)["on"] == 0 and hover.on_red(hill_point[0] // 2, hill_point[1] // 2), "red Hill ground read as road")
+        check(hover.placement_valid(hill_point[0] * 800.0 / hover.static.shape[1], hill_point[1] * 600.0 / hover.static.shape[0])["valid"] == 0, "a spot on red Hill ground passed validation")
+    # An unselected frame keeps the path view instead of replacing it.
+    before = int(hover.area.sum())
+    hover.world(0, 0, hover.static.shape[1], hover.static.shape[0])
+    check(int(hover.area.sum()) == before, "an unselected frame replaced the path view")
+    check(hover.reset()["reset"] == 1 and hover.view_area is None and hover.blocked is None, "worldreset kept the path view")
+lit = mv.World(mv.Vision())
+lit.static = mv.read_image(os.path.join(HERE, "hover-planet-greenie-p-on.png"))
+check(lit.path_view(0, 0, lit.static.shape[1], lit.static.shape[0])["path"] == 0, "lit arrows (P on) read as the red overlay road")
+
 # P off on Sky Island during a Blizzard: the yellow Weather Alert banner is
 # not a lit road (it let the macro carry on as if P had lit the path).
 sky = mv.World(mv.Vision())

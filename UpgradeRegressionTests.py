@@ -23,7 +23,7 @@ names = ["UpgradeQueue", "ResetUpgradeSelection", "ResetUpgradeTracking",
          "TileIdentityMismatch", "StableTileRead", "UpgradeOnceAction"]
 logic = "\n\n".join(function("PlacedUnits.ahk", name) for name in names)
 logic += "\n" + function("Learning.ahk", "NormalizeWords")
-logic += "\n" + function("MapNavigation.ahk", "EnsurePathLit")
+logic += "\n" + function("MapNavigation.ahk", "EnsurePathOff")
 logic += "\n" + function("Placement.ahk", "PlacementStillBesidePath")
 logic += "\n" + function("Placement.ahk", "TryPlacementCandidateAction")
 logic += "\n" + function("Placement.ahk", "TrySelectUnitAt")
@@ -46,7 +46,7 @@ global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUnitManage
 global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
 global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true
 global placeTries := 0,lagMs := 0,opened := [],flashLevel := Map(),warnings := 0
-global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true
+global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := true,pVisible := true
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
 global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
@@ -200,14 +200,16 @@ try {
     Assert(clicks=1,"a slightly different portrait of the right unit was refused")
     sigs := Map(),gSlotPortraits := Map()
 
-    ; P is discovered once; later calls use the exact saved coordinate.
-    Assert(EnsurePathLit() && findCalls=1 && pClicks=1,"first P click was not saved/confirmed")
-    gPathToggleClicked := false,pOn := false
-    Assert(EnsurePathLit() && findCalls=1 && pClicks=2,"saved P coordinate required rediscovery")
-    gPathToggleClicked := false,pOn := false,pVisible := false
-    ; Only the P glyph confirms the click; a visible road is not proof.
-    Assert(!EnsurePathLit() && findCalls=1 && pClicks=3,"P accepted as lit while its glyph never lit up")
-    Assert(!EnsurePathLit() && pClicks=3,"delayed confirmation toggled P a second time")
+    ; P must end up OFF (its arrows hide the red overlay). Discovered once;
+    ; later calls use the exact saved coordinate. Never stops the macro.
+    Assert(EnsurePathOff() && findCalls=1 && pClicks=1 && !pOn,"lit P was not switched off with one saved click")
+    gPathToggleClicked := false
+    Assert(EnsurePathOff() && findCalls=1 && pClicks=1,"P already off was clicked, or its coordinate rediscovered")
+    gPathToggleClicked := true,pOn := true
+    Assert(EnsurePathOff() && pClicks=1,"P was toggled a second time in one game")
+    gPathToggleClicked := false,pVisible := false
+    Assert(EnsurePathOff() && pClicks=1,"an unreadable P button was clicked")
+    pVisible := true,pOn := false
     panel := false
     candidate := {x:450,y:400,row:1}
     a.count := 2
@@ -461,7 +463,7 @@ VisionRequest(command) {
 ClickRef(x,y,stillValid := 0) {
     global pClicks,pOn
     Assert(x=715 && y=21,"P click missed the fixed coordinate")
-    pClicks += 1,pOn := true
+    pClicks += 1,pOn := !pOn
     return true
 }
 IsEndGameBlocking(*) => false

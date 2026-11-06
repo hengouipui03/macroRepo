@@ -1292,7 +1292,11 @@ EscapeObstacle(dx,dy,attempt) {
 
 ; A toggle receives at most one click. Subsequent reads only wait for the
 ; visual state to catch up; a delayed grey reading must never turn P back off.
-EnsurePathLit() {
+; P must be OFF: its lit arrows cover the red no-place overlay that placement
+; reads (RefreshPathView). Walking needs only the minimap. Only the P glyph is
+; trusted (white = on, dim = off): at most one click per game, and an unread
+; or unconfirmed state never stops the macro.
+EnsurePathOff() {
     global gPathLit,REF_W,REF_H,gPathToggleClicked,gRunning
     if !gRunning
         return false
@@ -1318,32 +1322,33 @@ EnsurePathLit() {
     px := saved.x-(geometry.cx-geometry.x),py := saved.y-(geometry.cy-geometry.y)
     command := "toolbarfixed " cx " " cy " " cw " " ch " " px " " py
     reply := VisionRequest(command)
-    if VisionOk(reply) && reply["on"]="1" {
-        Log("In-game path is already illuminated; leaving P enabled.")
-        return gPathLit := true
+    if !VisionOk(reply) {
+        Log("P button unreadable; leaving P as it is.")
+        return true
+    }
+    if reply["on"]="0" {
+        Log("P is off; placement reads the red no-place overlay.")
+        return true
     }
     if gPathToggleClicked {
-        Log("P was already clicked this game; no second toggle will be sent.")
-        return false
+        Log("P still looks on, but it was already clicked this game; no second toggle.")
+        return true
     }
-    Log("Clicking the saved P coordinate once, then waiting for illumination.")
+    Log("P is on; click it once to turn the lit path off (its arrows hide the red overlay).")
     if !ClickRef(px*REF_W/cw,py*REF_H/ch)
-        return false
+        return gRunning
     gPathToggleClicked := true
     Loop 4 {
         if !ActionPause(700) || !GetClient(&cx,&cy,&cw,&ch)
-            return false
+            return gRunning
         reply := VisionRequest(command)
-        if VisionOk(reply) && reply["on"]="1" {
-            Log("In-game path is illuminated (P lit).")
-            return gPathLit := true
+        if VisionOk(reply) && reply["on"]="0" {
+            Log("P is off.")
+            return true
         }
     }
-    ; Only the P glyph confirms it (dim when off, white when on). The road is
-    ; no proof: the player can spawn far from it, and yellow HUD text such as
-    ; the Weather Alert banner once passed for a lit road.
-    Log("P clicked once, but the P button is still dim. No second toggle sent.")
-    return false
+    Log("P still looks on after one click; no second toggle. Placement may not see the road.")
+    return true
 }
 
 WorldRequest(line := "") {

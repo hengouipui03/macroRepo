@@ -183,6 +183,7 @@ PlacementSearchDiagnostic(*) => 0
 PlacementUpstreamDirection(*) {
     return {x:0,y:0}
 }
+RefreshPathView(*) => true
 '''
 
 if __name__ == "__main__":

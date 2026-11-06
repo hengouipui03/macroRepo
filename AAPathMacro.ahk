@@ -805,11 +805,10 @@ EnsureRouteAndSpawn() {
     if gMapModel.source="vision"
         VisionRequest("debug " A_ScriptDir "\minimap-debug.png")
     BeginTimedPreparation()
-    ; The P toolbar is independent of which reader supplied the minimap.
-    if !EnsurePathLit() {
-        Log("Cannot confirm P/path illumination. Stopped before navigation and placement.")
+    ; P is switched OFF (placement reads the red overlay; walking uses the
+    ; minimap). Only a stop or a lost Roblox window ends preparation here.
+    if !EnsurePathOff()
         return false
-    }
     ; Even fallback minimap detection must enable P before checking the arrow.
     if gMapModel.source!="vision" && !gMapModel.player {
         Log("Minimap route drawn, but the small player chevron was not found. Heart is the base.")

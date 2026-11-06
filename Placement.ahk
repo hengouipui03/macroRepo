@@ -2,6 +2,8 @@
 global gPlacementLine := [],gLastPlacedIndex := 0,gPlacementPreferredSide := 0
 ; Screen direction toward where the enemies come from, for the current lanes.
 global gPlacementUp := {x:0,y:0}
+; True once the red no-place overlay has been read for the current view.
+global gPathViewReady := false
 global gHillPlacementUnavailable := false
 global gPlacementAttemptClicked := false
 global FAILED_PLACEMENT_RADIUS := 14
@@ -18,14 +20,17 @@ global gUnitPreviewActive := true
 global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gLastYenRead := 0
 
 ResetPlacementSearch() {
-    global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
+    global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady
+    gPathViewReady := false
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
     gPlacementYenWait := 0,gLastYenRead := 0
 }
 
 RefreshPlacementSearch() {
-    global gPlacementLine,gLastPlacedIndex,gLayoutValidation
+    global gPlacementLine,gLastPlacedIndex,gLayoutValidation,gPathViewReady
+    ; A rescan or a moved view reads the red overlay again.
+    gPathViewReady := false
     ; Keep confirmed units, failed spots AND unresolved purchases across rescans.
     ; Only ResetPlacementSearch at the next build clears failure memory.
     gPlacementLine := [],gLastPlacedIndex := 0
@@ -1115,6 +1120,36 @@ PlaceUnit(unit) {
     }
 }
 
+; The path comes from the red no-place overlay, shown only while a unit is
+; held: select the slot, move the cursor onto the HUD so the held unit's own
+; preview ring does not cover the road, read the road and every red area
+; (pathview), then cancel the hold. Every later placement check reuses this
+; view until a rescan or a moved view.
+RefreshPathView(unit) {
+    global gPathViewReady
+    if gPathViewReady
+        return true
+    if !GetClient(&cx,&cy,&cw,&ch) || !CloseUnitPanel() || !CancelUnitPreview() || HasCardChoice()
+        return false
+    if !SelectPlacementUnit(unit)
+        return false
+    if ToScreen(400,60,&sx,&sy)
+        SmoothMoveTo(sx,sy)
+    ok := ActionPause(300) && !HasCardChoice()
+    reply := ok?VisionRequest("pathview " cx " " cy " " cw " " ch):false
+    CancelUnitPreview()
+    if VisionOk(reply) && reply["path"]!="0" {
+        gPathViewReady := true
+        Log("Path read from the red no-place overlay while holding " unit.name ".")
+        return true
+    }
+    if ok {
+        Log("No red road in the no-place overlay; no placement click sent. Retry shortly.")
+        ActionPause(1000)
+    }
+    return false
+}
+
 PlaceUnitAction(unit) {
     global gRunning,gPendingPlacement,gHillPlacementUnavailable,gPlacementLine,gPlacementYenWait
     gHillPlacementUnavailable := false
@@ -1136,6 +1171,8 @@ PlaceUnitAction(unit) {
     if !CancelUnitPreview()
         return false
     RefreshMatchModifiers()
+    if !RefreshPathView(unit)
+        return false
     hillOnly := unit.HasProp("hill") && unit.hill
     hybrid := unit.HasProp("hybrid") && unit.hybrid
     if hillOnly || hybrid {

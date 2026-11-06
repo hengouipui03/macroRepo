@@ -166,6 +166,36 @@ def three_paths(image):
     return lines[0] | lines[1] if lines[0].any() and lines[1].any() else None
 
 
+def red_overlay(small, keep):
+    """The red no-place overlay shown while a unit is held (P must be off,
+    or the lit arrows break it up). Returns (path, blocked) at the size of
+    `small`: path is only the road, a long band of constant width; blocked
+    is every red area, the road and red Hill ground alike, where nothing can
+    be placed.
+
+    Shape, not colour, tells them apart: Hill ground is wider than the road,
+    enemy health bars and unit rings are thinner or shorter.
+    """
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    width = small.shape[1]
+    red = (((h <= 8) | (h >= 165)) & (s >= 110) & (v >= 150)).astype(np.uint8) & keep
+    red = cv2.morphologyEx(red, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    wide_k = max(5, int(width * 0.045)) | 1  # wider than the road: Hill ground
+    wide = cv2.morphologyEx(red, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (wide_k, wide_k)))
+    wide = cv2.dilate(wide, np.ones((5, 5), np.uint8))
+    thin_k = max(3, int(width * 0.012)) | 1  # thinner than the road: health bars, rings
+    band = cv2.morphologyEx(red, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (thin_k, thin_k)))
+    band &= 1 - wide
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(band, 8)
+    path = np.zeros_like(band)
+    for index in range(1, count):
+        if max(stats[index][2], stats[index][3]) >= width * 0.15:
+            path[labels == index] = 1
+    blocked = cv2.dilate(red, np.ones((3, 3), np.uint8)) > 0
+    return path, blocked
+
+
 def path_crossings(image, route, purple):
     """Grid points where the purple path meets the green route: every crossing
     and the merge before the base, nearby contacts merged into one point."""
@@ -513,11 +543,52 @@ class World:
         self.area = None
         self.saved_view = None
         self.yellow_path = False
+        # The path view read from the red overlay (pathview) and every red
+        # no-place area in it; kept until the next read or match.
+        self.view_area = None
+        self.blocked = None
 
     def reset(self):
-        """New match: forget this map's path colour."""
+        """New match or a moved camera: forget the path view and colour."""
         self.yellow_path = False
+        self.view_area = self.blocked = None
         return {"reset": 1}
+
+    def hud_keep(self, height, width):
+        """Play-area mask at (height, width): HUD and minimap excluded."""
+        keep = np.ones((height, width), np.uint8)
+        keep[: int(height * 0.23)] = 0  # Vote controls and top HUD.
+        keep[int(height * 0.81):] = 0  # Bottom unit bar.
+        keep[int(height * 0.73):, int(width * 0.78):] = 0  # Minimap.
+        keep[:int(height * 0.73), int(width * 0.80):] = 0  # Party/modifier HUD.
+        if self.vision.box is not None and self.vision.static is None:
+            left, top, box_w, box_h = self.vision.box
+            keep[max(0, top // 2 - 4):(top + box_h) // 2 + 4, max(0, left // 2 - 4):(left + box_w) // 2 + 4] = 0
+        return keep
+
+    def path_view(self, cx, cy, cw, ch):
+        """Read the road from the red overlay while a unit is held.
+
+        Stores the road band as the path for every later placement command
+        and the red areas as places never to click. The unselected baseline
+        image (self.image, used by hillspots and camera shifts) is unchanged.
+        """
+        image = self.grab(cx, cy, cw, ch)
+        if not ScreenSource.usable(image, image.shape[1], image.shape[0]):
+            raise RuntimeError("path view capture is blank")
+        small = cv2.resize(image, (image.shape[1] // 2, image.shape[0] // 2), interpolation=cv2.INTER_AREA)
+        path, blocked = red_overlay(small, self.hud_keep(*small.shape[:2]))
+        if not path.any():
+            return {"path": 0, "on": 0}
+        self.view_area, self.blocked = path, blocked
+        self.area = path
+        centre = self.centre()
+        return {"path": int(path.sum() * 4), "on": int(self.near_path(*centre, radius=path.shape[1] * 0.02))}
+
+    def on_red(self, x, y):
+        """True where the last path view showed red (half-size coordinates)."""
+        return (self.blocked is not None and 0 <= y < self.blocked.shape[0]
+                and 0 <= x < self.blocked.shape[1] and bool(self.blocked[y, x]))
 
     def grab(self, cx, cy, cw, ch):
         if self.static is not None:
@@ -670,6 +741,10 @@ class World:
         area[outside[1:-1, 1:-1] == 1] = 1
         support_distance = cv2.distanceTransform(1-evidence, cv2.DIST_L2, 5)
         area[support_distance > width*0.025] = 0
+        # A path view from the red overlay is the path: an unselected frame
+        # only refreshes the baseline image.
+        if self.view_area is not None:
+            area = self.view_area
         self.area = area
         centre = self.centre()
         return {"path": int(area.sum() * 4), "on": int(self.near_path(*centre, radius=width * 0.02))}
@@ -1056,7 +1131,7 @@ class World:
             x, y = (int(value) for value in point)
             rx, ry = x * sx, y * sy
             dx, dy = (x - cx) * sx, (y - cy) * sy
-            return (not excluded[y,x] and self.in_placement_area(rx,ry)
+            return (not excluded[y,x] and self.in_placement_area(rx,ry) and not self.on_red(x, y)
                     and 8 <= float(distance[y, x]) * sx <= 18)
 
         candidates = []
@@ -1180,7 +1255,7 @@ class World:
                 ix,iy=int(round(qx/sx)),int(round(qy/sy))
                 if not(0<=ix<width and 0<=iy<height):continue
                 qx,qy=ix*sx,iy*sy;dx,dy=qx-400,qy-300
-                if not self.in_placement_area(qx,qy):continue
+                if not self.in_placement_area(qx,qy) or self.on_red(ix,iy):continue
                 if not 22<=distance[iy,ix]*sx<=48:continue
                 nearest=labels[iy,ix];ox,oy=(ix-lx[nearest])*sx,(iy-ly[nearest])*sy
                 length=float(np.hypot(ox,oy))
@@ -1288,6 +1363,8 @@ class World:
             return float(distance[iy, ix]) if 0 <= ix < width and 0 <= iy < height else float("inf")
 
         road_gap = gap(rx, ry)
+        if self.on_red(int(rx*width/800), int(ry*height/600)):
+            return {"valid": 0, "gap": "%.1f" % road_gap}
         valid = 8 <= road_gap <= 18
         if row == 2:
             anchors = [] if seeds == "-" else [tuple(map(float,p.split(","))) for p in seeds.split(";")]
@@ -1362,7 +1439,7 @@ def main():
     world = World(vision)
     commands = {"ping": vision.ping, "load": vision.load, "box": vision.use_box, "locate": vision.locate,
                 "scan": vision.scan, "mark": vision.mark, "moved": vision.moved, "track": vision.track,
-                "debug": vision.debug, "loadworld": world.load, "worldreset": world.reset, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
+                "debug": vision.debug, "loadworld": world.load, "worldreset": world.reset, "pathview": world.path_view, "toolbar": world.toolbar, "toolbarfixed": world.toolbar_fixed, "world": world.world,
                 "follow": world.follow, "beside": world.beside, "placementline": world.placement_line, "placementneighbours": world.placement_neighbours, "hillspots": world.hill_spots, "validateplacements": world.validate_placements, "placementvalid": world.placement_valid, "onpath": world.onpath, "worlddebug": world.debug,
                 "relocation": world.relocation, "rememberview": world.remember_view, "viewshift": world.view_shift,
                 "unitmanager": world.unit_manager, "cardboxes": world.card_boxes,
