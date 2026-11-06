@@ -22,7 +22,7 @@ fixture = r'''
 global gRunning := true,gInputEpoch := 0,ACTION_GAP_MS := 300,gLastInputFinishedAt := 0
 global gUnitPreviewActive := true,gPendingPlacement := 0,gPlacementAttemptClicked := false
 global testNow := 10000,events := [],ACTION_HOLD_MS := 300,UNIT_ACTION_MS := 150,CLICK_HOLD_MS := 300,MOUSE_SETTLE_MS := 0,stopAfter := 0
-global voteMode := false,voteVisible := true,mouseDownAt := 0
+global voteMode := false,voteVisible := true,mouseDownAt := 0,voteIgnoreClicks := 0,voteCount := ""
 try {
     Assert(SelectPlacementUnit({slot:1}),"slot key failed")
     Assert(PlacementClickRef(400,330),"placement click failed")
@@ -52,6 +52,13 @@ try {
     voteMode := true,voteVisible := true,before := events.Length
     Assert(TryVoteStart() && !voteVisible && events.Length=before+2,"Vote Start did not receive a single complete 300ms press")
     Assert(events[before+2].at-events[before+1].at=300,"Vote Start used a different hold duration")
+    ; First click not taken, count unreadable: exactly one more click.
+    voteVisible := true,voteIgnoreClicks := 1,voteCount := "",before := events.Length
+    Assert(TryVoteStart() && !voteVisible && events.Length=before+4,"an untaken Vote Start click did not get exactly one more click")
+    ; Panel still open but our vote counted: no second click (it could un-vote).
+    voteVisible := true,voteIgnoreClicks := 1,voteCount := 1,before := events.Length
+    Assert(!TryVoteStart() && events.Length=before+2,"a counted vote was clicked again")
+    voteVisible := false,voteIgnoreClicks := 0,voteCount := ""
     voteMode := false
     before := events.Length
     Assert(PlacementClickRef(570,170,true,0,true) && events.Length=before+2,"manager portrait selection was blocked by an already open unit panel")
@@ -63,7 +70,7 @@ try {
     Assert(HoldCameraKey("i",120,gInputEpoch),"manual camera hold no longer works outside a run")
     gRunning := true,gUnitPreviewActive := true,stopAfter := testNow+100,count := events.Length
     Assert(!CancelUnitPreview() && events.Length=count,"F7 during the action interval still emitted input")
-    FileAppend "PASS: 150ms placement/selection and 300ms general UI holds/gaps; P has no exception; Vote Start receives one full 300ms press; no duplicate Q; no extra delay after calculation; manual camera works; stop interrupts immediately.`n","*","UTF-8"
+    FileAppend "PASS: 150ms placement/selection and 300ms general UI holds/gaps; P has no exception; Vote Start receives one full 300ms press, one more only if the first was not taken and the count shows no vote; no duplicate Q; no extra delay after calculation; manual camera works; stop interrupts immediately.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -95,14 +102,21 @@ SendEvent(key) {
     if InStr(key,"LButton") {
         if InStr(key,"down")
             mouseDownAt := testNow
-        else if voteMode && testNow-mouseDownAt>=300
-            voteVisible := false
+        else if voteMode && testNow-mouseDownAt>=300 {
+            if voteIgnoreClicks
+                voteIgnoreClicks -= 1
+            else
+                voteVisible := false
+        }
     }
 }
 Send(key) => SendEvent(key)
 Click(key) => SendEvent("LButton " StrLower(key))
 CheckCardInterruption(*) => false
 HasVoteStart(*) => voteMode && voteVisible
+ReadVoteCount(*) => voteCount
+MoveRef(*) => true
+SaveClickMissCrop(*) => 0
 WaitFor(test,*) => test.Call()
 FindUiGreenCentre(x1,y1,x2,y2,&x,&y) {
     x := 358,y := 102

@@ -1335,7 +1335,8 @@ EnsurePathLit() {
         Log("P still looks off, but it was already clicked this game; no second toggle.")
         return true
     }
-    Log("P is off; click it once to light the path.")
+    ; levels = P glyph, i glyph brightness: the evidence if P is misread.
+    Log("P is off (levels " reply["levels"] "); click it once to light the path.")
     if !ClickRef(px*REF_W/cw,py*REF_H/ch)
         return gRunning
     gPathToggleClicked := true
@@ -1348,7 +1349,8 @@ EnsurePathLit() {
             return gPathLit := true
         }
     }
-    Log("P still looks off after one click; no second toggle. Placement falls back to the red overlay if no lit path shows.")
+    Log("P still looks off after one click (levels " (VisionOk(reply)?reply["levels"]:"unread") "); no second toggle. Placement falls back to the red overlay if no lit path shows.")
+    SaveClickMissCrop("p",600,0,800,50)
     return true
 }
 

@@ -52,7 +52,8 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
 - If Vote Start is not confirmed in time (45 s from the lobby, 3 min after Replay), `RecoverVoteStart` keeps reading the screen instead of ending the run: Vote Start → continue as normal; lobby → restart from LobbyPlay; end screen → Replay flow; minimap route with no Vote Start for 10 s → sit the match out until its end screen. It logs every 30 s while nothing recognisable is on screen. Only F7 or a disconnect ends it.
 - An end screen visible at start is handled first (Replay).
 - Navigation timeout is not a failure: placement starts from where the player is.
-- If Vote Start is still showing after the click, the macro stops before buying anything.
+- **Vote Start click** (`TryVoteStart`): one click on the visible Yes. A counted vote closes the panel within about a second. If it is still open 4 s later, the `0/1` count under the title is read (`ReadVoteCount`): a counted vote gets no second click, as Yes may toggle it back off; an uncounted or unreadable one gets one more click, the cursor first moved off and back. Then the macro waits for the countdown to close the panel (up to a minute) and places as normal; the run never stops over it. Only a panel still open after a minute sits the match out.
+- **Click evidence:** an untaken Vote Start or P click saves the region as it looked afterwards to `cache\clickmiss-<vote|p>-<date_time>.bmp` (newest 10 kept, `SaveClickMissCrop`). The P log lines include `levels <P>,<i>`, the brightness of the P and i glyphs that decide on/off.
 - A build that is not complete never reaches the upgrade phase (see §5).
 
 ---

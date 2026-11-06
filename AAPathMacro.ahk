@@ -1259,22 +1259,59 @@ TryStartFromLobby() {
     return false
 }
 
+; One click on the visible Yes. A counted vote closes the panel within about
+; a second. If it is still open 4 s later, the "0/1" count under the title
+; decides: a vote already counted gets no second click (Yes may toggle it
+; back off); otherwise one more click, after moving the cursor off and back
+; so Roblox sees it arrive. The countdown starts the match anyway, so an
+; open panel never stops the run: the macro waits for it to close.
+; Returns true once the panel is gone; false only when stopped or after a
+; minute with the panel still open.
 TryVoteStart() {
     if !HasVoteStart()
-        return false
+        return true
     Loop 2 {
-        ; Aim at the visible affirmative button, never a stale OCR/learned
-        ; point. The paired green/red vote controls were checked above.
+        ; Aim at the visible affirmative button, never a stale OCR/learned point.
         if !FindUiGreenCentre(315,90,395,115,&rx,&ry)
-            return false
+            break
+        if A_Index>1 {
+            voters := ReadVoteCount()
+            if voters!="" && voters>=1 {
+                Log("Vote Start still open, but the count shows " voters " vote(s); no second click.")
+                break
+            }
+            Log("Vote Start still open 4 s after the click (count " (voters=""?"unreadable":voters) "); one more click.")
+            SaveClickMissCrop("vote",250,0,550,160)
+            if !MoveRef(rx,ry+60)
+                return false
+        }
         Log("Vote Start: left click visible start/Yes button at " rx ", " ry)
         if !ClickRef(rx,ry)
             return false
-        if WaitFor(VoteStartClosed,1500)
+        if WaitFor(VoteStartClosed,4000,100)
             return true
     }
-    Log("Vote Start remained visible after clicking; start not confirmed.")
-    return false
+    Log("Vote Start panel still open; waiting for its countdown to start the match.")
+    return WaitFor(VoteStartClosed,60000,250)
+}
+
+; The number of Yes votes in the "0/1" under the title, or "" if unreadable.
+ReadVoteCount() {
+    for row in ReadOcrRows(372,62,436,88)
+        if RegExMatch(StrReplace(StrLower(row.text)," "),"([0-9o])/\d",&m)
+            return m[1]="o"?0:Integer(m[1])
+    return ""
+}
+
+; cache\clickmiss-<name>-<date_time>.bmp: the screen region of a click that
+; did not take, read after the wait, for checking what was on screen.
+SaveClickMissCrop(name,x1,y1,x2,y2) {
+    DirCreate A_ScriptDir "\cache"
+    file := A_ScriptDir "\cache\clickmiss-" name "-" FormatTime(A_Now,"yyyy-MM-dd_HH-mm-ss") ".bmp"
+    frame := RefPixels(x1,y1,x2,y2)
+    if frame.valid && SaveFrameBmp(frame,file)
+        Log("Saved the screen where the " name " click did not take: " file)
+    PruneCacheImages("clickmiss-*.bmp",10)
 }
 
 VoteStartClosed() {
@@ -1483,11 +1520,9 @@ RunMacro() {
     if !NavigateForPlacement()
         return SitOutMatch("Navigation to the placement area failed.")
     if !TryVoteStart() {
-        if HasVoteStart() {
-            Notify("Vote Start click was not confirmed. Stopped before placing units.")
+        if !gRunning
             return
-        }
-        Log("Vote countdown already ended; continue from the current location.")
+        return SitOutMatch("Vote Start stayed open for over a minute after clicking Yes.")
     }
     Log("Starting ordered placement from the player along one side of the illuminated path.")
     PreparePlacementMemory()
