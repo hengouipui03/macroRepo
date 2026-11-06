@@ -872,9 +872,33 @@ EnsureRouteAndSpawn() {
 ; -----------------------------------------------------------------------------
 
 HasVoteStart() {
-    ; Require both Yes and No, so a green lobby sign cannot bypass Play.
-    return CountRef(315,90,395,115,4,IsUiGreen) > 8
-        && CountRef(405,90,485,115,4,IsUiRed) > 8
+    ; One capture of the vote panel: green Yes, red No and the yellow
+    ; "Vote start:" title above them. Yes/No alone also matched the Replay
+    ; screen (green Return to lobby beside a red boss health bar), which
+    ; started a map scan on the end screen; that screen has no yellow there.
+    frame := RefPixels(315,42,485,115)
+    return frame.valid
+        && UnitPanelColourHits(frame,315,90,395,115,IsUiGreen) > 8
+        && UnitPanelColourHits(frame,405,90,485,115,IsUiRed) > 8
+        && UnitPanelColourHits(frame,360,42,450,60,IsUiYellow) >= 10
+}
+
+WaitForVoteStart(timeoutMs) {
+    global gRunning
+    if !WaitFor(HasVoteStart,timeoutMs,250)
+        return false
+    ; Read only the title above Yes/No, once after the colours match.
+    rows := ReadOcrRows(340,36,470,66)
+    if !gRunning
+        return false
+    for row in rows {
+        if RegExMatch(NormalizeWords(row.text),"^vote start$") {
+            Log("Vote Start confirmed by OCR.")
+            return true
+        }
+    }
+    Log("Vote Start colours detected, but OCR did not confirm the title.")
+    return false
 }
 
 HasLobbyPlay() {
@@ -1257,6 +1281,23 @@ VoteStartClosed() {
     return !HasVoteStart()
 }
 
+; Sit out a failed preparation until the regular endgame flow can replay.
+SitOutMatch(reason) {
+    global gRunning
+    if !gRunning
+        return ""
+    ReleaseMovementKeys()
+    Notify(reason " Sitting out this match; Replay follows its end screen.")
+    while gRunning {
+        if HasCardChoice()
+            ClearCardChoice()
+        else if TryEndState()
+            return "replay"
+        ActionPause(500)
+    }
+    return ""
+}
+
 
 ReadUnitPlan() {
     global gUnitControls
@@ -1337,7 +1378,7 @@ NavigateForPlacement() {
     if !gRunning
         return false
     if !gNavigationTimedOut && PrepTimeLeft()>0 {
-        Notify("Navigation stopped before timeout. Check the player arrow and green minimap line before restarting.")
+        Notify("Navigation stopped before timeout. Check the player arrow and green minimap line.")
         return false
     }
     gNavigationTimedOut := true
@@ -1376,8 +1417,8 @@ RunMacro() {
             }
         }
         Notify("Waiting for Vote Start before any map preparation.")
-        if !WaitFor(HasVoteStart,45000,250) {
-            Notify("Vote Start was not detected before the loading timeout.")
+        if !WaitForVoteStart(45000) {
+            Notify("Vote Start was not confirmed.")
             return
         }
     }
@@ -1388,13 +1429,11 @@ RunMacro() {
     gMatchReported := false
     ResetCardSelection()
     ResetMatchCardContext()
-    if !EnsureRouteAndSpawn() {
-        Notify("Minimap preparation stopped. The Activity tab and minimap-debug.png show the missing signal.")
-        return
-    }
+    if !EnsureRouteAndSpawn()
+        return SitOutMatch("Minimap preparation stopped. The Activity tab and minimap-debug.png show the missing signal.")
     Notify("Following the green minimap route into position.")
     if !NavigateForPlacement()
-        return
+        return SitOutMatch("Navigation to the placement area failed.")
     if !TryVoteStart() {
         if HasVoteStart() {
             Notify("Vote Start click was not confirmed. Stopped before placing units.")

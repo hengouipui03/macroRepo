@@ -225,11 +225,18 @@ TryEndState() {
     return false
 }
 
+; Wait for Replay to clear, then for a confirmed Vote Start.
 WaitForReplayVoteStart() {
     global gAwaitingReplayMap
+    deadline := A_TickCount+180000
+    Notify("Replay clicked: waiting for the Replay button to disappear.")
+    if !WaitFor(() => !HasReplayButton(),180000,250) {
+        Notify("The Replay button did not clear. Stopped before map preparation.")
+        return false
+    }
     Notify("Replay loading: waiting for the next Vote Start, on the same or a new map.")
-    if !WaitFor(HasVoteStart,180000,250) {
-        Notify("Replay did not reach Vote Start within three minutes. Stopped without lobby or placement clicks.")
+    if !WaitForVoteStart(Max(1000,deadline-A_TickCount)) {
+        Notify("Vote Start after Replay was not confirmed. Stopped before map preparation.")
         return false
     }
     gAwaitingReplayMap := false
