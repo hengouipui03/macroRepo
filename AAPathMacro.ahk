@@ -10,6 +10,10 @@ CoordMode "Mouse", "Screen"
 CoordMode "Pixel", "Screen"
 SetTitleMatchMode 2
 
+; Session logs (see SessionLogLine): one file per F6 run in logs\.
+global LOG_DIR := A_ScriptDir "\logs",gSessionLogFile := "",gSessionLogHasRun := false,SESSION_LOG_DAYS := 30
+; Disconnect recovery (see CheckDisconnect).
+global gReconnecting := false,gMacroThreadActive := false,RECONNECT_GIVE_UP_MS := 30*60000
 global REF_W := 800
 global REF_H := 600
 global WINDOW_W := 1401
@@ -163,6 +167,7 @@ BuildGui() {
     }
     gUnitSettingsReady := true
     OnExit FlushUnitSettings
+    OnExit EndSessionLog.Bind("macro closed")
     tabs.UseTab(2)
     app.AddText("x28 y140 w400", "Live action log — newest actions appear at the bottom")
     gActivityLog := app.AddEdit("x28 y166 w414 h365 ReadOnly VScroll -Wrap c20212D BackgroundFFFFFF", "")
@@ -1033,13 +1038,15 @@ ClearCardChoiceAction() {
         return false
     }
     ; A placement preview is dropped (Q) so a card click cannot buy a unit.
-    ; During upgrades the unit panel is left open, and the F unit manager is
-    ; closed for the card (the only time it is closed). It is reopened once the
-    ; cards are gone, and the top-priority unit is reselected before any R.
+    ; The side unit panel (also opened by a manager portrait click during
+    ; upgrades) covers the left card, so it is closed in every phase. The F
+    ; unit manager is closed for the card (the only time it is closed). Both
+    ; come back afterwards: the manager is reopened and the top-priority unit
+    ; is reselected through it before any R.
     if !CancelUnitPreview()
         return false
-    if !gUnitManagerPhase && HasUnitPanel() && !ClickAwayFromUnitPanel()
-        return false
+    if HasUnitPanel() && !ClickAwayFromUnitPanel()
+        Log("Unit panel still open over the left card; reading the cards anyway.")
     if !CloseUnitManagerForCards()
         return false
     Log("Card choice is open; choosing before continuing.")
@@ -1452,7 +1459,9 @@ StartMacro(*) {
     }
     gRunning := true
     gUnitPreviewActive := true
+    BeginSessionLog()
     Notify("Running. F7 stops immediately.")
+    SetTimer CheckDisconnect, 3000
     SetTimer RunMacroSafely, -10
 }
 
@@ -1486,7 +1495,8 @@ TestRoutePreparation(*) {
 }
 
 RunMacroSafely() {
-    global gRunning
+    global gRunning,gMacroThreadActive
+    gMacroThreadActive := true
     try {
         while gRunning {
             if RunMacro() != "replay"
@@ -1500,10 +1510,23 @@ RunMacroSafely() {
             gRunning := false
             ReleaseMovementKeys()
         }
+        gMacroThreadActive := false
     }
 }
 
 StopMacro(*) {
+    global gReconnecting
+    gReconnecting := false
+    SetTimer CheckDisconnect, 0
+    SetTimer ReconnectAndRestart, 0
+    AbandonCurrentAction()
+    Notify("Stopped.")
+    EndSessionLog("session stopped (F7)")
+}
+
+; Everything F7 does to the running action: inputs released, waits and OCR
+; cut short, the manager phase ended.
+AbandonCurrentAction() {
     global gRunning, gOcrPid, gInputEpoch
     gInputEpoch += 1
     gRunning := false
@@ -1513,7 +1536,102 @@ StopMacro(*) {
         try ProcessClose gOcrPid
     }
     ReleaseMovementKeys()
-    Notify("Stopped.")
+}
+
+; Disconnect recovery. Roblox's "Disconnected" dialog, whatever its error
+; code, is a flat dark-grey panel with a white Reconnect button. While the
+; macro runs it is checked every 3 s. On sight the current action is
+; abandoned (as with F7), Reconnect is clicked, and once the lobby Play
+; button is back the macro restarts from it, exactly as after F6 in the lobby.
+HasDisconnectDialog() {
+    panel := RefPixels(290,224,510,378)
+    if !panel.valid
+        return false
+    grey := 0,greyTotal := 0,y := 224
+    while y<=378 {
+        x := 290
+        while x<=510 {
+            RGB(panel.AtRef(x,y),&r,&g,&b),top := Max(r,g,b)
+            grey += Abs(r-g)<=8 && Abs(g-b)<=8 && top>=42 && top<=75
+            greyTotal += 1,x += 6
+        }
+        y += 6
+    }
+    if grey<greyTotal*0.6
+        return false
+    white := 0,whiteTotal := 0,y := 348
+    while y<=364 {
+        x := 410
+        while x<=500 {
+            RGB(panel.AtRef(x,y),&r,&g,&b)
+            white += Min(r,g,b)>=230,whiteTotal += 1,x += 4
+        }
+        y += 4
+    }
+    return white>=whiteTotal*0.6
+}
+
+CheckDisconnect() {
+    global gRunning,gReconnecting
+    if !gRunning || gReconnecting || !HasDisconnectDialog()
+        return
+    gReconnecting := true
+    Notify("Disconnected: abandon the current action, click Reconnect, then restart from the lobby Play button.")
+    AbandonCurrentAction()
+    SetTimer ReconnectAndRestart, -300
+}
+
+; The Reconnect button is found by its label (OCR) and clicked in its centre;
+; without a readable label, its usual place in the dialog is clicked.
+ClickReconnectButton() {
+    global REF_W,REF_H
+    if GetClient(&cx,&cy,&cw,&ch) {
+        for row in ReadOcrRows(285,330,516,380) {
+            if InStr(NormalizeWords(row.text),"reconnect")
+                return ClickRef((row.x+row.w/2)*REF_W/cw,(row.y+row.h/2)*REF_H/ch)
+        }
+    }
+    return ClickRef(455,356)
+}
+
+ReconnectAndRestart() {
+    global gRunning,gReconnecting,gMacroThreadActive,gAwaitingReplayMap,RECONNECT_GIVE_UP_MS
+    if !gReconnecting
+        return
+    ; The interrupted run must finish unwinding before anything is clicked.
+    if gMacroThreadActive {
+        SetTimer ReconnectAndRestart, -300
+        return
+    }
+    gRunning := true
+    deadline := A_TickCount+RECONNECT_GIVE_UP_MS,nextClick := 0,clicks := 0
+    while gRunning && gReconnecting && A_TickCount<deadline {
+        if HasLobbyPlay() {
+            gReconnecting := false
+            gAwaitingReplayMap := false
+            ResetEndGameFlow()
+            ResetCardSelection()
+            Notify("Reconnected: back in the lobby after " clicks " Reconnect click(s). Restarting from Play.")
+            SetTimer RunMacroSafely, -10
+            return
+        }
+        ; One click, then 20 s for the rejoin before clicking again.
+        if A_TickCount>=nextClick && HasDisconnectDialog() {
+            clicks += 1
+            Log("Reconnect click " clicks ".")
+            ClickReconnectButton()
+            nextClick := A_TickCount+20000
+        }
+        if !ActionPause(500,false)
+            break
+    }
+    if gReconnecting {
+        gReconnecting := false
+        SetTimer CheckDisconnect, 0
+        gRunning := false
+        Notify("Reconnect did not bring back the lobby within 30 minutes. Stopped.")
+        EndSessionLog("session stopped (reconnect failed)")
+    }
 }
 
 ReleaseMovementKeys() {
@@ -1547,11 +1665,65 @@ Log(text) {
     if !gActivityLog
         return
     entry := FormatTime(A_Now, "HH:mm:ss") "  " text
+    SessionLogLine(entry)
     previous := gActivityLog.Value
     ; Keep the control responsive during long replay sessions.
     if StrLen(previous) > 14000
         previous := SubStr(previous, -9000)
     gActivityLog.Value := previous entry "`r`n"
+}
+
+; Session logs: logs\session-<date>_<time>.log. Every Log line is appended at
+; once, so a session survives the macro being closed or killed without F7.
+; F6 starts a new file; lines outside a session (opening the macro, F8/F9
+; tests, after F7) go to the current file. Markers show where F6/F7 were
+; pressed and when the macro closed; a file without them was cut short.
+
+SessionLogLine(entry) {
+    global gSessionLogFile
+    try {
+        if gSessionLogFile="" {
+            PruneSessionLogs()
+            SessionLogMarker("macro opened",true)
+        }
+        FileAppend entry "`r`n",gSessionLogFile,"UTF-8"
+    }
+}
+
+SessionLogMarker(text,newFile := false) {
+    global LOG_DIR,gSessionLogFile
+    try {
+        if newFile || gSessionLogFile="" {
+            DirCreate LOG_DIR
+            gSessionLogFile := LOG_DIR "\session-" FormatTime(A_Now,"yyyy-MM-dd_HH-mm-ss") ".log"
+        }
+        FileAppend "===== " FormatTime(A_Now,"yyyy-MM-dd HH:mm:ss") "  " text " =====`r`n",gSessionLogFile,"UTF-8"
+    }
+}
+
+; When the macro opens: session logs not written to for 30 days are deleted.
+PruneSessionLogs() {
+    global LOG_DIR,SESSION_LOG_DAYS
+    cutoff := DateAdd(A_Now,-SESSION_LOG_DAYS,"Days")
+    try Loop Files LOG_DIR "\session-*.log" {
+        if A_LoopFileTimeModified<cutoff
+            try FileDelete A_LoopFileFullPath
+    }
+}
+
+; F6: a new file per run. The file opened with the macro is reused for the
+; first run, so opening and then starting does not leave a stray file.
+BeginSessionLog() {
+    global gSessionLogHasRun,gSessionLogFile
+    SessionLogMarker("session started (F6)",gSessionLogHasRun || gSessionLogFile="")
+    gSessionLogHasRun := true
+}
+
+EndSessionLog(reason,*) {
+    global gActivityLog
+    if gActivityLog
+        SessionLogMarker(reason)
+    return 0
 }
 
 ; These checks deliberately avoid capturing a screen or sending any input.

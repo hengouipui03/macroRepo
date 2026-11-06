@@ -19,6 +19,7 @@ __pycache__/
 
 # Generated diagnostics and backups; keep source test fixtures tracked
 /cache/
+/logs/
 *.check.tmp.ahk
 *.before-*.ahk
 *.tmp

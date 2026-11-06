@@ -103,7 +103,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **MAX = grey Max button and every segment lit** (or unreadable bar). A grey button over unlit segments (a manager still opening; this ended #7 at 5 of 8 and skipped unit 2) is never clicked and is believed only if it stays for 4 s.
 - **Target reached or MAX:** mark complete (the manager stays open), log the next unit.
 - **Live target edits** in the GUI apply to already-placed units at once (`RefreshRecordedUpgradeTarget`).
-- **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the manager once (if it is confirmed open), and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click (the remembered tile position is dropped whenever F is pressed or the list scrolls).
+- **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the side unit panel (a manager portrait click opens it, and it covers the left card), closes the manager once (if it is confirmed open), and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click (the remembered tile position is dropped whenever F is pressed or the list scrolls).
 
 ---
 
@@ -178,6 +178,8 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 
 ## 7. End of match, idle, reporting
 - **End screen:** the green Next button triggers end handling. The macro clicks Next, clicks game space 5 times to dismiss rewards, waits for the paired Return to lobby / Replay buttons, and clicks **Replay** only (never Return to lobby). It then waits up to 3 minutes for the next Vote Start. Placement, upgrades and idle clicks pause meanwhile.
+- **Disconnects:** while running, every 3 s `CheckDisconnect` looks for Roblox's "Disconnected" dialog, whatever its error code: a flat dark-grey panel (60%+ of its area) with a white Reconnect button (60%+ white). On sight it abandons the current action as F7 would (`AbandonCurrentAction`), clicks Reconnect (found by OCR, else its usual place), clicks again every 20 s while the dialog stays, and once the lobby Play button is visible restarts from it as after F6 (`ReconnectAndRestart`). After 30 minutes without the lobby it stops (`RECONNECT_GIVE_UP_MS`). F7 cancels a reconnect.
+- **Session logs:** every Activity line is also appended at once to `logs\session-<date>_<time>.log` (git-ignored), so nothing is lost if the macro is closed or killed without F7. Each F6 starts a new file (the file opened with the macro is reused for the first run); `=====` markers show F6, F7 and the macro closing, so a file without a final marker was cut short. Files not written to for 30 days are deleted when the macro opens (`SESSION_LOG_DAYS`, `PruneSessionLogs`; `SessionLogLine`, `SessionLogMarker`, `BeginSessionLog`, `EndSessionLog`).
 - **Discord:** once per match, WIN/LOSS plus a screenshot: on the Next screen when its result is read, otherwise just before Replay is clicked (Next seen = defeat, Replay without Next = win, unless OCR reads the result there). The webhook is in `settings.ini`, which is not synced by git: save it on each device.
 - **Idle keep-alive:** when every target is complete, the macro clicks the manager-safe click-away point every 5 minutes. It skips the click while cards, a unit panel or an end screen are up.
 - **Match modifiers:** the right panel (Enemy Health %, Physical/Magic resistance, Regen %) is read during placement and once per card screen (the unit manager covers it otherwise). Only label-first rows ("Enemy Health: +430.0%") count, so card text can never be read as a total. Picked cards are added in between. It is never clicked.
@@ -202,7 +204,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `HasCardChoice`, `HasCardBorder` | Card screen detection. |
 | `IsCardColour`, `CardBorderKind`, `CardColourKind` | Legacy border classification (not used to decide). |
 | `CheckCardInterruption` | Polled during waits. Pauses the current action, chooses the card, resumes the same unit/purchase. |
-| `ClearCardChoice`, `ClearCardChoiceAction` | Card handling entry. Q if a preview is active, close the manager for the card, reopen it and reset the unit selection afterwards. No unit-panel click-away during upgrades. |
+| `ClearCardChoice`, `ClearCardChoiceAction` | Card handling entry. Q if a preview is active, close the side unit panel in every phase (it covers the left card), close the manager for the card, reopen it and reset the unit selection afterwards. |
 | `ResetCardSelection`, `WaitForCardChoiceClosed` | Card lock reset and a 350 ms stable-closed check. |
 | `TryChooseCard` | Pixel-green fast path, then OCR, ranking, retries and fallback. |
 | `ConfirmLockedCardSelection` | Re-verify green priority, block Speed, click the card (left card at y=405 if the unit panel is showing). |
