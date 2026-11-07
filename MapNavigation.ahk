@@ -16,7 +16,7 @@ global gVisionRetryAt := 0
 global PROBE_MS := 220, PROBE_SETTLE_MS := 140
 ; A card that appears mid-walk pauses movement: keys are released first, the
 ; card is chosen, then the walk resumes from the player's actual position.
-global gMovementInterrupted := false,gMovementCardMs := 0
+global gMovementInterrupted := false,gMovementCardMs := 0,gMovementCardTotalMs := 0
 OnExit(VisionClose)
 
 MiniMapBounds(cw,ch) {
@@ -1021,13 +1021,15 @@ HoldKeys(presses) {
     if !WinWaitActive("ahk_id " hwnd,,1)
         return false
     ; A card already on screen is chosen before any movement key goes down.
-    if gCardAction!="" && HasCardChoice()
-        return MovementCardPause()
+    if gCardAction!="" && HasCardChoice() {
+        MovementCardPause()
+        return gRunning
+    }
     epoch := gCardInterruptEpoch
     if !BeginInputAction() {
         if gRunning && epoch!=gCardInterruptEpoch {
             gMovementInterrupted := true
-            return !HasCardChoice()
+            return true
         }
         return false
     }
@@ -1072,7 +1074,8 @@ MovementHoldUntil(deadline,held) {
                 for press in held
                     Send "{" press.key " up}"
                 held.Length := 0
-                return MovementCardPause()
+                MovementCardPause()
+                return gRunning
             }
         }
         Sleep Min(20,Max(1,deadline-A_TickCount))
@@ -1082,35 +1085,33 @@ MovementHoldUntil(deadline,held) {
 
 ; Choose the card with every movement key up; the walk resumes afterwards.
 MovementCardPause() {
-    global gMovementInterrupted,gMovementCardMs
+    global gMovementInterrupted,gMovementCardMs,gMovementCardTotalMs
     started := A_TickCount
     Log("Card appeared while moving; movement keys released and walking paused until the card is chosen.")
-    resolved := ClearCardChoice()
-    gMovementInterrupted := true,gMovementCardMs += A_TickCount-started
-    return resolved
+    ClearCardChoice()
+    elapsed := A_TickCount-started
+    gMovementInterrupted := true,gMovementCardMs += elapsed,gMovementCardTotalMs += elapsed
 }
 
 ; Short settle pause between moves. A card handled here (keys are already up)
 ; marks the move as interrupted instead of abandoning the walk.
 MovementPause(ms) {
-    global gRunning,gCardInterruptEpoch,gMovementInterrupted,gMovementCardMs
+    global gRunning,gCardInterruptEpoch,gMovementInterrupted,gMovementCardMs,gMovementCardTotalMs
     epoch := gCardInterruptEpoch,started := A_TickCount
     if ActionPause(ms)
         return true
     if gRunning && epoch!=gCardInterruptEpoch {
-        gMovementInterrupted := true,gMovementCardMs += A_TickCount-started
-        return !HasCardChoice()
+        elapsed := A_TickCount-started
+        gMovementInterrupted := true,gMovementCardMs += elapsed,gMovementCardTotalMs += elapsed
+        return true
     }
     return false
 }
 
-; Keep the initial navigation budget separate from card time. Relocation
-; uses elapsed time so repeated card timeouts cannot extend it indefinitely.
+; Card time does not count against a walk's time budget.
 TakeMovementCardMs() {
-    global gMovementCardMs,gPrepDeadline,gCardAction
+    global gMovementCardMs,gPrepDeadline
     ms := gMovementCardMs,gMovementCardMs := 0
-    if gCardAction="relocating"
-        return 0
     if ms && gPrepDeadline
         gPrepDeadline += ms
     return ms
@@ -1128,7 +1129,7 @@ NavigateWithKeys() {
             if gMovementInterrupted {
                 ; Resume the same destination from where the player now stands.
                 gMovementInterrupted := false,escape := 0
-                Log("Card interruption cleared; resume walking from the player's current position.")
+                Log("Card chosen; resume walking the route from the player's current position.")
                 if !RefreshMapPlayer() && !ProbeKeyPair("w","s").found {
                     Log("Player arrow not found after the card; stopped.")
                     return false
