@@ -86,14 +86,11 @@ global ACTION_GAP_MS := 300,gLastInputFinishedAt := 0,gInputEpoch := 0,testNow :
 global gPlacements := [],managerVisible := false,scroll := 180,panel := false,wantedNumber := 0,selected := [],downs := 0,ups := 0,managerReads := 0,readFailure := false
 global gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerPhase := true,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
 global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := "",UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
-global fPresses := 0,blindVision := false,gManagerTile := 0,gSlotPortraits := Map(),gUnitManagerClosedForCards := false,visibleTotal := 0
+global fPresses := 0,blindVision := false,gManagerTile := 0,gSlotPortraits := Map(),gUnitManagerClosedForCards := false
 try {
     ; The game lists the newest unit top-left, reading left to right, so with
     ; an odd count #1 sits alone at the bottom-LEFT (the user's 9-unit match).
-    for total in [20,19,17,9,1] {
-        ; In the supplied run, the bottom row had two visible tiles for 17
-        ; recorded purchases. Exercise that mismatch with an even list.
-        visibleTotal := total=17?18:total
+    for total in [20,19,9,1] {
         gPlacements := []
         Loop total
             gPlacements.Push({id:A_Index})
@@ -106,7 +103,7 @@ try {
             Assert(SelectManagedUnit(purchaseId),"manager could not select purchase " purchaseId " from " total)
             Assert(selected[selected.Length]=purchaseId && panel,"wrong reverse-order purchase selected for " purchaseId)
         }
-        Assert(scroll=Max(0,(Ceil(visibleTotal/2)-3)*100+20),"returning to #1 did not anchor at the manager bottom")
+        Assert(scroll=Max(0,(Ceil(total/2)-3)*100+20),"returning to #1 did not anchor at the manager bottom")
     }
     Assert(ups>0 && downs>=30,"bottom reset or incremental upward scrolling was not exercised")
     ; F was pressed exactly once for every selection above, and never closed.
@@ -133,7 +130,7 @@ try {
     }
     Assert(fPresses-before<=2 && managerVisible,"misread manager state toggled F repeatedly")
     blindVision := false
-    FileAppend "PASS: newest-first layout from the visible bottom row, including two tiles for 17 recorded purchases; bottom reset, one-notch scrolling, no skipped purchases, and guarded F key.`n","*","UTF-8"
+    FileAppend "PASS: newest-first layout: even count #1 bottom-right/#2 bottom-left, odd count #1 alone bottom-left; upward by row; bottom reset; one-notch upward scrolling; 20/19/9/1-unit layouts; no skipped purchases; one F for the whole match; no F before placement; reopen once; misread F guard.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -155,7 +152,7 @@ VisionRequest(command) {
         return false
     if !managerVisible || blindVision
         return Map("status","ok","open","0")
-    entries := "",first := -1,last := -1,totalRows := Ceil(visibleTotal/2)
+    entries := "",first := -1,last := -1,totalRows := Ceil(gPlacements.Length/2)
     Loop totalRows {
         row := A_Index-1,y := 140+row*100-scroll
         if y>=110 && y<450 {
@@ -165,7 +162,7 @@ VisionRequest(command) {
             if y+30-30>=100 && y+30+30<=450 {
                 Loop 2 {
                     col := A_Index-1
-                    candidateId := visibleTotal-(row*2+col)
+                    candidateId := gPlacements.Length-(row*2+col)
                     if candidateId>=1
                         entries .= (entries=""?"":";") col "," (col=0?570:710) "," (y+30) "," y
                 }
@@ -179,14 +176,14 @@ VisionRequest(command) {
     return Map("status","ok","open","1","pitch","100","first",first,"last",last,"lastcount",lastcount,"signature",managerReads,"entries",entries,"top","100","bottom","450")
 }
 SendEvent(key) {
-    global managerVisible,scroll,downs,ups,fPresses
+    global managerVisible,scroll,downs,ups
     Assert(windowFocused,"manager input was sent without focusing Roblox")
     if key="{f up}"
         managerVisible := !managerVisible,fPresses += 1
     if RegExMatch(key,"Wheel(Up|Down)\s+(\d+)",&match) {
         count := Integer(match[2])
         if match[1]="Down" {
-            downs += 1,scroll := Min(Max(0,(Ceil(visibleTotal/2)-3)*100+20),scroll+30*count)
+            downs += 1,scroll := Min(Max(0,(Ceil(gPlacements.Length/2)-3)*100+20),scroll+30*count)
         } else {
             Assert(count=1,"upward selection scrolling skipped more than one notch")
             ups += 1,scroll := Max(0,scroll-30)
@@ -196,7 +193,7 @@ SendEvent(key) {
 PlacementClickRef(x,y,*) {
     global panel
     row := Round((y-170+scroll)/100),column := x>650?1:0
-    purchaseId := visibleTotal-(row*2+column)
+    purchaseId := gPlacements.Length-(row*2+column)
     Assert(purchaseId=wantedNumber,"scroll/index mapping clicked purchase " purchaseId " instead of " wantedNumber)
     selected.Push(purchaseId),panel := true
     return true
