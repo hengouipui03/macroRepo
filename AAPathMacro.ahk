@@ -782,13 +782,13 @@ HoldCameraKey(key,duration,epoch) {
 }
 
 EnsureRouteAndSpawn() {
-    global gMapModel,gCameraOverheadReady,gPathToggleClicked,THREE_PATH_STAND,gPreferRedPath
+    global gMapModel,gCameraOverheadReady,gPathToggleClicked,THREE_PATH_STAND
     ; F belongs to the upgrade phase only: never pressed before every unit is placed.
     EndUnitManagerPhase()
     leftover := ReadUnitManager()
     if leftover && leftover["open"]="1"
         Log("Unit manager is visible before placement; F is not pressed until all units are placed.")
-    gCameraOverheadReady := false,gPathToggleClicked := false,gPreferRedPath := false
+    gCameraOverheadReady := false,gPathToggleClicked := false
     ; New match: the vision forgets the last map's path colour (yellow on Sand Village).
     VisionRequest("worldreset")
     gMapModel := VisionMapModel()

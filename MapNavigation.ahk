@@ -650,18 +650,15 @@ FinishNavigationTimeout() {
     global gRunning,gNavigationTimedOut
     gNavigationTimedOut := gRunning && PrepTimeLeft()<=0
     if gNavigationTimedOut
-        Log("Navigation time budget expired; stopped movement.")
+        Log("Preparation timer reached 50 seconds; stopped movement and will place at the current location.")
     return false
 }
 
 NavigateDrawing() {
     global gMapModel,gMoveKeys,gNavigationTimedOut
     gNavigationTimedOut := false
-    if gMapModel && gMapModel.source="vision" && gMoveKeys {
-        ; Red overlay coordinates belong to the stationary placement view.
-        VisionRequest("pathviewclear")
+    if gMapModel && gMapModel.source="vision" && gMoveKeys
         return NavigateWithKeys()
-    }
     return NavigateByHeading()
 }
 
@@ -1118,7 +1115,7 @@ TakeMovementCardMs() {
 }
 
 NavigateWithKeys() {
-    global gMapModel,gRunning,gMapWalking,gMoveKeys,gPathLit,gPreferRedPath,MAP_GRID,gMovementInterrupted
+    global gMapModel,gRunning,gMapWalking,gMoveKeys,gPathLit,MAP_GRID,gMovementInterrupted
     if !gMapModel.player || gMapModel.target<0
         return false
     gMovementInterrupted := false,TakeMovementCardMs()
@@ -1185,7 +1182,7 @@ NavigateWithKeys() {
                 Log("Measured W and D movements are parallel; cannot steer.")
                 return false
             }
-            if gPathLit && !gPreferRedPath
+            if gPathLit
                 presses := FollowLitPath(presses)
             expected := MovePrediction(presses,gMoveKeys),before := {x:p.x,y:p.y}
             if !HoldKeys(presses) || !MovementPause(90)
@@ -1363,25 +1360,24 @@ EnsurePathLit() {
     return true
 }
 
-WorldRequest(line := "",minPathFraction := 0) {
+WorldRequest(line := "") {
     if !GetClient(&cx,&cy,&cw,&ch)
         return false
     reply := VisionRequest("world " cx " " cy " " cw " " ch)
-    if !VisionOk(reply) || reply["path"]="0" || Number(reply["path"])<cw*ch*minPathFraction
+    if !VisionOk(reply) || reply["path"]="0"
         return false
     return line="" ? reply : VisionRequest(line)
 }
 
 ; Re-aim a planned W/S + D/A move along the lit path, keeping its length.
 FollowLitPath(presses) {
-    global LIT_PATH_MIN_FRACTION
     sx := 0,sy := 0,longest := 0
     for press in presses {
         sx += press.key="d" ? press.ms : press.key="a" ? -press.ms : 0
         sy += press.key="s" ? press.ms : press.key="w" ? -press.ms : 0
         longest := Max(longest,press.ms)
     }
-    reply := WorldRequest("follow " sx " " sy,LIT_PATH_MIN_FRACTION)
+    reply := WorldRequest("follow " sx " " sy)
     if !VisionOk(reply) || !GetClient(&cx,&cy,&cw,&ch)
         return presses
     ; The minimap leads until the player reaches the lit band (or the band

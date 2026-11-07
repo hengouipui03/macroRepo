@@ -3,15 +3,15 @@ global gPlacementAreaFailures := Map(),gRunViewMoved := false
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
 global PLACEMENT_FAILURE_LIMIT := 6,gConsecutivePlacementFailures := 0
 ; Relocation walking (card time excluded) past 20 s without reaching the
-; checkpoint tries spawn recovery once before falling back to local placement.
-global RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0
+; checkpoint teleports back to spawn via Settings, then walks again from there.
+global RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0
 
 ResetPlacementArea() {
     global gPlacementAreaFailures,gRunViewMoved,gPlacementViewRecovery,gPlacementRelocateRetryAt
-    global gRelocationWalkMs,gRelocationWalkTarget
+    global gRelocationWalkMs,gRelocationWalkTarget,gRelocationTeleports
     gPlacementAreaFailures := Map(),gRunViewMoved := false
     gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
-    gRelocationWalkMs := 0,gRelocationWalkTarget := 0
+    gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0
     ResetPlacementFailureStreak()
 }
 
@@ -226,7 +226,7 @@ RelocatePlacementArea(unit) {
     global gRunning,gPlacements,gPendingPlacement,gCardAction,gMapModel
     global gPrepDeadline,gNavigationTimedOut,gPlacementViewRecovery,gRunViewMoved,gPlacementProfile
     global gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
-    global RELOCATION_TELEPORT_MS,gRelocationWalkMs,gRelocationWalkTarget,gMovementCardTotalMs
+    global RELOCATION_TELEPORT_MS,gRelocationWalkMs,gRelocationWalkTarget,gRelocationTeleports,gMovementCardTotalMs
     if !gRunning || IsEndGameBlocking() || !ClearCardChoice()
         return false
     if gPendingPlacement
@@ -249,7 +249,7 @@ RelocatePlacementArea(unit) {
     gPlacementViewRecovery := 0,gRunViewMoved := true,gPlacementProfile := ""
     previous := gCardAction,gCardAction := "relocating"
     if gRelocationWalkTarget!=next
-        gRelocationWalkTarget := next,gRelocationWalkMs := 0
+        gRelocationWalkTarget := next,gRelocationWalkMs := 0,gRelocationTeleports := 0
     ; Walking time for this checkpoint accumulates across retries.
     oldDeadline := gPrepDeadline,gPrepDeadline := A_TickCount+Max(3000,RELOCATION_TELEPORT_MS-gRelocationWalkMs)
     try {
@@ -260,8 +260,8 @@ RelocatePlacementArea(unit) {
         started := A_TickCount,cardsBefore := gMovementCardTotalMs
         reached := NavigateDrawing()
         gRelocationWalkMs += Max(0,A_TickCount-started-(gMovementCardTotalMs-cardsBefore))
-        useCurrentView := false
-        if !reached && gRunning && !IsEndGameBlocking() && gRelocationWalkMs>=RELOCATION_TELEPORT_MS {
+        if !reached && gRunning && !IsEndGameBlocking() && gRelocationWalkMs>=RELOCATION_TELEPORT_MS && gRelocationTeleports<2 {
+            gRelocationTeleports += 1,gRelocationWalkMs := 0
             Log("Moving for 20 s without reaching checkpoint " next "; teleport back to spawn, then resume the route from there.")
             if TeleportBackToSpawn() {
                 gPrepDeadline := A_TickCount+30000
@@ -270,21 +270,17 @@ RelocatePlacementArea(unit) {
                 else
                     Log("Player marker not found after teleporting to spawn.")
             }
-            useCurrentView := !reached && gRunning && !IsEndGameBlocking()
         }
-        if !reached && !useCurrentView
+        if !reached
             return ContinuePlacementInCurrentView(unit,"Checkpoint " next " not reached yet; keep that destination and retry.")
-        gRelocationWalkTarget := 0,gRelocationWalkMs := 0
+        gRelocationWalkTarget := 0,gRelocationWalkMs := 0,gRelocationTeleports := 0
         gMapModel.checkpointIndex := next
         gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
         ResetPlacementFailureStreak()
         RefreshPlacementSearch()
         ResetUpgradeSelection()
         SavePlacementRun()
-        if reached
-            Log("Reached checkpoint " next "/3. Resume placement; recorded units remain accessible through F.")
-        else
-            Log("Checkpoint " next "/3 unreachable after spawn recovery. Rescan for placement at the current location.")
+        Log("Reached checkpoint " next "/3. Resume placement; recorded units remain accessible through F.")
         return true
     } finally {
         gPrepDeadline := oldDeadline,gCardAction := previous

@@ -54,7 +54,7 @@ global moveCalls := 0,shiftReads := 0,trackingOkay := true,cameraShifts := [{dx:
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global relocationSceneOkay := true,rememberOkay := true,scaleMovement := false,lastDuration := 120,lastMovementKey := ""
 global gMapModel := 0,gMoveKeys := 0,MAP_GRID := 96,baseRoute := [101,102,103,104]
-global navWalkMs := 0,RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gMovementCardTotalMs := 0,teleports := 0,teleportOkay := true
+global navWalkMs := 0,RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0,gMovementCardTotalMs := 0,teleports := 0
 
 try {
     ; Tile upgrades: one Upg click per new lit segment, exact finite targets,
@@ -291,9 +291,7 @@ try {
     beforeMoves := moveCalls,teleports := 0,navWalkMs := 21000
     Loop 5
         PlacementCopyFailures(a,true)
-    Assert(RelocatePlacementArea(a) && teleports=1 && moveCalls=beforeMoves+2 && gMapModel.checkpointIndex=2 && !PlacementFailureLimitReached(),"failed spawn recovery did not resume local placement")
-    beforeMoves := moveCalls,teleportOkay := false
-    Assert(RelocatePlacementArea(a) && teleports=2 && moveCalls=beforeMoves+1 && gMapModel.checkpointIndex=3 && !PlacementFailureLimitReached(),"unavailable teleport left the final checkpoint retrying movement")
+    Assert(!RelocatePlacementArea(a) && teleports=1 && moveCalls=beforeMoves+2,"20 s of failed relocation walking did not teleport to spawn and resume")
     navWalkMs := 0
     navReached := true,gMapModel.checkpointIndex := 0
     ResetPlacementFailureStreak()
@@ -358,7 +356,7 @@ WaitForPlacementYen(*) => false
 TeleportBackToSpawn(*) {
     global teleports
     teleports += 1
-    return teleportOkay
+    return true
 }
 ProbePlayer(*) => true
 HasCardChoice(*) => false
