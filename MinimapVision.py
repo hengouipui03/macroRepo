@@ -622,6 +622,8 @@ class World:
     def clear_view(self):
         """Forget the red path view so the next world read is the lit path
         (P path first; the red overlay is only the fallback)."""
+        if self.view_area is not None:
+            self.area = None
         self.view_area = self.blocked = None
         return {"cleared": 1}
 
@@ -1027,6 +1029,8 @@ class World:
         """Where the band crosses a circle around the player, in the crossing
         best aligned with the wanted direction: walking there stays on the
         lit path, and leads back onto it when the player is beside it."""
+        if self.view_area is not None:
+            return None
         if self.area is None:
             raise ValueError("send world first")
         dx, dy = float(dx), float(dy)

@@ -5,6 +5,7 @@ global gPlacementUp := {x:0,y:0}
 ; True once the path (lit P path, else the red no-place overlay) has been
 ; read for the current view.
 global gPathViewReady := false,gPathViewSavedThisGame := false
+global gPreferRedPath := false
 ; A lit path counts once it covers this share of the client: real lit paths
 ; measure 2.4-5% in the fixtures, maps without one read 0.
 global LIT_PATH_MIN_FRACTION := 0.01
@@ -1129,38 +1130,46 @@ PlaceUnit(unit) {
     }
 }
 
-; The path comes from the lit P path FIRST, read with nothing held so green
-; Hill highlights never count. Only when no lit path shows (maps without one)
-; does the red no-place overlay take over, shown only while a unit is held:
+ReadLitPlacementPath(cx,cy,cw,ch) {
+    global gPathViewReady,gPathReadFailures,gPreferRedPath,LIT_PATH_MIN_FRACTION
+    lit := VisionRequest("world " cx " " cy " " cw " " ch)
+    if !VisionOk(lit) || Number(lit["path"])<cw*ch*LIT_PATH_MIN_FRACTION
+        return false
+    gPathViewReady := true,gPathReadFailures := 0,gPreferRedPath := false
+    Log("Path read from the lit P path.")
+    return true
+}
+
+; Try the lit path with nothing held. Once the red overlay works, prefer a
+; fresh red read on rescans so unit effects cannot replace the verified road.
+; To show the overlay:
 ; select the slot, move the cursor onto the HUD so the held unit's own preview
 ; ring does not cover the road, read the road and every red area (pathview),
 ; then cancel the hold. Every later placement check reuses this view until a
 ; rescan or a moved view. PATH_READ_ATTEMPTS reads in a row with neither
 ; source save the frame and give up (the build then sits the match out).
 RefreshPathView(unit) {
-    global gPathViewReady,gPathViewSavedThisGame,gPathReadFailures,gPathReadGaveUp,PATH_READ_ATTEMPTS,LIT_PATH_MIN_FRACTION
+    global gPathViewReady,gPathViewSavedThisGame,gPathReadFailures,gPathReadGaveUp,PATH_READ_ATTEMPTS,gPreferRedPath
     if gPathViewReady
         return true
     if !GetClient(&cx,&cy,&cw,&ch) || !CloseUnitPanel() || !CancelUnitPreview() || HasCardChoice()
         return false
     ; Drop any earlier red view first, or the lit read would just return it.
     VisionRequest("pathviewclear")
-    lit := VisionRequest("world " cx " " cy " " cw " " ch)
-    if VisionOk(lit) && Number(lit["path"])>=cw*ch*LIT_PATH_MIN_FRACTION {
-        gPathViewReady := true,gPathReadFailures := 0
-        Log("Path read from the lit P path.")
+    if !gPreferRedPath && ReadLitPlacementPath(cx,cy,cw,ch)
         return true
-    }
-    Log("No lit P path in view; fall back to the red no-place overlay.")
+    if !gPreferRedPath
+        Log("No lit P path in view; fall back to the red no-place overlay.")
     if !SelectPlacementUnit(unit)
         return false
     if ToScreen(400,60,&sx,&sy)
         SmoothMoveTo(sx,sy)
     ok := ActionPause(300) && !HasCardChoice()
     reply := ok?VisionRequest("pathview " cx " " cy " " cw " " ch):false
-    CancelUnitPreview()
+    if !CancelUnitPreview() || !ok
+        return false
     if VisionOk(reply) && reply["path"]!="0" {
-        gPathViewReady := true,gPathReadFailures := 0
+        gPathViewReady := true,gPathReadFailures := 0,gPreferRedPath := true
         Log("Path read from the red no-place overlay while holding " unit.name ".")
         ; One debug image per game: the first read, as the macro saw it.
         if !gPathViewSavedThisGame {
@@ -1169,19 +1178,19 @@ RefreshPathView(unit) {
         }
         return true
     }
-    if ok {
-        ; Only a completed read that found nothing counts toward giving up.
-        if VisionOk(reply) {
-            gPathReadFailures += 1
-            Log("No lit P path and no red road (" gPathReadFailures "/" PATH_READ_ATTEMPTS "); no placement click sent.")
-            if gPathReadFailures>=PATH_READ_ATTEMPTS {
-                gPathReadGaveUp := true
-                SavePathReadFailure()
-                return false
-            }
+    if gPreferRedPath && ReadLitPlacementPath(cx,cy,cw,ch)
+        return true
+    ; Only a completed read that found nothing counts toward giving up.
+    if VisionOk(reply) {
+        gPathReadFailures += 1
+        Log("No lit P path and no red road (" gPathReadFailures "/" PATH_READ_ATTEMPTS "); no placement click sent.")
+        if gPathReadFailures>=PATH_READ_ATTEMPTS {
+            gPathReadGaveUp := true
+            SavePathReadFailure()
+            return false
         }
-        ActionPause(1000)
     }
+    ActionPause(1000)
     return false
 }
 
