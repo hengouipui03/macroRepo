@@ -188,6 +188,7 @@ RegisterPlacedUnit(unit,point) {
 }
 CandidateOccupied(*) => false
 PlacementTerrain(*) => "ground"
+RememberHillOutcome(*) => 0
 PlacementShortOfYen(*) {
     global failures
     Assert(!preview,"preview was active during Yen OCR")

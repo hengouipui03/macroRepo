@@ -78,8 +78,26 @@ assert tiles(grey)[1][0][6]=='1','grey Max button not recognised'
 # text and must never read as MAX: that ended Bulby's MAX target at 3 of 6.
 dim=reference.copy();dim[198:228,1040:1118]=(90,90,90);dim[208:216,1044:1114]=(200,200,200)
 assert tiles(dim)[1][0][6]=='0','dimmed Upg button was read as MAX'
+# Affordability (last field). The fixture has 744 Yen, so every Upg button is
+# dimmed (V about 80): not affordable. The same button lit to V about 170, as
+# in game when the Yen is there, is affordable; a grey Max is unknown.
+assert [c[10] for c in cells[:6]]==['0']*6,('dimmed Upg buttons not read as unaffordable',[c[10] for c in cells[:6]])
+rich=reference.copy();hsv=cv2.cvtColor(rich,cv2.COLOR_BGR2HSV)
+button=hsv[198:228,1040:1118];green=button[:,:,1]>=80;button[:,:,2][green]=170
+rich[:]=cv2.cvtColor(hsv,cv2.COLOR_HSV2BGR)
+assert tiles(rich)[1][0][10]=='1','lit Upg button not read as affordable'
+assert tiles(grey)[1][0][10]=='-1','grey Max button given an affordability'
+# Real game frame (688 Yen, Nightmare Train): Fishi's small red element icons
+# once passed as sell X marks, added fake rows, broke the pitch and left every
+# bar unreadable. Every tile must read, with dimmed Upg buttons unaffordable.
+icons=mv.read_image(str(root/'unit-manager-red-icon.jpg'))
+state,cells=tiles(icons)
+assert abs(float(state['pitch'])-152)<4,('red portrait icon broke the row pitch',state['pitch'])
+assert [(c[0],c[4],c[5],c[6]) for c in cells]==[('0','0','8','0'),('1','0','8','0'),('0','6','6','1'),('1','0','8','0'),('0','0','8','0'),('1','2','8','0')],cells
+assert [c[10] for c in cells if c[6]=='0']==['0']*5,'Upg buttons at 688 Yen were not all read as unaffordable'
 odd=reference.copy();odd[600:711,1140:]=20
 state,cells=tiles(odd)
 assert state['lastcount']==1 and cells[-1][0]=='0',('odd unit count: #1 must be the lone bottom-LEFT tile',state)
-print('PASS: tile segments (bright = done; dark body, with or without white outline = not done), Max read from the short word on a grey button, Upg click point, portrait colours, odd-count bottom row.')
+print('PASS: tile segments (bright = done; dark body, with or without white outline = not done), Max read from the short word on a grey button, Upg affordability (bright vs dimmed), Upg click point, portrait colours, odd-count bottom row.')
+print('PASS: red portrait element icons are not sell X marks (real Nightmare Train frame reads every bar).')
 print('PASS: bottom-row portrait click patches remain clear; physical left/right columns; reference/client-crop/resize; disabled buttons and closed-manager rejection.')

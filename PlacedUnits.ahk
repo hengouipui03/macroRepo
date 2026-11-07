@@ -115,11 +115,11 @@ CachedPlacementCandidates(unit) {
     return points
 }
 
-UpgradeQueue(readyOnly := false) {
+UpgradeQueue() {
     global gPlacements
     queue := []
     for item in gPlacements {
-        if item.complete || (readyOnly && item.HasProp("upgradeRetryAt") && A_TickCount<item.upgradeRetryAt)
+        if item.complete
             continue
         at := queue.Length+1
         for index,other in queue {
@@ -170,7 +170,9 @@ UpgradePriorityPass() {
     global gRunning,gPlacements
     for item in gPlacements
         RefreshRecordedUpgradeTarget(item)
-    queue := UpgradeQueue(true)
+    ; Strict priority: always the highest-priority unfinished unit, even while
+    ; it is paused after a failed read. Lower priorities wait for it.
+    queue := UpgradeQueue()
     if gRunning && queue.Length
         UpgradeOnce(queue[1])
 }
@@ -187,14 +189,15 @@ SaveUpgradeDiagnostic(item) {
         Log("#" item.id ": saved " path " for diagnosis.")
 }
 
-; A genuinely stuck unit backs off 10, 20, 40, then 60 seconds so lower
-; priorities keep upgrading; any confirmed upgrade resets the back-off.
+; Strict priority: a stuck unit is never skipped. It pauses 2 s, then the same
+; unit is read again; lower priorities wait until it reaches its target.
+; Logged on the first pause and then about every 30 s.
 DeferUnitUpgrade(item,message) {
     count := (item.HasProp("deferCount")?item.deferCount:0)+1
-    delay := Min(60,10*(2**(count-1)))
-    item.deferCount := count,item.upgradeRetryAt := A_TickCount+delay*1000
+    item.deferCount := count,item.upgradeRetryAt := A_TickCount+2000
     item.lastClickAt := 0,item.upgradeUnreadCount := 0,item.upgradeWarningAt := A_TickCount
-    Log("#" item.id " " item.name ": " message " Retry in " delay " seconds; continue other units.")
+    if count=1 || Mod(count,15)=0
+        Log("#" item.id " " item.name ": " message " Retry in 2 seconds; lower priorities wait.")
     CloseUnitPanel()
     ResetUpgradeSelection()
     return false
@@ -289,8 +292,9 @@ StableTileRead(item,key) {
 
 ; One upgrade step for a recorded purchase, entirely from its manager tile.
 ; Like holding R: keep clicking the tile's Upg button until the unit reaches
-; MAX or its target. There is no failure counter; clicks that buy nothing
-; (not enough Yen) are simply repeated. A finite target waits up to 2 s for
+; MAX or its target. A dimmed Upg button (not enough Yen) is waited on with
+; no click; when the button state is unknown, clicks that buy nothing are
+; simply repeated. A finite target waits up to 2 s for
 ; the new segment after each click so a slow bar can never overshoot it.
 UpgradeOnceAction(item) {
     global gRunning,gUnitManagerFailure,gUpgradeSelectedId
@@ -319,7 +323,7 @@ UpgradeOnceAction(item) {
         }
         item.openFailures := 0
         SaveUpgradeDiagnostic(item)
-        return DeferUnitUpgrade(item,"tile not found in the unit manager after three tries" (reason=""?"":" (" reason ")") "; let the other units upgrade.")
+        return DeferUnitUpgrade(item,"tile not found in the unit manager after three tries" (reason=""?"":" (" reason ")") ".")
     }
     item.openFailures := 0
     entry := found.entry
@@ -328,6 +332,14 @@ UpgradeOnceAction(item) {
         return DeferUnitUpgrade(item,"the purchase list and the unit manager disagree about this tile. No upgrade clicked.")
     }
     level := entry.filled,finite := item.target!=99
+    ; A dimmed Upg button means not enough Yen: nothing to buy yet, so wait on
+    ; this unit without counting a failed read or clicking.
+    poor := entry.HasProp("afford") && entry.afford=0 && !entry.maxed
+    if poor && level<0 {
+        item.upgradeUnreadCount := 0
+        UpgradeWarning(item,"waiting for Yen (Upg button dimmed).")
+        return false
+    }
     ; An unreadable bar cannot overshoot a MAX target, so it is clicked anyway.
     if level<0 && !entry.maxed && finite {
         item.upgradeUnreadCount += 1
@@ -398,6 +410,10 @@ UpgradeOnceAction(item) {
     }
     if item.lastClickAt && A_TickCount-item.lastClickAt<(finite?2000:300)
         return false
+    if poor {
+        UpgradeWarning(item,"waiting for Yen (Upg button dimmed).")
+        return false
+    }
     if HasCardChoice() {
         ClearCardChoice()
         return false

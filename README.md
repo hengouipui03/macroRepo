@@ -477,9 +477,11 @@ checks the new row positions; reaching the top without the unit is reported as
 "fewer units than recorded". While the list has not moved, the last tile found
 is reused without scrolling. Upgrades click only the tile's Upg button (and the
 portrait, if the game needs the unit selected first); Sell X and targeting
-buttons are never clicked. F is pressed only
-after every unit is placed, then the manager stays open until the match ends,
-except while a card is chosen: it is closed for the card, then reopened. F is sent only after three consecutive "closed"
+buttons are never clicked. F opens the manager only
+after every unit is placed; it stays open while upgrades remain, except while a
+card is chosen (closed for the card, then reopened), and is closed once every
+upgrade target is reached or when left open from the last match. Upgrades
+follow strict priority: a lower priority waits until the higher one is done. F is sent only after three consecutive "closed"
 readings, never twice within 2.5 s, and two unconfirmed presses lock F for 20 s.
 Click-aways use (497,168), left of the open manager. See MACRO_BEHAVIOUR.md.
 

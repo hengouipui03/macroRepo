@@ -63,14 +63,14 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
 | Rule | How it is enforced |
 |---|---|
 | F is pressed **only after every configured unit is placed**. | `gUnitManagerPhase` is false until `RunMacro` calls `BeginUnitManagerPhase()` after `PlaceConfiguredBuild` returns `complete`. `PressUnitManagerKey()` refuses to send F while the phase is off. Placement, relocation and route preparation no longer touch F at all. |
-| Once open, it **stays open until the match ends**, except during card choice. | Unit switching, finished targets, deferred units and idle clicks never close it (`EnsureUnitManagerClosed` was removed). **Cards are the only exception:** `CloseUnitManagerForCards()` presses F only if two readings agree the manager is open (at most twice), and the cards are read only after two readings in a row confirm it is **closed**. The open manager covers the right-hand card. When the card screen is gone, `ReopenUnitManagerAfterCards()` reopens it through the guarded `EnsureUnitManagerOpen()` and resets the upgrade selection, so the top-priority unit is reselected through the manager before any R. |
+| Once open, it **stays open while upgrades remain**, except during card choice. | Unit switching, finished targets, paused units and idle clicks never close it. **Once every upgrade target is reached** the watch loop closes it once (`CloseUnitManagerIfOpen`, F only after two readings confirm it is open) and ends the manager phase, so it stays closed; a target raised in the GUI mid-match opens it again. **Cards:** `CloseUnitManagerForCards()` presses F only if two readings agree the manager is open (at most twice), and the cards are read only after two readings in a row confirm it is **closed**. The open manager covers the right-hand card. When the card screen is gone, `ReopenUnitManagerAfterCards()` reopens it through the guarded `EnsureUnitManagerOpen()` and resets the upgrade selection, so the top-priority unit is reselected through the manager before any R. |
 | Click-aways never hit the manager. | The click-away point moved from (740,150), which is on top of the open manager, to **(497,168)**: empty world between "Return to lobby" and the manager's left edge, above the cards and right of the side unit panel. It is `CLICK_AWAY_X/Y` in `AAPathMacro.ahk`. |
 | F is never sent on a guess. | `EnsureUnitManagerOpen()` presses F only after **3 consecutive "closed" readings**. Failed or unreadable frames reset the count. F is not repeated within **2.5 s** of the last press, so it cannot fire again while the manager is still animating open. |
 | "Open" means the real manager. | Vision (`unit_manager`) only accepts the yellow "Unit Overview" heading when it is a thin text line on the manager's dark panel. Bright yellow scenery in that corner (Sand Village's path) once read as "open": F was skipped after placement and after cards, then pressed during the next card, opening the manager over the right card. |
 | A misreading cannot toggle it repeatedly. | If two F presses in a row never produce an "open" reading, F is locked for 20 s and the log says so. |
 | No opening F during cards or the end screen. | `UnitManagerBlocked()` checks `HasCardChoice()` and `IsEndGameBlocking()` before every open attempt. The only F during cards is the single closing press above. |
 | If the game closes it, it is reopened once. | `MaintainUnitManager()` checks every 3 s in the watch loop and reopens through the same guarded `EnsureUnitManagerOpen()`. |
-| Leftover manager before placement. | `EnsureRouteAndSpawn` only logs it. It does not press F (placement-phase rule). |
+| Leftover manager before placement. | `EnsureRouteAndSpawn` closes it with one F, only after two readings confirm it is open (`CloseUnitManagerIfOpen`). Left open it hid the weather and Level Modifiers at match start. F is still never used to **open** the manager before the build is complete. |
 
 ### Finding purchase #N (`LocateManagedUnit`)
 1. Refuse while a placement purchase is unresolved, or while a card is up (reason `card`).
@@ -91,21 +91,23 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 
 ## 4. Upgrades
 
-- **Queue:** unfinished recorded units, lowest priority number first, ties by purchase number (`UpgradeQueue`). Each watch-loop pass works only on the head of the queue (`UpgradePriorityPass`).
+- **Queue:** unfinished recorded units, lowest priority number first, ties by purchase number (`UpgradeQueue`). Each watch-loop pass works only on the head of the queue (`UpgradePriorityPass`). **Strict priority:** a lower priority is never upgraded while a higher one is unfinished, even while the head is paused.
 - **Everything happens on the unit's manager tile** (`UpgradeOnceAction`). The side panel's UPG heading, OCR and R are no longer used.
 - **When the tile cannot be found:**
   - `card` → choose the card (the manager is closed for it, then reopened), then find **the same** unit again. Nothing is deferred.
   - `manager` → retry the same priority. This is never counted against the unit.
-  - Any other reason → retry the same unit up to **3** times, then defer it.
+  - Any other reason → retry the same unit up to **3** times, then pause it 2 s (see Pause).
 - **Level:** the number of lit segments. A new lit segment confirms an upgrade. Fewer lit segments than already confirmed means the tile is doubtful: it is found again, and the lower count is accepted only after three reads in a row.
-- **Clicks (like holding R):** keep clicking the tile's Upg button until MAX or the target. No failure counter, no warnings, no deferral for clicks that buy nothing (not enough Yen). MAX target: every 0.3 s, even if the bar is unreadable. Finite target: after each click wait for the new segment, at most 2 s, so a slow bar cannot overshoot.
+- **Not enough Yen:** vision reads the Upg button's brightness (`afford`: lit = can buy, dimmed = cannot). A dimmed button is waited on with no click and no failed read counted, even if the bar is unreadable.
+- **Clicks (like holding R):** keep clicking the tile's Upg button until MAX or the target. When the button state is unknown, clicks that buy nothing are repeated with no failure counter. MAX target: every 0.3 s, even if the bar is unreadable. Finite target: after each click wait for the new segment, at most 2 s, so a slow bar cannot overshoot.
 - **Second look (`StableTileRead`):** a level jump that no click explains, and any MAX, must read the same twice, 0.25 s apart. One more segment right after a click is accepted at once.
 - **Identity guard:** the first tile seen for each slot teaches that slot's portrait colours. A tile is refused only when it is far from its own slot's colours and at most half as far from another slot's, so look-alike units never block upgrades.
-- **Deferral:** unreadable bars (3 reads), missing tiles (3 tries) or a portrait mismatch defer only that unit for 10, 20, 40, then 60 s; other units continue. Any confirmed upgrade resets the back-off. One diagnostic screenshot per unit per match goes to `cache\upg-tile-<id>.bmp`.
+- **Pause:** unreadable bars (3 reads), missing tiles (3 tries) or a portrait mismatch pause **the same unit** for 2 s, then it is read again; lower priorities wait (no back-off, no hand-over). Logged on the first pause and about every 30 s. One diagnostic screenshot per unit per match goes to `cache\upg-tile-<id>.bmp`.
+- **Sell X only:** Fishi's small red element icon once passed as a sell X, added a fake row, broke the row pitch and left every bar unreadable. Vision now keeps only sell-X-sized marks.
 - **MAX = grey Max button and every segment lit** (or unreadable bar). A grey button over unlit segments (a manager still opening; this ended #7 at 5 of 8 and skipped unit 2) is never clicked and is believed only if it stays for 4 s.
-- **Target reached or MAX:** mark complete (the manager stays open), log the next unit.
+- **Target reached or MAX:** mark complete, log the next unit. After the last target the manager is closed (§3).
 - **Live target edits** in the GUI apply to already-placed units at once (`RefreshRecordedUpgradeTarget`).
-- **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the side unit panel (a manager portrait click opens it, and it covers the left card), closes the manager once (if it is confirmed open), and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click (the remembered tile position is dropped whenever F is pressed or the list scrolls).
+- **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the manager once (only if it is confirmed open), then clicks the open spot (497,168) once to drop the unit/upgrade panel, with no panel detection, and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click (the remembered tile position is dropped whenever F is pressed or the list scrolls).
 
 ---
 
@@ -119,7 +121,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **Edge blocking:** 3 misses on one edge block the whole stretch they walked (48 px either way of every miss, `RegisterPlacementEdgeMiss`); the next tries go to the opposite side or another edge.
 - **Money:** on the path edge, the free spot farthest from all placed units (or from the player if first). Others keep 48 px from it (normal 24). Never an anchor; the line keeps growing from the last ordinary edge unit.
 - **Hill-only / Hybrid:** Hill-only needs highlighted Hill terrain and never falls back to ground. Hybrid tries the green Hill highlights (nearest the path first), then ground. Hill units are never anchors.
-- **Purchase confirmation:** the side unit panel opening after the click confirms the purchase. Before buying, a selection-only click rejects spots that already hold a unit. Failed spots (14 px radius) are skipped for the rest of the game.
+- **Purchase confirmation:** the side unit panel opening after the click confirms the purchase. Before buying, a selection-only click rejects spots that already hold a unit. Failed spots (28 px radius) are skipped for the rest of the game. Hill spots that failed in two matches in a row on the same map profile are skipped from the start of the next match; a success there clears the record.
 - **Recovery:** a purchase hidden by cards is re-checked with selection-only clicks and never bought twice (`RecoverPendingPlacement`).
 - **Short of Yen (`PlacementShortOfYen`, `WaitForPlacementYen`):** checked only after a purchase fails, so successful placements cost no time. One OCR pass reads the Yen counter above the toolbar and the cost under each of the six slot portraits (`ReadPlacementMoney`). If Yen is below the unit's cost, the miss is **not** counted toward relocation, the spot is not rejected and no edge is blocked; the macro re-reads Yen about once a second (at most 20 s) and then places the same unit. Costs are remembered by unit name in `learning.ini` (`[UnitCosts]`); a new value is believed only when two reads agree. Once Yen has been seen to cover the cost, further misses before the next purchase skip the read. Unreadable Yen or an unknown cost counts the miss as before.
 - **Relocation:** 6 consecutive failed purchases move the player to the next route checkpoint (25% → 50% → 75%). At checkpoint 3 it keeps trying locally.
@@ -146,7 +148,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 `HasCardChoice()` looks at the centre card only: two tall bright outlines at x≈314/488 and a dark interior. Hue is ignored, and the right-side "Level info" panel can never count as a card. Cards are checked during every wait, cursor move and pause (`CheckCardInterruption` inside `WaitFor`).
 
 ### Handling (`ClearCardChoice` → `TryChooseCard` → `ConfirmLockedCardSelection`)
-1. Press Q only if a placement preview is active. During upgrades, close the F manager once (only if it is confirmed open). This is the only time it is closed. The side unit panel is clicked away only during placement, never during upgrades.
+1. Press Q only if a placement preview is active. During upgrades, close the F manager once (only if it is confirmed open). Then, in every phase, one click on the open spot (497,168) drops any unit/upgrade panel (`ClickOpenSpotForCards`); the panel is not detected first.
    After the card screen closes, the manager is reopened and the top-priority unit is reselected before any R.
 2. **Pixel green check first** (`PixelGreenCards`). Each card's title and first effect lines are scanned for bright green glyphs (G>170, G−R>80, G−B>60) versus bright red. If exactly one card is green, it is chosen **immediately, before OCR**, because votes can end within seconds. On the supplied screenshot this gives Range: 173 green pixels against 0 and 0 on the two red cards.
    Card positions come from `cardboxes` (MinimapVision.py), measured once per card screen: the left and middle dark panels give the card width and spacing, and the right card is placed one spacing further, so the Level Modifiers panel touching it is never read as part of it. If detection fails three times, the fixed 800x600 layout is used.
@@ -209,7 +211,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `HasCardChoice`, `HasCardBorder` | Card screen detection. |
 | `IsCardColour`, `CardBorderKind`, `CardColourKind` | Legacy border classification (not used to decide). |
 | `CheckCardInterruption` | Polled during waits. Pauses the current action, chooses the card, resumes the same unit/purchase. |
-| `ClearCardChoice`, `ClearCardChoiceAction` | Card handling entry. Q if a preview is active, close the side unit panel in every phase (it covers the left card), close the manager for the card, reopen it and reset the unit selection afterwards. |
+| `ClearCardChoice`, `ClearCardChoiceAction` | Card handling entry. Q if a preview is active, close the manager for the card, one click on the open spot (no panel detection), reopen the manager and reset the unit selection afterwards. |
 | `ResetCardSelection`, `WaitForCardChoiceClosed` | Card lock reset and a 350 ms stable-closed check. |
 | `TryChooseCard` | Pixel-green fast path, then OCR, ranking, retries and fallback. |
 | `ConfirmLockedCardSelection` | Re-verify green priority, block Speed, click the card (left card at y=405 if the unit panel is showing). |
@@ -249,7 +251,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `UpgradeQueue`, `UpgradePriorityPass` | Priority order and one pass on the head. |
 | `ResetUpgradeSelection`, `ResetUpgradeTracking`, `RefreshRecordedUpgradeTarget` | Selection and remembered tile, per-unit click tracking, live target edits. |
 | `SaveUpgradeDiagnostic` | Saves the client area to `cache\upg-tile-<id>.bmp`, once per unit per match. |
-| `DeferUnitUpgrade` | 10/20/40/60 s back-off for a genuinely stuck unit (the manager stays open). |
+| `DeferUnitUpgrade` | 2 s pause of a stuck unit, which stays at the head of the queue (strict priority). |
 | `OpenRecordedUnit` | Portrait selection through the manager (relocation checks). |
 | `PortraitDistance`, `SlotDisplayName`, `TileIdentityMismatch` | Portrait-colour identity guard. |
 | `ClickTileUpgrade` | Upg click on the tile. |
@@ -262,7 +264,8 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `ResetPlacementSearch`, `RefreshPlacementSearch`, `FindPlacementCandidates`, `StartLineAtNewestEdgeUnit`, `PlacementSearchExclusions`, `UsablePlacementPoint`, `PlacementSearchDiagnostic` | Candidate search along the lit path edge. |
 | `EdgeAnchors`, `NewestEdgeAnchor`, `PartnerOpen`, `FindPartnerCandidate`, `TryPartnerPlacement` | Edge/partner pairs. |
 | `MoneySpotScore`, `PlaceMoneyUnit` | Money units. |
-| `PlacementTerrain`, `FailedPlacementSpot`, `RememberFailedPlacementSpot`, `ForgetFailedPlacementSpot` | Per-game rejected spots (14 px radius). |
+| `PlacementTerrain`, `FailedPlacementSpot`, `RememberFailedPlacementSpot` | Per-game rejected spots (28 px radius). |
+| `RememberHillOutcome`, `ReadHillMisses`, `LoadRememberedHillMisses` | Hill spots per map profile (`hillmiss` in learning.ini): skipped from the start of later matches after failed purchases in two matches in a row; a success there clears it. |
 | `PlacementClickRef`, `PlacementPurchaseReady` | Guarded click: no click if a card, panel or end screen appears. Binds the purchase. |
 | `SelectPlacementUnit`, `CancelUnitPreview` | Slot key and Q (only when a preview is active). |
 | `HasUnitPanel`, `UnitPanelRegion`, `UnitPanelColourHits`, `WaitForUnitPanel` | Side unit panel detection (learns its layout per window size). |

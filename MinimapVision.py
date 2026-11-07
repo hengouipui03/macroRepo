@@ -29,7 +29,7 @@ World requests read the whole client (positions in client pixels):
     beside count                     placement points just outside the lit path
     placementline count              adjacent spots along one local path edge
     unitmanager cx cy cw ch           manager rows; entries are column,portrait x,y,row y,
-                                     filled,total segments,MAX,Upg x,y,portrait colours
+                                     filled,total segments,MAX,Upg x,y,portrait colours,afford
     hillspots count cx cy cw ch       new green hill highlights nearest the path
     onpath x y                       whether a client point lies on the lit path
     worlddebug <path>                save the world capture with path and points
@@ -877,6 +877,13 @@ class World:
         icons=cv2.morphologyEx(icons,cv2.MORPH_CLOSE,np.ones((3,3),np.uint8))
         _,_,stats,_=cv2.connectedComponentsWithStats(icons,8)
         buttons=[s for s in stats[1:] if w*.012<s[2]<w*.05 and h*.016<s[3]<h*.065 and .6<s[2]/s[3]<1.7 and s[4]/(s[2]*s[3])>.4]
+        # Small red element icons on some portraits (Fishi's lightning) pass the
+        # colour test at about 30x19 px against the sell X's 40x31. Keep only
+        # sell-X-sized marks: one stray icon added a fake row, broke the row
+        # pitch, and left every tile's segments unreadable.
+        if buttons:
+            mw=max(s[2] for s in buttons);mh=max(s[3] for s in buttons)
+            buttons=[s for s in buttons if s[2]>=mw*.8 and s[3]>=mh*.8]
         dark=np.max(image[top:bottom,int(w*.66):],axis=2)<85
         if not buttons or not dark.size or dark.mean()<.35:return {"open":1,"ready":0}
         bw=float(np.median([s[2] for s in buttons]));bh=float(np.median([s[3] for s in buttons]))
@@ -905,7 +912,7 @@ class World:
         lastcount=sum(1 for e in entries if abs(e[3]-row_y[-1])<1)
         return {"open":1,"ready":1,"top":top,"bottom":bottom,"pitch":"%.3f"%pitch,
                 "first":"%.3f"%row_y[0],"last":"%.3f"%row_y[-1],"lastcount":lastcount,"signature":signature,
-                "entries":";".join("%d,%.2f,%.2f,%.2f,%d,%d,%d,%.2f,%.2f,%s"%e for e in entries)}
+                "entries":";".join("%d,%.2f,%.2f,%.2f,%d,%d,%d,%.2f,%.2f,%s,%d"%e for e in entries)}
 
     @staticmethod
     def manager_tile(hsv, x, y, bw, bh, pitch, top, bottom):
@@ -955,6 +962,11 @@ class World:
         # even when dimmed because the next upgrade is unaffordable).
         bx0,bx1=int(x+bw*2.95),min(w,int(x+bw*4.75));by0,by1=int(y+bh*1.25),int(y+bh*1.85)
         maxed=0
+        # Affordability from the same button: green or yellow, it is bright
+        # (V about 165-220) when the next upgrade can be bought and dimmed (V
+        # about 80) when it cannot. 1 bright, 0 dimmed, -1 unknown (grey Max,
+        # or too little button colour to judge).
+        afford=-1
         if by0>=top and by1<=bottom and bx1>bx0:
             ys,xs=slice(by0,by1),slice(bx0,bx1)
             colour=((sat[ys,xs]>=110)&(val[ys,xs]>=90)&(hue[ys,xs]>=15)&(hue[ys,xs]<=85)).mean()
@@ -962,6 +974,10 @@ class World:
             cols=np.nonzero(text.sum(axis=0)>=2)[0]
             span=(cols[-1]-cols[0]+1)/float(bx1-bx0) if cols.size>=10 else 1.0
             maxed=int(colour<.10 and span<.75)
+            body=(sat[ys,xs]>=80)&(v>=30)&(hue[ys,xs]>=15)&(hue[ys,xs]<=85)
+            if not maxed and body.mean()>=.25:
+                bright=float((v[body]>=120).mean())
+                afford=1 if bright>=.5 else (0 if bright<=.15 else -1)
         ux,uy=x+bw*3.85,y+bh*1.55
         # Portrait colours below the Lv label and above the name label:
         # 12 hue bins of coloured pixels, then dark and neutral-light shares.
@@ -976,7 +992,7 @@ class World:
             parts.append(int(round(100*(pv<60).sum()/n)))
             parts.append(int(round(100*((ps<70)&(pv>=60)).sum()/n)))
             sig=".".join(str(v) for v in parts)
-        return (filled,total,maxed,ux,uy,sig)
+        return (filled,total,maxed,ux,uy,sig,afford)
 
     def relocation(self, hint_x=0, hint_y=1):
         """A connected road waypoint downstream; AHK repeats it until relocated."""

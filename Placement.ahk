@@ -693,6 +693,17 @@ CloseUnitPanel() {
     return ClickAwayFromUnitPanel()
 }
 
+; Cards: one click on the same empty spot (above the cards, left of the F
+; manager) drops any unit/upgrade panel. Sent every time, without detecting
+; the panel; the preview was already dropped so it cannot buy a unit.
+ClickOpenSpotForCards() {
+    global gUpgradeSelectedId,CLICK_AWAY_X,CLICK_AWAY_Y
+    gUpgradeSelectedId := 0
+    if !PlacementClickRef(CLICK_AWAY_X,CLICK_AWAY_Y)
+        return false
+    return ActionPause(250,false)
+}
+
 
 PlacementPanelClosedStable() {
     Loop 2 {
@@ -728,6 +739,8 @@ FinishPlacement(unit,point) {
         return false
     if !RegisterPlacedUnit(unit,point)
         return false
+    if PlacementTerrain(point)="hill"
+        RememberHillOutcome(point,true)
     ; Yen seen before this purchase minus its cost still bounds Yen from below
     ; (income only adds), so the next miss needs no Yen OCR.
     if gLastYenRead && gLastYenRead.placements=gPlacements.Length-1 {
@@ -866,8 +879,11 @@ RecoverPendingPlacement(unit) {
     gPendingPlacement := 0
     RecordFailedPlacement(unit,point)
     ; Short of Yen: the spot itself was never tested, so it stays usable.
-    if !point.HasProp("yenShort") || !point.yenShort
+    if !point.HasProp("yenShort") || !point.yenShort {
         RememberFailedPlacementSpot(point)
+        if PlacementTerrain(point)="hill"
+            RememberHillOutcome(point,false)
+    }
     return false
 }
 

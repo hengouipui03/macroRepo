@@ -1,9 +1,9 @@
 ﻿; Select recorded purchase #N from the F manager's two-column row order.
-; F is pressed ONLY after every configured unit has been placed. From then on
-; the manager stays open for the rest of the match. The ONLY time it is closed
-; is while a card is being chosen; it is reopened right after and the
-; top-priority unit is reselected. Unit switches, finished targets and
-; click-aways never close it.
+; F is pressed to OPEN the manager only after every configured unit has been
+; placed. It then stays open while upgrades remain. It is closed while a card
+; is chosen (reopened right after, top-priority unit reselected) and once
+; every upgrade target is reached. A manager left open from the last match is
+; closed before placement. Unit switches and click-aways never close it.
 ; F is re-sent only when vision has confirmed several times in a row that the
 ; manager really is closed, so a misread can never toggle it shut.
 global gUnitManagerOpen := false
@@ -15,12 +15,12 @@ global gUnitManagerClosedForCards := false
 ; The last tile found for a purchase, valid only while the list has not moved.
 global gManagerTile := 0,gSlotPortraits := Map()
 
-BeginUnitManagerPhase() {
+BeginUnitManagerPhase(message := "All units placed. The F unit manager opens now and stays open while upgrades remain.") {
     global gUnitManagerPhase,gUnitManagerLastF,gUnitManagerCheckAt,gUnitManagerUnconfirmedF,gUnitManagerLockUntil
     gUnitManagerPhase := true,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
     gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0
     ResetManagerTileMemory()
-    Log("All units placed. The F unit manager opens now and stays open until the match ends.")
+    Log(message)
 }
 
 EndUnitManagerPhase() {
@@ -56,10 +56,11 @@ FocusUnitManagerGame() {
     return true
 }
 
-PressUnitManagerKey() {
+PressUnitManagerKey(closing := false) {
     global UNIT_ACTION_MS,gRunning,gUnitManagerPhase,gUnitManagerLastF
-    ; Hard rule: no F before the whole build is placed.
-    if !gRunning || !gUnitManagerPhase || !FocusUnitManagerGame() || !BeginInputAction(true,UNIT_ACTION_MS)
+    ; Hard rule: no F to open the manager before the whole build is placed.
+    ; Closing (after two readings confirm it is open) is allowed any time.
+    if !gRunning || (!gUnitManagerPhase && !closing) || !FocusUnitManagerGame() || !BeginInputAction(true,UNIT_ACTION_MS)
         return false
     gUnitManagerLastF := A_TickCount
     ForgetManagerTile()
@@ -192,6 +193,32 @@ ReopenUnitManagerAfterCards() {
     return EnsureUnitManagerOpen()?true:false
 }
 
+; One F to close the manager, sent only when two readings in a row confirm it
+; is open: a closed or unreadable manager is never toggled. Used for a manager
+; left open from the last match and once every upgrade target is reached.
+CloseUnitManagerIfOpen(why) {
+    global gRunning
+    Loop 2 {
+        state := ReadUnitManager()
+        if !gRunning || !state || state["open"]!="1"
+            return gRunning
+        if A_Index=1 && !ActionPause(100,false)
+            return false
+    }
+    Log(why)
+    if !PressUnitManagerKey(true)
+        return false
+    Loop 10 {
+        if !ActionPause(150,false)
+            return false
+        state := ReadUnitManager()
+        if state && state["open"]="0"
+            return true
+    }
+    Log("Unit manager still looks open after one F; leaving it.")
+    return false
+}
+
 UnitManagerFail(reason) {
     global gUnitManagerFailure
     gUnitManagerFailure := reason
@@ -246,11 +273,14 @@ ParseUnitManagerEntry(text) {
     if parts.Length<4
         return false
     entry := {column:Integer(parts[1]),x:Number(parts[2]),y:Number(parts[3]),row:Number(parts[4]),
-        filled:-1,total:-1,maxed:false,ux:0,uy:0,sig:""}
+        filled:-1,total:-1,maxed:false,ux:0,uy:0,sig:"",afford:-1}
     if parts.Length>=10 {
         entry.filled := Integer(parts[5]),entry.total := Integer(parts[6]),entry.maxed := parts[7]="1"
         entry.ux := Number(parts[8]),entry.uy := Number(parts[9]),entry.sig := parts[10]="-"?"":parts[10]
     }
+    ; 1 = Upg button lit (can buy now), 0 = dimmed (not enough Yen), -1 = unknown.
+    if parts.Length>=11
+        entry.afford := Integer(parts[11])
     return entry
 }
 

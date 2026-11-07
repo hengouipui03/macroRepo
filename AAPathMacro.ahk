@@ -783,11 +783,11 @@ HoldCameraKey(key,duration,epoch) {
 
 EnsureRouteAndSpawn() {
     global gMapModel,gCameraOverheadReady,gPathToggleClicked,THREE_PATH_STAND
-    ; F belongs to the upgrade phase only: never pressed before every unit is placed.
+    ; F opens the manager only after every unit is placed. One left open from
+    ; the last match hides the weather and Level Modifiers, so it is closed
+    ; now (one F, only after two readings confirm it is open).
     EndUnitManagerPhase()
-    leftover := ReadUnitManager()
-    if leftover && leftover["open"]="1"
-        Log("Unit manager is visible before placement; F is not pressed until all units are placed.")
+    CloseUnitManagerIfOpen("Unit manager left open from the last match; press F once to close it before placement.")
     gCameraOverheadReady := false,gPathToggleClicked := false
     ; New match: the vision forgets the last map's path colour (yellow on Sand Village).
     VisionRequest("worldreset")
@@ -1061,17 +1061,15 @@ ClearCardChoiceAction() {
         return false
     }
     ; A placement preview is dropped (Q) so a card click cannot buy a unit.
-    ; The side unit panel (also opened by a manager portrait click during
-    ; upgrades) covers the left card, so it is closed in every phase. The F
-    ; unit manager is closed for the card (the only time it is closed). Both
-    ; come back afterwards: the manager is reopened and the top-priority unit
-    ; is reselected through it before any R.
+    ; Then the user's rule for cards: close the F unit manager (F only after it
+    ; is confirmed open), then one click on an open spot to drop the unit /
+    ; upgrade panel, with no panel detection. Afterwards the manager is
+    ; reopened and the top-priority unit is reselected through it.
     if !CancelUnitPreview()
         return false
-    if HasUnitPanel() && !ClickAwayFromUnitPanel()
-        Log("Unit panel still open over the left card; reading the cards anyway.")
     if !CloseUnitManagerForCards()
         return false
+    ClickOpenSpotForCards()
     Log("Card choice is open; choosing before continuing.")
     deadline := A_TickCount+20000
     while gRunning && A_TickCount<deadline {
@@ -1474,7 +1472,7 @@ NavigateForPlacement() {
 
 RunMacro() {
     global gRunning, gPlacements, gMatchReported,gAwaitingReplayMap,gEndHandling
-    global gMatchWeather,gMapModel
+    global gMatchWeather,gMapModel,gUnitManagerPhase
     SaveUnitSettings()
     ResetIdleKeepAlive()
     EndUnitManagerPhase()
@@ -1543,12 +1541,13 @@ RunMacro() {
     PreparePlacementMemory()
     gPlacements := []
     ResetPlacementSearch()
+    LoadRememberedHillMisses()
     BeginPlacementRun()
     buildResult := PlaceConfiguredBuild(plan)
     if buildResult!="complete"
         return buildResult="replay"?"replay":""
     Notify("Build placed: " gPlacements.Length " units. Watching upgrades/end screen.")
-    ; Only now may F be pressed; the manager then stays open until the match ends.
+    ; Only now may F open the manager; it stays open while upgrades remain.
     BeginUnitManagerPhase()
     if !HasCardChoice() && !IsEndGameBlocking()
         EnsureUnitManagerOpen()
@@ -1568,8 +1567,23 @@ RunMacro() {
             continue
         }
         RefreshMatchModifiers()
-        MaintainUnitManager()
-        UpgradePriorityPass()
+        if gUnitManagerPhase {
+            MaintainUnitManager()
+            UpgradePriorityPass()
+            ; Every target reached: close the manager once and keep it closed.
+            if gRunning && !UpgradeQueue().Length && !HasCardChoice() && !IsEndGameBlocking() {
+                CloseUnitManagerIfOpen("All upgrade targets reached; press F once to close the unit manager.")
+                EndUnitManagerPhase()
+            }
+        } else {
+            ; A target raised in the panel mid-match brings the manager back.
+            for item in gPlacements
+                RefreshRecordedUpgradeTarget(item)
+            if UpgradeQueue().Length && !HasCardChoice() && !IsEndGameBlocking() {
+                BeginUnitManagerPhase("An upgrade target was raised; the F unit manager opens again.")
+                EnsureUnitManagerOpen()
+            }
+        }
         IdleKeepAliveTick()
         ActionPause(100)
     }

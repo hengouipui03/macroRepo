@@ -124,6 +124,8 @@ PlacementClickRef(*) => true
 WaitForUnitPanel(*) => false
 FinishPlacement(*) => true
 CandidateOccupied(*) => false
+PlacementTerrain(*) => "ground"
+RememberHillOutcome(*) => 0
 RememberFailedPlacementSpot(*) {
     global remembered
     remembered += 1

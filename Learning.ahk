@@ -1172,3 +1172,71 @@ RememberPlacement(unit, candidate, success := true) {
     WritePlacementRecords(unit, records)
     Log("Learned confirmed " unit.name " placement at window " Round(wx) "," Round(wy))
 }
+
+; Hill spot outcomes per map profile (same map, window, camera and pose).
+; A Hill spot is skipped in later matches only after failed purchases in two
+; matches in a row; any purchase that succeeds there clears it. One miss can
+; be a card or timing, and a spot that has worked stays usable.
+ReadHillMisses() {
+    global gPlacementProfile
+    records := []
+    if gPlacementProfile = ""
+        return records
+    for value in StrSplit(MemoryRead(gPlacementProfile, "hillmiss"), ";") {
+        fields := StrSplit(value, ",")
+        if fields.Length = 3 && IsNumber(fields[1]) && IsNumber(fields[2]) && IsNumber(fields[3])
+            records.Push({x: Number(fields[1]), y: Number(fields[2]), bad: Number(fields[3])})
+    }
+    return records
+}
+
+RememberHillOutcome(point, success) {
+    global gPlacementProfile, LEARNING_FILE, REF_W, REF_H, FAILED_PLACEMENT_RADIUS
+    geometry := WindowGeometry()
+    if gPlacementProfile = "" || !geometry
+        return
+    wx := geometry.cx - geometry.x + point.x * geometry.cw / REF_W
+    wy := geometry.cy - geometry.y + point.y * geometry.ch / REF_H
+    radius := FAILED_PLACEMENT_RADIUS * geometry.cw / REF_W
+    records := ReadHillMisses(), found := 0
+    for index, record in records
+        if MapDistance(wx, wy, record.x, record.y) <= radius {
+            found := index
+            break
+        }
+    if success {
+        if !found
+            return
+        records.RemoveAt(found)
+    } else if found
+        records[found].bad += 1
+    else {
+        if records.Length >= 40
+            records.RemoveAt(1)
+        records.Push({x: wx, y: wy, bad: 1})
+    }
+    text := ""
+    for record in records
+        text .= (text = "" ? "" : ";") Round(record.x) "," Round(record.y) "," record.bad
+    IniWrite text, LEARNING_FILE, gPlacementProfile, "hillmiss"
+}
+
+; At match start (after the per-game failed spots are cleared): Hill spots
+; that failed in two matches in a row on this map are skipped from the start.
+LoadRememberedHillMisses() {
+    global gFailedPlacementSpots, REF_W, REF_H
+    geometry := WindowGeometry()
+    if !geometry
+        return
+    skipped := 0
+    for record in ReadHillMisses() {
+        if record.bad < 2
+            continue
+        x := (record.x - (geometry.cx - geometry.x)) * REF_W / geometry.cw
+        y := (record.y - (geometry.cy - geometry.y)) * REF_H / geometry.ch
+        gFailedPlacementSpots.Push({x: Round(x), y: Round(y), terrain: "hill"})
+        skipped += 1
+    }
+    if skipped
+        Log("Skipping " skipped " Hill spot(s) that failed in two matches in a row on this map.")
+}

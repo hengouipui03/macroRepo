@@ -44,7 +44,7 @@ global testNow := 10000,gRunning := true,REF_W := 800,REF_H := 600
 global ACTION_HOLD_MS := 300,gPrepDeadline := 0,gNavigationTimedOut := false,navReached := true,endState := false
 global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUnitManagerFailure := "",gSlotPortraits := Map()
 global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
-global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true
+global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true,dimmed := 0
 global placeTries := 0,lagMs := 0,opened := [],flashLevel := Map(),warnings := 0
 global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,gPathReadGaveUp := false
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
@@ -79,22 +79,21 @@ try {
     Assert(a.complete && levels[1]=7 && clicks=1,"slow segment update allowed an overshoot (" clicks " clicks)")
     lagMs := 0
 
-    ; An unreadable bar defers only that unit, and backs off longer each time.
+    ; Strict priority: an unreadable top unit pauses 2 s and is read again; a
+    ; lower priority is never upgraded meanwhile.
     a := Unit(1,7),b := Unit(2,1),gPlacements := [a,b],levels[1] := 4,levels[2] := 0,unreadable := 1,clicks := 0
     ResetUpgradeSelection()
     Loop 3 {
         UpgradePriorityPass()
         testNow += 700
     }
-    Assert(!a.complete && a.upgradeRetryAt>testNow && clicks=0,"unreadable bar was clicked or not deferred")
-    UpgradePriorityPass()
-    Assert(levels[2]=1,"unreadable first unit blocked every other unit")
-    testNow := a.upgradeRetryAt
-    Loop 3 {
+    Assert(!a.complete && a.upgradeRetryAt>testNow && clicks=0,"unreadable bar was clicked or not paused")
+    Loop 5 {
         UpgradePriorityPass()
-        testNow += 100
+        testNow += 700
     }
-    Assert(a.deferCount=2 && a.upgradeRetryAt-testNow>15000,"second deferral did not back off for 20 seconds")
+    Assert(levels[2]=0 && clicks=0,"a lower priority was upgraded while the top unit was unfinished")
+    Assert(a.deferCount=2 && a.upgradeRetryAt-testNow<=2000,"stuck top unit backed off instead of re-reading itself")
     unreadable := 0
 
     ; Waiting for Yen keeps clicking at the same priority, then stops at target.
@@ -111,6 +110,22 @@ try {
         testNow += 2100
     }
     Assert(a.complete && levels[1]=7,"money wait did not resume and stop at target 7")
+
+    ; A dimmed Upg button (not enough Yen) waits on the same unit: no click and
+    ; no pause, even with an unreadable bar; a lit button resumes upgrading.
+    a := Unit(1,7),b := Unit(2,1),gPlacements := [a,b],levels[1] := 4,levels[2] := 0,dimmed := 1,unreadable := 1,clicks := 0
+    ResetUpgradeSelection()
+    Loop 6 {
+        UpgradePriorityPass()
+        testNow += 700
+    }
+    Assert(clicks=0 && !a.upgradeRetryAt && levels[2]=0,"dimmed Upg button was clicked, paused the unit, or let a lower priority upgrade")
+    dimmed := 0,unreadable := 0
+    Loop 3 {
+        UpgradePriorityPass()
+        testNow += 2100
+    }
+    Assert(clicks>=1 && levels[1]>4 && levels[2]=0,"lit Upg button did not resume the top unit")
 
     a := Unit(1,99),gPlacements := [a],levels[1] := 7,gUnitControls := [{target:{Value:7}}]
     ResetUpgradeSelection(),clicks := 0
@@ -230,7 +245,7 @@ try {
     Assert(a.upgradeRetryAt>testNow && !a.complete,"unfindable unit was not deferred")
     testNow += 1100
     UpgradePriorityPass()
-    Assert(levels[2]=1 && clicks=1,"failed lookup starved the next upgrade")
+    Assert(levels[2]=0 && clicks=0,"failed lookup let a lower priority upgrade first")
     blockedUnit := 0
 
     gPlacements := [],gPendingPlacement := 0,gPlacementAreaFailures := Map(),modelFails := 0
@@ -274,7 +289,7 @@ try {
     Assert(RelocatePlacementArea(a) && gMapModel.checkpointIndex=2 && gMapModel.target=1020 && moveCalls=1,"five failures did not reach checkpoint 2")
     Assert(!PlacementAnchorKnown(a) && CountSlotPlacements(a.slot)=1,"checkpoint movement lost earlier purchase counts")
     a.complete := false,a.upgradeRetryAt := 0,b.complete := false,b.upgradeRetryAt := 0
-    Assert(UpgradeQueue(true).Length=2,"manager upgrades still depended on old world coordinates")
+    Assert(UpgradeQueue().Length=2,"manager upgrades still depended on old world coordinates")
     Loop 5
         PlacementCopyFailures(a,true)
     Assert(RelocatePlacementArea(a) && gMapModel.checkpointIndex=3 && gMapModel.target=1030,"five failures did not reach checkpoint 3")
@@ -394,7 +409,7 @@ LocateManagedUnit(id) {
     if flashLevel.Has(id)
         filled := flashLevel[id],flashLevel.Delete(id)
     entry := {id:id,column:1,x:600,y:200,row:180,filled:filled,total:unreadable=id?-1:8,
-        maxed:maxed.Has(id) && maxed[id],ux:700,uy:190,sig:sigs.Has(id)?sigs[id]:""}
+        maxed:maxed.Has(id) && maxed[id],ux:700,uy:190,sig:sigs.Has(id)?sigs[id]:"",afford:dimmed=id?0:-1}
     return {state:Map(),entry:entry}
 }
 ClickTileUpgrade(entry) {
