@@ -693,15 +693,22 @@ CloseUnitPanel() {
     return ClickAwayFromUnitPanel()
 }
 
-; Cards: one click on the same empty spot (above the cards, left of the F
-; manager) drops any unit/upgrade panel. Sent every time, without detecting
-; the panel; the preview was already dropped so it cannot buy a unit.
-ClickOpenSpotForCards() {
-    global gUpgradeSelectedId,CLICK_AWAY_X,CLICK_AWAY_Y
+; Cards: the side unit panel draws OVER the left card (its "769K" damage was
+; read as card 1's text) and a click on empty world does not close it while
+; the cards are up. Its own red X does. The X sits where card 1 is, so it is
+; clicked only when the panel is detected.
+CloseUnitPanelForCards() {
+    global gUpgradeSelectedId,gUnitPanelClose
+    if !HasUnitPanel()
+        return true
     gUpgradeSelectedId := 0
-    if !PlacementClickRef(CLICK_AWAY_X,CLICK_AWAY_Y)
+    x := gUnitPanelClose?gUnitPanelClose.x:264,y := gUnitPanelClose?gUnitPanelClose.y:210
+    if !PlacementClickRef(x,y,false,0,true)
         return false
-    return ActionPause(250,false)
+    if WaitFor(() => !HasUnitPanel(),700,50)
+        return true
+    Log("Side unit panel still open over the left card after its X.")
+    return false
 }
 
 

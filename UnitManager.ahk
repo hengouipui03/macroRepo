@@ -72,7 +72,9 @@ PressUnitManagerKey(closing := false) {
     }
 }
 
-UnitManagerBlocked() {
+UnitManagerBlocked(fresh := false) {
+    if fresh
+        ReadEndScreen(true)
     return HasCardChoice() || IsEndGameBlocking()
 }
 
@@ -106,6 +108,11 @@ EnsureUnitManagerOpen() {
                 Log("Two F presses were never confirmed as an open unit manager; no F for 20 seconds.")
                 return false
             }
+            ; The end screen's XP panel covers the manager and reads as
+            ; "closed" (F then opened the manager over the defeat screen):
+            ; look again for the end screen and cards before any F.
+            if !ActionPause(300) || UnitManagerBlocked(true)
+                return false
             Log("Unit manager confirmed closed; press F once to open it.")
             if !PressUnitManagerKey()
                 return false
@@ -250,6 +257,9 @@ ResetUnitManagerBottom(state) {
         return false
     previous := ReadUnitManager(),stable := 0
     Loop 8 {
+        ; Cards or the end screen stop the scrolling at once.
+        if !gRunning || UnitManagerBlocked()
+            return false
         if !previous || previous["open"]!="1" || !previous.Has("last") || !ScrollUnitManager("Down",1)
             return false
         current := ReadUnitManager()
@@ -344,6 +354,8 @@ LocateManagedUnit(purchaseId) {
             return UnitManagerFail("blocked")
         if HasCardChoice()
             return UnitManagerFail("card")
+        if IsEndGameBlocking()
+            return UnitManagerFail("blocked")
         if entry := UnitManagerEntry(state,cell.column,last-cell.row*pitch+offset) {
             Log("Purchase #" purchaseId " in unit manager | row from bottom " (cell.row+1) " | " (cell.column?"right":"left") " | " (bottomCount=1?"odd":"even") " unit count")
             gManagerTile := {id:purchaseId,column:cell.column,row:entry.row}

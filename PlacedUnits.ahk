@@ -338,6 +338,9 @@ UpgradeOnceAction(item) {
     if poor && level<0 {
         item.upgradeUnreadCount := 0
         UpgradeWarning(item,"waiting for Yen (Upg button dimmed).")
+        ; The side unit panel (opened by the Upg click) is not used while
+        ; waiting; left open it covers the left card and the end screen.
+        CloseUnitPanel()
         return false
     }
     ; An unreadable bar cannot overshoot a MAX target, so it is clicked anyway.
@@ -398,8 +401,7 @@ UpgradeOnceAction(item) {
         item.complete := true
         SavePlacementRun()
         Log("#" item.id " target " item.target " reached" (maxed?" (MAX).":" at upgrade " level "."))
-        if gUpgradeSelectedId=item.id
-            CloseUnitPanel()
+        CloseUnitPanel()
         ResetUpgradeSelection()
         next := UpgradeQueue()
         if next.Length
@@ -412,6 +414,7 @@ UpgradeOnceAction(item) {
         return false
     if poor {
         UpgradeWarning(item,"waiting for Yen (Upg button dimmed).")
+        CloseUnitPanel()
         return false
     }
     if HasCardChoice() {

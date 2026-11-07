@@ -853,7 +853,7 @@ EnsureRouteAndSpawn() {
     if gMapModel.HasProp("crossings") && gMapModel.crossings.Length
         Log("Two paths on the minimap (" gMapModel.crossings.Length " meeting points): travel to their first crossing before placement; later checkpoints are the next meeting points toward the base.")
     else
-        Log((SandstormWeather()?"Sandstorm: route checkpoints at 37.5% (between 25% and 50%), 50%, and 75%":"Route divided at 25%, 50%, and 75%") "; travel to checkpoint 1 before placement.")
+        Log((SandstormWeather()?"Sandstorm: route checkpoints at 35%, 50%, and 75%":"Route divided at 25%, 50%, and 75%") "; travel to checkpoint 1 before placement.")
     return true
 }
 
@@ -1061,15 +1061,14 @@ ClearCardChoiceAction() {
         return false
     }
     ; A placement preview is dropped (Q) so a card click cannot buy a unit.
-    ; Then the user's rule for cards: close the F unit manager (F only after it
-    ; is confirmed open), then one click on an open spot to drop the unit /
-    ; upgrade panel, with no panel detection. Afterwards the manager is
-    ; reopened and the top-priority unit is reselected through it.
+    ; Then close the F unit manager (F only after it is confirmed open) and
+    ; the side unit panel (its own X; it covers the left card). Afterwards the
+    ; manager is reopened and the top-priority unit is reselected through it.
     if !CancelUnitPreview()
         return false
     if !CloseUnitManagerForCards()
         return false
-    ClickOpenSpotForCards()
+    CloseUnitPanelForCards()
     Log("Card choice is open; choosing before continuing.")
     deadline := A_TickCount+20000
     while gRunning && A_TickCount<deadline {
@@ -1123,7 +1122,7 @@ ConfirmLockedCardSelection(cards := 0) {
     ; (non-green) choice still takes over.
     if !cards {
         green := PixelGreenCards(RefPixels(120,175,690,445))
-        if green.Length=1 && green[1]!=choice.index && !CardHasGreenEffect(choice)
+        if green.Length=1 && green[1]!=choice.index && !CardHasGreenEffect(choice) && !CardBeatsBuffs(choice)
             cards := PixelInkCards(green)
     }
     if cards {
@@ -1169,11 +1168,13 @@ TryChooseCard() {
         return true
     }
     RefreshCardBoxes()
-    ; GREEN FIRST, above everything else: one card with green words is chosen
-    ; at once from its pixels, before OCR (votes can end within seconds).
+    ; GREEN FIRST: one card with green words is chosen at once from its
+    ; pixels, before OCR (votes can end within seconds). Not in the Medium
+    ; late game, where a Tier II Shield or Explosive Death beats buffs, so the
+    ; red cards must be read first.
     frame := RefPixels(120,175,690,445)
     green := PixelGreenCards(frame)
-    if green.Length=1 {
+    if green.Length=1 && !CardLateMedium() {
         cards := PixelInkCards(green)
         Log("Card " green[1] " is the only card with green words; choose it immediately.")
         gCardUnread := 0
@@ -1531,7 +1532,7 @@ RunMacro() {
             points := MapPlacementCheckpoints(gMapModel)
             if points.Length=3 && points[1]!=gMapModel.checkpoints[1] {
                 gMapModel.checkpoints := points,gMapModel.checkpointIndex := 0,gMapModel.target := points[1]
-                Log("Sandstorm: travel to the 37.5% waypoint before placement.")
+                Log("Sandstorm: travel to the 35% waypoint before placement.")
                 if !NavigateForPlacement()
                     return SitOutMatch("Navigation to the Sandstorm waypoint failed.")
             }
@@ -1567,6 +1568,7 @@ RunMacro() {
             continue
         }
         RefreshMatchModifiers()
+        RefreshMatchWave()
         if gUnitManagerPhase {
             MaintainUnitManager()
             UpgradePriorityPass()

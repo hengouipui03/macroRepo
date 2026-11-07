@@ -356,9 +356,9 @@ MapFarthestNode(nodes,start) {
 ; from the node nearest the player) and the points come back unordered.
 MapRouteQuarters(model,base := -1) {
     global MAP_GRID
-    ; Sandstorm: checkpoint 1 is a new point halfway between the 25% and 50%
-    ; marks (37.5%). It needs the base, so the share counts from the enemy end.
-    first := base>=0 && SandstormWeather()?.375:.25
+    ; Sandstorm: checkpoint 1 moves to 35% of the route (from 25%). It needs
+    ; the base, so the share counts from the enemy end.
+    first := base>=0 && SandstormWeather()?.35:.25
     if base<0 {
         seed := model.player?MapNearest(model.nodes,model.player.x,model.player.y):-1
         if seed<0

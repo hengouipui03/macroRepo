@@ -16,11 +16,11 @@ try {
     model := {nodes:nodes,baseMarker:{x:80,y:40}}
     points := MapPlacementCheckpoints(model)
     Assert(points.Length=3 && points[1]=40*96+20 && points[2]=40*96+40 && points[3]=40*96+60,"straight route was not quartered from entrance toward base")
-    ; Sandstorm: checkpoint 1 is the new point between the 25% and 50% marks.
+    ; Sandstorm: checkpoint 1 is at 35% of the route.
     gMatchWeather := "sandstorm"
     points := MapPlacementCheckpoints(model)
     gMatchWeather := "rainy"
-    Assert(points.Length=3 && points[1]=40*96+30 && points[2]=40*96+40 && points[3]=40*96+60,"sandstorm checkpoint 1 was not at 37.5%")
+    Assert(points.Length=3 && points[1]=40*96+28 && points[2]=40*96+40 && points[3]=40*96+60,"sandstorm checkpoint 1 was not at 35%")
     Assert(MapPlacementCheckpoints(model)[1]=40*96+20,"rain moved checkpoint 1 away from 25%")
     nodes := Map()
     Loop 41
@@ -61,7 +61,7 @@ try {
     Assert(points.Length=3 && points[1]=40*96+30 && points[2]>points[1] && points[3]>points[2] && points[3]<40*96+80,"a single crossing did not lead the checkpoints")
     model.crossings := []
     Assert(MapPlacementCheckpoints(model)[1]=40*96+20,"one-path maps changed")
-    FileAppend "PASS: normal 25% and Sandstorm 37.5% waypoints; straight and bent routes; hidden-base and crossing checkpoints.`n","*","UTF-8"
+    FileAppend "PASS: normal 25% and Sandstorm 35% waypoints; straight and bent routes; hidden-base and crossing checkpoints.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -207,6 +207,7 @@ WaitForUnitPanel(*) => panel
 CancelUnitPreview(*) => true
 HasCardChoice(*) => false
 IsEndGameBlocking(*) => false
+ReadEndScreen(*) => {stage:"none"}
 ResetUpgradeSelection(*) => 0
 CheckCardInterruption(*) => false
 SmoothMoveTo(*) => true

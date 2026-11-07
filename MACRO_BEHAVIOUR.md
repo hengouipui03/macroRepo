@@ -107,7 +107,8 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **MAX = grey Max button and every segment lit** (or unreadable bar). A grey button over unlit segments (a manager still opening; this ended #7 at 5 of 8 and skipped unit 2) is never clicked and is believed only if it stays for 4 s.
 - **Target reached or MAX:** mark complete, log the next unit. After the last target the manager is closed (§3).
 - **Live target edits** in the GUI apply to already-placed units at once (`RefreshRecordedUpgradeTarget`).
-- **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the manager once (only if it is confirmed open), then clicks the open spot (497,168) once to drop the unit/upgrade panel, with no panel detection, and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click (the remembered tile position is dropped whenever F is pressed or the list scrolls).
+- **Cards during upgrades:** the macro presses Q only if a placement preview is active, closes the manager once (only if it is confirmed open), closes the side unit panel with its X if it is showing, and chooses the card. Afterwards it reopens the manager and finds the top-priority unit's tile again before any click.
+- **Side unit panel:** an Upg click on a tile opens it. It is closed (click-away) while the unit waits for Yen and when a target is reached, so it does not sit over the left card or the end screen.
 
 ---
 
@@ -148,7 +149,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 `HasCardChoice()` looks at the centre card only: two tall bright outlines at x≈314/488 and a dark interior. Hue is ignored, and the right-side "Level info" panel can never count as a card. Cards are checked during every wait, cursor move and pause (`CheckCardInterruption` inside `WaitFor`).
 
 ### Handling (`ClearCardChoice` → `TryChooseCard` → `ConfirmLockedCardSelection`)
-1. Press Q only if a placement preview is active. During upgrades, close the F manager once (only if it is confirmed open). Then, in every phase, one click on the open spot (497,168) drops any unit/upgrade panel (`ClickOpenSpotForCards`); the panel is not detected first.
+1. Press Q only if a placement preview is active. During upgrades, close the F manager once (only if it is confirmed open). Then, if the side unit panel is detected, click **its own red X** (`CloseUnitPanelForCards`): the panel draws over the left card (its "769K" damage was read as card 1's text) and a click on empty world does not close it while the cards are up.
    After the card screen closes, the manager is reopened and the top-priority unit is reselected before any R.
 2. **Pixel green check first** (`PixelGreenCards`). Each card's title and first effect lines are scanned for bright green glyphs (G>170, G−R>80, G−B>60) versus bright red. If exactly one card is green, it is chosen **immediately, before OCR**, because votes can end within seconds. On the supplied screenshot this gives Range: 173 green pixels against 0 and 0 on the two red cards.
    Card positions come from `cardboxes` (MinimapVision.py), measured once per card screen: the left and middle dark panels give the card width and spacing, and the right card is placed one spacing further, so the Level Modifiers panel touching it is never read as part of it. If detection fails three times, the fixed 800x600 layout is used.
@@ -176,7 +177,10 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
      Between two shared cards, or two sole cards: smaller total, then smaller single increase, then the lower projected match resistance.
    - Magic team / Physical team checkboxes (Cards tab): if one is ticked, it overrides the shared-first rule and the card that adds less of the stat that team must avoid wins.
 4. **Secret portal/drop bonus:** with two ordinary debuffs available, the ordinary ones are preferred.
-5. **Never chosen:** positive (red) enemy Speed. An all-Speed offer is left unclicked (the vote timer picks at random anyway). Unclear red/unknown text is re-read up to 3 times (1.5 s apart) before the fallback: any green card first, then the easiest readable non-Speed debuff, then an unreadable non-Speed card.
+5. **Difficulty (Cards tab, saved in card_preferences.ini).** **Easy** = everything above, all match. **Medium** = Easy until **wave 30** (the "Wave N" label is read by OCR about every 15 s from the watch loop, `RefreshMatchWave`; a misread never lowers it). From wave 30 (`CardLateMedium`):
+   - A **Tier II Shield or Explosive Death** beats every buff (Tier II = at least twice the Tier I amount: Shield 3, Explosive Death 6, Health 50%, physical + magical 50 each, single resist 75; size = amount ÷ Tier I amount). The pixel green shortcut is skipped so the red cards are read first, and a later pixel check never swaps such a choice for a green card.
+   - Otherwise green cards first as before. Red against red (`DebuffBetterLate`): cards that stay **within their caps** first, and among them the **biggest** (same size: the Easy order); with every cap reached, a **shared physical + magical** card while both resistances are under 150, otherwise the **smallest** (the Easy rule). Regen only after every other red card; positive Speed never.
+6. **Never chosen:** positive (red) enemy Speed. An all-Speed offer is left unclicked (the vote timer picks at random anyway). Unclear red/unknown text is re-read up to 3 times (1.5 s apart) before the fallback: any green card first, then the easiest readable non-Speed debuff, then an unreadable non-Speed card.
 
 ### Reported screenshot
 "+ Enemy Health I" (red) / "+ Range I" (green) / "+ Resistant Enemies I" (red, +50 physical and +50 magic) → **Range** by the pixel check, with no OCR needed. If Range were absent: Health, then the shared resist card ahead of any sole resist card.
@@ -230,7 +234,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `ReadUnitManager` | Vision `unitmanager`: open, ready, rows, pitch, bottom-row count, entries (portrait and Upg click points, lit/total segments, Max, portrait colours). |
 | `FocusUnitManagerGame` | Focus Roblox before F or scrolling. |
 | `PressUnitManagerKey` | One F tap. Refused unless the phase is on. Records the press time. |
-| `UnitManagerBlocked` | True while a card or end screen is showing. |
+| `UnitManagerBlocked` | True while a card or end screen is showing. `fresh` re-reads the end screen first (used right before an opening F, because the end screen's XP panel covers the manager and reads as "closed"). Manager scrolling stops as soon as it is true. |
 | `EnsureUnitManagerOpen` | Return the open manager. Press F once only after 3 closed reads, 2.5 s cooldown, 20 s lock after 2 unconfirmed presses. |
 | `MaintainUnitManager` | Every 3 s in the watch loop, reopen the manager if the game closed it. |
 | `CloseUnitManagerForCards` | The only close: F during card choice only when two readings agree the manager is open (two presses at most). Cards are read only after two "closed" readings. |

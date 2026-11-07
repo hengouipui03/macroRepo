@@ -9,9 +9,13 @@ global gMatchWeather := ""
 ; value per type, regen a %. An unreadable amount assumes the worst case below.
 global CARD_HEALTH_CAP := 300,CARD_RESIST_CAP := 150,CARD_REGEN_CAP := 2
 global CARD_UNKNOWN_HEALTH := 200,CARD_UNKNOWN_RESIST := 100
+; Difficulty: "easy" = the rules above all match. "medium" switches to the
+; late-game Tier II rules from wave MEDIUM_LATE_WAVE (Learning.ahk).
+global gCardDifficulty := "easy",gDifficultyControl := 0,MEDIUM_LATE_WAVE := 30
+global gMatchWave := 0,gWaveReadAt := 0,gWavePending := 0
 
 BuildCardPreferencesTab(app) {
-    global CARD_PREFS_FILE,gResistancePreference,gMagicTeamControl,gPhysicalTeamControl
+    global CARD_PREFS_FILE,gResistancePreference,gMagicTeamControl,gPhysicalTeamControl,gCardDifficulty,gDifficultyControl
     try saved := IniRead(CARD_PREFS_FILE,"Cards","damage_preference","balanced")
     catch
         saved := "balanced"
@@ -23,6 +27,53 @@ BuildCardPreferencesTab(app) {
     gPhysicalTeamControl.OnEvent("Click",CardDamagePreferenceChanged.Bind("physical"))
     app.AddText("x28 y286 w410 h95","Leave both off for balanced resistance choices. Red cards are judged on the total after taking them: Health up to 300%, each resistance up to 150, regen up to 2%. Past those, the card that ends least over its cap. Unreadable red cards only beat Speed.")
     app.AddText("x28 y399 w410 h95","Hill only: highlighted Hill terrain is required. Hybrid: try Hill first, then normal ground. A Hill-only unit without space stays unplaced while the other units continue.")
+    try difficulty := IniRead(CARD_PREFS_FILE,"Cards","difficulty","easy")
+    catch
+        difficulty := "easy"
+    gCardDifficulty := difficulty="medium"?"medium":"easy"
+    app.AddText("x28 y498 w80","Difficulty:")
+    gDifficultyControl := app.AddDropDownList("x112 y494 w120 c20212D BackgroundFFFFFF Choose" (gCardDifficulty="medium"?2:1),["Easy","Medium"])
+    gDifficultyControl.OnEvent("Change",CardDifficultyChanged)
+    app.AddText("x28 y528 w410 h110","Medium, from wave 30: a Tier II Shield or Explosive Death beats every buff. Other red cards: the biggest one that stays within its cap. With every cap reached: shared physical + magical while both are under 150, else the smallest. Regen last, positive Speed never. Before wave 30 Medium plays like Easy.")
+}
+
+CardDifficultyChanged(*) {
+    global gDifficultyControl,gCardDifficulty,CARD_PREFS_FILE
+    gCardDifficulty := gDifficultyControl.Value=2?"medium":"easy"
+    IniWrite gCardDifficulty,CARD_PREFS_FILE,"Cards","difficulty"
+}
+
+; Medium only: the "Wave N" label at the top left, read about every 15 s from
+; the watch loop, never while a card is choosing. A misread never lowers the
+; wave; a jump of more than 15 must read the same twice.
+RefreshMatchWave() {
+    global gRunning,gCardDifficulty,gMatchWave,gWaveReadAt,gWavePending,MEDIUM_LATE_WAVE
+    if !gRunning || gCardDifficulty!="medium" || A_TickCount<gWaveReadAt || HasCardChoice()
+        return
+    gWaveReadAt := A_TickCount+15000
+    wave := ParseWaveNumber(ReadOcrRows(150,30,300,85))
+    if wave<=gMatchWave
+        return
+    if gMatchWave && wave-gMatchWave>15 && wave!=gWavePending {
+        gWavePending := wave
+        return
+    }
+    gWavePending := 0
+    if wave>=MEDIUM_LATE_WAVE && gMatchWave<MEDIUM_LATE_WAVE
+        Log("Wave " wave ": Medium late game from now on (Tier II card rules).")
+    gMatchWave := wave
+}
+
+ParseWaveNumber(rows) {
+    for row in rows
+        if RegExMatch(NormalizeWords(row.text),"\bwave\s*(\d{1,3})\b",&found)
+            return Integer(found[1])
+    return 0
+}
+
+CardLateMedium() {
+    global gCardDifficulty,gMatchWave,MEDIUM_LATE_WAVE
+    return gCardDifficulty="medium" && gMatchWave>=MEDIUM_LATE_WAVE
 }
 
 CardDamagePreferenceChanged(which,*) {
@@ -36,9 +87,9 @@ CardDamagePreferenceChanged(which,*) {
 }
 
 ResetMatchCardContext() {
-    global gMatchModifiers,gModifierReadAt,gMatchWeather
+    global gMatchModifiers,gModifierReadAt,gMatchWeather,gMatchWave,gWaveReadAt,gWavePending
     gMatchModifiers := {health:0,healthKnown:false,physical:0,magical:0,regen:0},gModifierReadAt := 0
-    gMatchWeather := ""
+    gMatchWeather := "",gMatchWave := 0,gWaveReadAt := 0,gWavePending := 0
 }
 
 ; Read weather and enemy totals from the same panel capture.
@@ -411,7 +462,7 @@ PixelInkCards(greenIndices) {
 }
 
 LogCardDecision(cards,best) {
-    global gResistancePreference,gMatchModifiers
+    global gResistancePreference,gMatchModifiers,gCardDifficulty,gMatchWave
     for index,card in cards {
         detail := "Card " index ": " card.effectInk " words / " card.stat
         if card.HasProp("amountKnown") && card.amountKnown
@@ -424,5 +475,6 @@ LogCardDecision(cards,best) {
             detail .= " | " DebuffOutlook(card).detail
         Log(detail)
     }
-    Log("Choose card " best " | team " gResistancePreference " | current health " MatchModifier("health") "% / physical " MatchModifier("physical") " / magical " MatchModifier("magical") " / regen " MatchModifier("regen") "%")
+    mode := gCardDifficulty="medium"?(" | medium, wave " (gMatchWave?gMatchWave:"?") (CardLateMedium()?" (late: Tier II rules)":"")):""
+    Log("Choose card " best " | team " gResistancePreference mode " | current health " MatchModifier("health") "% / physical " MatchModifier("physical") " / magical " MatchModifier("magical") " / regen " MatchModifier("regen") "%")
 }

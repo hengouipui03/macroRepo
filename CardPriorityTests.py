@@ -5,8 +5,13 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 logic = '\n'.join(function('Learning.ahk', name) for name in [
     'CardRank', 'CardHasGreenEffect', 'CardSelectionView', 'CardIsSpeed',
     'CardPreferenceScore', 'DebuffOutlook', 'DebuffBetter', 'CardBetter',
-    'ChooseBestCard', 'PreferVerifiedGreenChoice', 'FallbackCardChoice'])
+    'ChooseBestCard', 'PreferVerifiedGreenChoice', 'FallbackCardChoice',
+    'DebuffSize', 'CardBeatsBuffs', 'LateDebuffClass', 'LateSharedResistOpen',
+    'DebuffBetterLate', 'DebuffBetterEasy'])
 logic += '\n' + function('CardContext.ahk', 'MatchModifier')
+logic += '\n' + function('CardContext.ahk', 'CardLateMedium')
+logic += '\n' + function('CardContext.ahk', 'ParseWaveNumber')
+logic += '\n' + function('Learning.ahk', 'NormalizeWords')
 logic += '\n' + function('CardContext.ahk', 'PixelInkCards')
 logic += '\n' + '\n'.join(function('AAPathMacro.ahk', name) for name in [
     'ConfirmLockedCardSelection', 'ResetCardSelection'])
@@ -17,6 +22,7 @@ fixture = r'''
 global gRunning := true,gCardSelection := 0,gCardRetryAt := 0,gCardUnread := 0
 global gMatchModifiers := {healthKnown:false},freshCards := [],clicked := [],ocrReads := 0
 global CARD_HEALTH_CAP := 300,CARD_RESIST_CAP := 150,CARD_REGEN_CAP := 2,CARD_UNKNOWN_HEALTH := 200,CARD_UNKNOWN_RESIST := 100
+global gCardDifficulty := "easy",gMatchWave := 0,MEDIUM_LATE_WAVE := 30
 try {
     unknown := Card("unknown","buff"),speed := Card("speed","buff")
     yen := Card("yen","buff"),boss := Card("boss damage","buff")
@@ -70,7 +76,33 @@ try {
     ConfirmLockedCardSelection()
     Assert(clicked[clicked.Length]=1,"ordinary green lock changed unnecessarily")
     Assert(ocrReads=0,"a re-click ran OCR")
-    FileAppend "PASS: Double Attack > tier > Attack/Cooldown/Range > Random Blessings > other green > Yen > Boss; three unreadable same-colour cards take the middle; green/unknown/Speed before Yen and Boss in every position; green over red; re-clicks use pixels only (green over a locked red), no OCR; harmful Speed blocked.`n","*","UTF-8"
+
+    ; Medium difficulty (wave 30+).
+    Assert(ParseWaveNumber([{text:"+447"},{text:"Wave 49"}])=49 && !ParseWaveNumber([{text:"Stone Golem"}]),"Wave label misread")
+    shield10 := Red("shield",10),shield3 := Red("shield",3),boom12 := Red("explosive death",12)
+    health50 := Red("health",50),health200 := Red("health",200),health80 := Red("health",80)
+    shared100 := Resist(100,100),phys300 := Resist(300,0),regen := Red("0.5 regen",0.5)
+    gMatchModifiers := {health:50,healthKnown:true,physical:0,magical:0,regen:0}
+    Assert(ChooseBestCard([attack,shield10])=1,"Easy: a Tier II Shield beat a buff")
+    gCardDifficulty := "medium",gMatchWave := 29
+    Assert(ChooseBestCard([attack,shield10])=1 && ChooseBestCard([health50,health200])=1,"Medium before wave 30 did not play like Easy")
+    gMatchWave := 30
+    Assert(ChooseBestCard([attack,shield10])=2 && ChooseBestCard([Tier("double attack",1),boom12])=2,"Tier II Shield / Explosive Death did not beat buffs")
+    Assert(ChooseBestCard([attack,shield3])=1,"a Tier I Shield beat a buff")
+    Assert(ChooseBestCard([Red("shield",6),shield10,attack])=2,"of two Tier II cards the bigger did not win")
+    Assert(ChooseBestCard([health50,health200,health80])=2,"within the cap the biggest card did not win")
+    Assert(ChooseBestCard([shield3,health200])=2,"Tier II Health within its cap lost to a Tier I Shield")
+    gMatchModifiers.health := 150
+    Assert(ChooseBestCard([health200,health50])=2,"a card past its cap beat one within it")
+    gMatchModifiers := {health:300,healthKnown:true,physical:100,magical:100,regen:0}
+    Assert(ChooseBestCard([health200,phys300,shared100])=3,"caps reached: shared resist was not taken while both resists are under 150")
+    Assert(ChooseBestCard([regen,health200,health80])=3,"caps reached: regen or the bigger card was taken over the smallest")
+    gMatchModifiers.physical := 150,gMatchModifiers.magical := 150
+    Assert(ChooseBestCard([shared100,health80])=2,"resists capped: the smallest card was not taken")
+    Assert(ChooseBestCard([regen,redSpeed])=1 && !ChooseBestCard([redSpeed,redSpeed]),"regen was not the last resort, or Speed was taken")
+    Assert(ChooseBestCard([attack,health200])=1,"Medium: a buff lost to a non-Shield red card")
+    gCardDifficulty := "easy",gMatchWave := 0,gMatchModifiers := {healthKnown:false}
+    FileAppend "PASS: Double Attack > tier > Attack/Cooldown/Range > Random Blessings > other green > Yen > Boss; three unreadable same-colour cards take the middle; green/unknown/Speed before Yen and Boss in every position; green over red; re-clicks use pixels only (green over a locked red), no OCR; harmful Speed blocked; Medium wave 30+: Tier II Shield/Explosive Death over buffs, biggest within cap, capped -> shared resist then smallest, regen last.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -78,12 +110,19 @@ try {
 }
 Card(stat,ink) => {kind:ink,stat:stat,effectInk:ink,amount:20,tier:1,rank:CardRank(ink,stat)}
 Tier(stat,tier) => {kind:"buff",stat:stat,effectInk:"buff",amount:20,tier:tier,rank:CardRank("buff",stat)}
+Red(stat,amount) => {kind:"debuff",stat:stat,effectInk:"debuff",amount:amount,amountKnown:true,tier:1,rank:CardRank("debuff",stat)}
+Resist(physical,magical) {
+    stat := physical&&magical?"physical and magical resist":physical?"physical resist":"magical resist"
+    card := Red(stat,Max(physical,magical))
+    card.resistance := {physical:physical,magical:magical,physicalRead:true,magicalRead:true}
+    return card
+}
 Assert(value,message) {
     if !value
         throw Error(message)
 }
-CardIsResistance(*) => false
-CardIsRegen(*) => false
+CardIsResistance(card) => card.stat="physical resist" || card.stat="magical resist" || card.stat="physical and magical resist"
+CardIsRegen(card) => card.stat="regen" || card.stat="0.5 regen"
 ResistancePreferred(*) => false
 WindowGeometry(*) => true
 ReadOcrRows(*) => []

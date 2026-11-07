@@ -766,9 +766,66 @@ DebuffOutlook(card) {
     return {group:8,ratio:0,detail:"other red effect"}
 }
 
+; Medium difficulty. Tier I amounts seen in game; a Tier II card is the same
+; card with at least twice the number (Shield 10, Explosive Death 12, Health
+; 200, physical + magical 100 each). Size = amount / Tier I amount.
+DebuffSize(card) {
+    static tierOne := Map("shield",3,"explosive death",6,"health",50,"physical and magical resist",50,"physical resist",75,"magical resist",75)
+    if !tierOne.Has(card.stat) || !(card.HasProp("amountKnown") && card.amountKnown) || card.amount<=0
+        return 0
+    return card.amount/tierOne[card.stat]
+}
+
+; Medium late game: a Tier II Shield or Explosive Death beats every buff.
+CardBeatsBuffs(card) {
+    return CardLateMedium() && !CardIsSpeed(card) && CardSelectionView(card).kind="debuff"
+        && (card.stat="shield" || card.stat="explosive death") && DebuffSize(card)>=2
+}
+
+; Medium late game, red against red: 1 within its cap (Shield and Explosive
+; Death have none), 2 past its cap, 3 regen, 4 anything else.
+LateDebuffClass(outlook) {
+    if outlook.group<=4
+        return 1
+    if outlook.group=6
+        return 2
+    return outlook.group=5 || outlook.group=7?3:4
+}
+
+; Shared physical + magical while neither resistance has reached its cap.
+LateSharedResistOpen(card) {
+    global CARD_RESIST_CAP
+    return card.stat="physical and magical resist" && MatchModifier("physical")<CARD_RESIST_CAP && MatchModifier("magical")<CARD_RESIST_CAP
+}
+
+; Within the caps the BIGGEST card wins (same size: the Easy order). With
+; every cap reached: shared physical + magical while both are under the cap,
+; otherwise the smallest (the Easy rule: least past its cap). Regen last.
+DebuffBetterLate(a,b) {
+    oa := DebuffOutlook(a),ob := DebuffOutlook(b)
+    ca := LateDebuffClass(oa),cb := LateDebuffClass(ob)
+    if ca!=cb
+        return ca<cb
+    if ca=1 {
+        sa := DebuffSize(a),sb := DebuffSize(b)
+        if sa!=sb
+            return sa>sb
+    } else if ca=2 {
+        sa := LateSharedResistOpen(a),sb := LateSharedResistOpen(b)
+        if sa!=sb
+            return sa
+    }
+    return DebuffBetterEasy(a,b,oa,ob)
+}
+
 ; True when red card a is an easier pick than red card b.
 DebuffBetter(a,b) {
-    oa := DebuffOutlook(a),ob := DebuffOutlook(b)
+    if CardLateMedium()
+        return DebuffBetterLate(a,b)
+    return DebuffBetterEasy(a,b,DebuffOutlook(a),DebuffOutlook(b))
+}
+
+DebuffBetterEasy(a,b,oa,ob) {
     if oa.group!=ob.group
         return oa.group<ob.group
     ; Two resistance cards keep the shared-first rule and team preference.
@@ -796,6 +853,14 @@ ChooseBestCard(cards) {
         if CardHasGreenEffect(card)
             observedGreen.Push(index)
     }
+    ; Medium, wave 30+: a Tier II Shield or Explosive Death beats every buff;
+    ; of two, the bigger.
+    pick := 0
+    for index,card in views
+        if CardBeatsBuffs(card) && (!pick || DebuffSize(card)>DebuffSize(views[pick]))
+            pick := index
+    if pick
+        return pick
     ; Exactly one verified green effect means there is nothing to compare.
     if observedGreen.Length=1
         return observedGreen[1]
