@@ -126,6 +126,13 @@ def masks(image):
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
     route = (h >= 38) & (h <= 66) & (s >= 150) & (v >= 70)
+    # The translucent minimap can show dim green scenery underneath it.
+    # Keep dim route pixels only when their component also contains the
+    # brighter line, so scenery cannot become a new walkable branch.
+    count, labels = cv2.connectedComponents(route.astype(np.uint8), connectivity=8)
+    lit = np.bincount(labels[route & (v >= 120)], minlength=count) > 0
+    lit[0] = False
+    route = lit[labels]
     white = image.min(axis=2) >= 200
     # Any vivid non-route colour is an icon drawn over the line: red skulls,
     # the purple boss and similar enemy markers.

@@ -230,6 +230,8 @@ ResetUnitManagerBottom(state) {
             return false
         ; Portrait animations do not indicate that the list itself moved.
         if Abs(Number(current["last"])-Number(previous["last"]))<2
+            && current.Has("lastcount") && previous.Has("lastcount")
+            && current["lastcount"]=previous["lastcount"]
             stable += 1
         else
             stable := 0
@@ -297,17 +299,19 @@ LocateManagedUnit(purchaseId) {
     }
     if !(state := ResetUnitManagerBottom(state))
         return UnitManagerFail(HasCardChoice()?"card":"scroll")
-    ; Odd or even comes from the recorded build, not from one screen read.
-    ; The bottom row must agree before any tile is used: if it does not, the
-    ; list is not really at its bottom (or #1's tile was missed), so retry.
-    bottomCount := Mod(gPlacements.Length,2)?1:2
-    seen := state.Has("lastcount")?Integer(state["lastcount"]):0
-    if seen!=bottomCount {
-        Log("Unit manager bottom row shows " seen " tile(s) but " gPlacements.Length " units are recorded; no tile used.")
+    ; The stable, fully scrolled bottom row establishes the visible layout.
+    ; Recorded-count parity can disagree with the game and must not prevent
+    ; every upgrade. Portrait identity is checked before upgrading the tile.
+    bottomCount := state.Has("lastcount")?Integer(state["lastcount"]):0,last := Number(state["last"])
+    if (bottomCount!=1 && bottomCount!=2) || !UnitManagerEntry(state,0,last)
+        || (bottomCount=2 && !UnitManagerEntry(state,1,last)) {
+        Log("Unit manager bottom row is incomplete; no tile used.")
         return UnitManagerFail("scroll")
     }
+    if bottomCount!=(Mod(gPlacements.Length,2)?1:2)
+        Log("Unit manager bottom row has " bottomCount " tiles for " gPlacements.Length " recorded units; using the observed layout.")
     cell := ManagedUnitCell(purchaseId,bottomCount)
-    pitch := Number(state["pitch"]),last := Number(state["last"]),offset := 0
+    pitch := Number(state["pitch"]),offset := 0
     limit := Ceil(gPlacements.Length/2)*8+10
     Loop limit {
         if !gRunning

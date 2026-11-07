@@ -541,9 +541,12 @@ ArchiveMapModel(model) {
         if name=""
             continue
         saved := MemoryRead("minimap." name,"visible_shape")
-        overlap := BitOverlap(model.raw,saved)
-        if overlap<=bestMatch && model.explained
-            overlap := OccludedShapeMatch(model.raw,model.explained,saved)
+        ; A saved branch must still be visible or hidden by an icon. Raw
+        ; overlap alone could keep a drawing learned from green scenery.
+        covered := model.explained?OccludedShapeMatch(model.raw,model.explained,saved):0
+        if model.explained && !covered
+            continue
+        overlap := Max(BitOverlap(model.raw,saved),covered)
         if overlap>bestMatch
             best := name,bestMatch := overlap
     }

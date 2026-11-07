@@ -107,6 +107,19 @@ RunMapTests() {
         ArchiveMapModel(rotated)
         CheckMap(rotated.id!=savedId,"a different route layout reused the wrong map variant")
         count += 1
+        clean := Map()
+        Loop 60
+            clean[40*MAP_GRID+10+A_Index] := true
+        polluted := clean.Clone()
+        Loop 12
+            polluted[(40+A_Index)*MAP_GRID+20] := true
+        saved := {raw:MapBits(polluted),nodes:polluted,baseMarker:false,crossings:[],explained:0}
+        ArchiveMapModel(saved)
+        fresh := {raw:MapBits(clean),nodes:clean,baseMarker:false,crossings:[],explained:clean}
+        CheckMap(BitOverlap(saved.raw,fresh.raw)>0.78,"test branch must be small enough to pass raw overlap")
+        ArchiveMapModel(fresh)
+        CheckMap(fresh.id!=saved.id && fresh.nodes.Count=clean.Count,"vision reused a saved branch absent from the current minimap")
+        count += 1
     } finally {
         LEARNING_FILE := originalFile
         try FileDelete testFile

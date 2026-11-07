@@ -74,6 +74,13 @@ check((clean & covered).sum() >= 0.95 * clean.sum(), "occlusion map leaves route
 frame_only = mv.masks(fixture)[0] & mv.frame_mask(fixture)
 check(frame_only.sum() == 0, "frame colour overlaps route colour")
 
+# Puppet Island's translucent minimap showed green scenery below the spawn.
+# Preserve the bright road across the top while dropping the off-road branch.
+puppet = mv.read_image(os.path.join(HERE, "puppet-island-minimap.png"))
+puppet_route = mv.masks(puppet)[0]
+check(not puppet_route[98:128, 5:50].any(), "green scenery became a route branch")
+check(puppet_route[69:88, 30:76].sum() > 100, "the real Puppet Island route was lost")
+
 # Movement: arrow moved from the screenshot position to the fixture position
 # while enemies moved too. Only the white chevron may be reported.
 vision = vision_for(shot)
