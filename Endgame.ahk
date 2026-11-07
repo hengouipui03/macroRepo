@@ -1,11 +1,11 @@
 ﻿; Result modal -> Next -> Replay -> wait for a fresh Vote Start.
-global gEndHandling := false,gAwaitingReplayMap := false,gEndResult := ""
+global gEndHandling := false,gAwaitingReplayMap := false,gAwaitingLobby := false,gEndResult := ""
 global gEndNextClickAt := 0,gEndScreenAt := 0,gEndScreenCache := 0
 global gEndRewardsDone := false,gEndRewardSweepAt := 0
 
 ResetEndGameFlow() {
-    global gEndHandling,gAwaitingReplayMap,gEndResult,gEndNextClickAt,gEndScreenAt,gEndScreenCache,gEndRewardsDone,gEndRewardSweepAt
-    gEndHandling := false,gAwaitingReplayMap := false,gEndResult := ""
+    global gEndHandling,gAwaitingReplayMap,gAwaitingLobby,gEndResult,gEndNextClickAt,gEndScreenAt,gEndScreenCache,gEndRewardsDone,gEndRewardSweepAt
+    gEndHandling := false,gAwaitingReplayMap := false,gAwaitingLobby := false,gEndResult := ""
     gEndNextClickAt := 0,gEndScreenAt := 0,gEndScreenCache := 0
     gEndRewardsDone := false,gEndRewardSweepAt := 0
 }
@@ -58,7 +58,7 @@ ParseEndScreenRows(rows,geometry) {
     if next
         return {stage:"next",result:outcome,x:next.x,y:next.y}
     if replay && lobby && lobby.x<replay.x && Abs(lobby.y-replay.y)<25
-        return {stage:"replay",result:"",x:replay.x,y:replay.y}
+        return {stage:"replay",result:"",x:replay.x,y:replay.y,lobby:lobby}
     return EndEmptyScreen()
 }
 
@@ -84,8 +84,8 @@ ReadEndScreen(force := false) {
 }
 
 IsEndGameBlocking() {
-    global gEndHandling,gAwaitingReplayMap
-    return gEndHandling || gAwaitingReplayMap || ReadEndScreen().stage!="none"
+    global gEndHandling,gAwaitingReplayMap,gAwaitingLobby
+    return gEndHandling || gAwaitingReplayMap || gAwaitingLobby || ReadEndScreen().stage!="none"
 }
 
 HasDefeatNext() => ReadEndScreen().stage="next"
@@ -123,8 +123,8 @@ ReadEndOutcome() {
 }
 
 EndRewardClickAllowed() {
-    global gRunning,gEndHandling,gAwaitingReplayMap
-    return gRunning && gEndHandling && !gAwaitingReplayMap && !HasVoteStart()
+    global gRunning,gEndHandling,gAwaitingReplayMap,gAwaitingLobby
+    return gRunning && gEndHandling && !gAwaitingReplayMap && !gAwaitingLobby && !HasVoteStart()
 }
 
 DismissEndRewards() {
@@ -159,7 +159,8 @@ DismissEndRewards() {
 
 TryEndState() {
     global gRunning,gEndHandling,gAwaitingReplayMap,gEndResult,gEndNextClickAt,gEndRewardsDone,gEndRewardSweepAt,gMatchReported
-    if gAwaitingReplayMap
+    global gAwaitingLobby,gQueueMode
+    if gAwaitingReplayMap || gAwaitingLobby
         return true
     screen := ReadEndScreen()
     if !gEndHandling && screen.stage="none"
@@ -183,7 +184,7 @@ TryEndState() {
             }
             if A_TickCount>=gEndNextClickAt {
                 if ClickEndGameButton(screen) {
-                    Log("Endgame: clicked visible Next; waiting for Replay.")
+                    Log("Endgame: clicked visible Next; waiting for the match exit buttons.")
                     gEndNextClickAt := A_TickCount+2000
                     if !DismissEndRewards()
                         return false
@@ -202,9 +203,10 @@ TryEndState() {
                 Log("Result: " StrUpper(outcome) " (reported at Replay).")
                 ReportMatchResult(outcome="victory")
             }
-            if ClickEndGameButton(screen) {
-                gAwaitingReplayMap := true
-                Log("Endgame: Replay selected once. Waiting for the next Vote Start; no lobby clicks.")
+            exitButton := gQueueMode?{stage:screen.stage,x:screen.lobby.x,y:screen.lobby.y}:screen
+            if ClickEndGameButton(exitButton) {
+                gAwaitingLobby := gQueueMode,gAwaitingReplayMap := !gQueueMode
+                Log(gQueueMode?"Endgame: Return to lobby selected. Waiting for lobby Play.":"Endgame: Replay selected. Waiting for the next Vote Start.")
                 return true
             }
         } else if gEndRewardsDone && A_TickCount-gEndRewardSweepAt>=5000 {

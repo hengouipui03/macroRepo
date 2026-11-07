@@ -52,6 +52,7 @@ global gActivityLog := 0
 #Include PlacedUnits.ahk
 #Include Learning.ahk
 #Include CardContext.ahk
+#Include QueueMatch.ahk
 #Include LearningTests.ahk
 #Include MapNavigation.ahk
 #Include MapTests.ahk
@@ -114,6 +115,7 @@ F10::LearnHoveredButton()
 
 BuildGui() {
     global gMacroHwnd, gMacroGui, gUnitControls, gStatus, gActivityLog, gUnitSettingsReady
+    global gMatchMode,UNIT_SETTINGS_FILE
     gUnitSettingsReady := false
     app := Gui(, "AA Path Macro")
     gMacroGui := app
@@ -127,7 +129,11 @@ BuildGui() {
     app.AddButton("x124 y52 w100", "Attach Roblox").OnEvent("Click", AttachRoblox)
     app.AddButton("x230 y52 w100", "Start (F6)").OnEvent("Click", StartMacro)
     app.AddButton("x336 y52 w100", "Stop (F7)").OnEvent("Click", StopMacro)
-    app.AddText("x12 y84 w430", WINDOW_W " × " WINDOW_H " • minimap + lit path • automatic overhead camera")
+    app.AddText("x12 y84 w46", "Mode")
+    mode := IniRead(UNIT_SETTINGS_FILE,"Macro","mode","Solo")
+    gMatchMode := app.AddDropDownList("x61 y81 w96 Choose" (mode="Queue"?2:1),["Solo","Queue"])
+    gMatchMode.OnEvent("Change",SaveMatchMode)
+    app.AddText("x170 y84 w265", WINDOW_W " × " WINDOW_H " • automatic overhead camera")
 
     tabs := app.AddTab3("x12 y106 w452 h548", ["Control", "Activity", "Learning", "Cards", "Discord"])
     tabs.UseTab(1)
@@ -734,28 +740,31 @@ NavigateAlongRoute() {
 ; -----------------------------------------------------------------------------
 
 CameraReset(*) {
-    global CAMERA_TILT_PIXELS,gRunning,gInputEpoch,gCameraOverheadReady
+    global CAMERA_TILT_PIXELS,gRunning,gInputEpoch,gCameraOverheadReady,gQueueMode
     gCameraOverheadReady := false
     if !GetClient(&cx,&cy,&cw,&ch)
         return false
     WinActivate "ahk_id " FindRoblox()
     epoch := gInputEpoch
-    if !SmoothMoveTo(cx+cw//2,cy+ch//2)
+    fast := gRunning && gQueueMode
+    travelMs := fast?125:0
+    if !SmoothMoveTo(cx+cw//2,cy+ch//2,0,travelMs)
         return false
     ; Keep the full calibrated holds when time permits. A short remaining
     ; countdown uses a shorter pair and records that camera profile separately.
-    holdMs := gRunning ? Min(5000,Max(1200,Round((PrepTimeLeft()-7000)/2))) : 5000
+    maxHold := fast?2500:5000
+    holdMs := gRunning ? Min(maxHold,Max(1200,Round((PrepTimeLeft()-7000)/2))) : 5000
     Log("Overhead camera: hold I " holdMs "ms, tilt down, settle, hold O " holdMs "ms.")
     if !HoldCameraKey("i",holdMs,epoch)
         return false
     tilt := Min(CAMERA_TILT_PIXELS,Round(ch*0.38))
-    if !SmoothMoveTo(cx+cw//2,cy+ch//2+tilt)
+    if !SmoothMoveTo(cx+cw//2,cy+ch//2+tilt,0,travelMs)
         return false
-    if !InputPause(250,epoch)
+    if !InputPause(fast?125:250,epoch)
         return false
     if !HoldCameraKey("o",holdMs,epoch)
         return false
-    gCameraOverheadReady := "overhead-" holdMs
+    gCameraOverheadReady := (fast?"queue-overhead-":"overhead-") holdMs
     return true
 }
 
@@ -1231,17 +1240,22 @@ HasValue(list,value) {
 }
 
 TryStartFromLobby() {
-    global gRunning
+    global gRunning,gQueueMode
     Loop 2 {
         retry := A_Index > 1
-        if !ClickButton("LobbyPlay",-1,0,retry)
+        if !ClickButton("LobbyPlay",-1,0,retry) {
+            if gRunning && gQueueMode
+                Notify("Lobby Play could not be clicked. Teach LobbyPlay in Learning with F10.")
             return false
-        Log("Play clicked. Hold W until Play Here appears, then release W.")
+        }
+        Log("Play clicked. Hold W until the matchmaking panel appears, then release W.")
         Send "{w down}"
         try found := WaitFor(HasMatchmakingPanel,7000,150)
         finally Send "{w up}"
         if found {
             ConfirmObservedTransition("LobbyPlay")
+            if gQueueMode
+                return StartQueueMatch()
             if !ClickButton("PlayHere",-1,HasOpenPortal)
                 return false
             if !ClickButton("PortalOpen")
@@ -1255,6 +1269,8 @@ TryStartFromLobby() {
         if !gRunning
             return false
     }
+    if gRunning && gQueueMode
+        Notify("The matchmaking panel did not appear after walking from Play.")
     return false
 }
 
@@ -1473,11 +1489,20 @@ NavigateForPlacement() {
 
 RunMacro() {
     global gRunning, gPlacements, gMatchReported,gAwaitingReplayMap,gEndHandling
-    global gMatchWeather,gMapModel,gUnitManagerPhase
+    global gMatchWeather,gMapModel,gUnitManagerPhase,gQueueMode,gAwaitingLobby
     SaveUnitSettings()
     ResetIdleKeepAlive()
     EndUnitManagerPhase()
     plan := ReadUnitPlan()
+    if gAwaitingLobby {
+        Notify("Waiting for lobby Play before queuing again.")
+        if !WaitFor(HasLobbyPlay,180000,300) {
+            if gRunning
+                Notify("Lobby Play did not appear after returning from the match.")
+            return
+        }
+        ResetEndGameFlow()
+    }
     if gAwaitingReplayMap {
         if !WaitForReplayVoteStart() {
             outcome := RecoverVoteStart()
@@ -1496,12 +1521,22 @@ RunMacro() {
                 return
             }
             if !TryStartFromLobby() {
-                Notify("Could not find the lobby Play flow. Teach LobbyPlay with F10 if OCR cannot read it.")
+                if gRunning && !gQueueMode
+                    Notify("Could not find the lobby Play flow. Teach LobbyPlay with F10 if OCR cannot read it.")
                 return
             }
         }
         Notify("Waiting for Vote Start before any map preparation.")
-        if !WaitForVoteStart(45000) {
+        if gQueueMode {
+            ; The lobby stays visible while searching. Never start another queue
+            ; just because matchmaking takes longer than Solo's load timeout.
+            while gRunning && !WaitForVoteStart(30000) {
+                if !ActionPause(250,false)
+                    return
+            }
+            if !gRunning
+                return
+        } else if !WaitForVoteStart(45000) {
             outcome := RecoverVoteStart()
             if outcome!="vote"
                 return outcome
@@ -1560,7 +1595,7 @@ RunMacro() {
             continue
         }
         if TryEndState() {
-            Notify("Replay selected. Waiting for the next match.")
+            Notify(gAwaitingLobby?"Returning to lobby for the next queue.":"Replay selected. Waiting for the next match.")
             return "replay"
         }
         if gEndHandling {
@@ -1593,6 +1628,7 @@ RunMacro() {
 
 StartMacro(*) {
     global gRunning, WINDOW_W, WINDOW_H,gUnitPreviewActive
+    global gMatchMode,gQueueMode
     if gRunning
         return
     if !GetClient(&cx, &cy, &cw, &ch) {
@@ -1609,10 +1645,11 @@ StartMacro(*) {
         Notify("Bring Roblox to the foreground before starting.")
         return
     }
+    gQueueMode := gMatchMode.Text="Queue"
     gRunning := true
     gUnitPreviewActive := true
     BeginSessionLog()
-    Notify("Running. F7 stops immediately.")
+    Notify("Running in " (gQueueMode?"Queue":"Solo") " mode. F7 stops immediately.")
     SetTimer CheckDisconnect, 3000
     SetTimer RunMacroSafely, -10
 }

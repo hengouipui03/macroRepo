@@ -15,7 +15,7 @@ global gCardHandling := false,gCardAction := "",gCardPollAt := 0,gCardInterruptE
 BuildLearningTab(app) {
     global gLearnButton, gTeachCard, gTeachKind, gTeachStat
     app.AddText("x28 y143 w410", "Static buttons: select a name, hover it in Roblox, press F10.")
-    gLearnButton := app.AddDropDownList("x28 y174 w220 Choose1 c20212D BackgroundFFFFFF", ["LobbyPlay", "PlayHere", "PortalOpen", "PortalStart", "PathToggle", "SettingsGear", "TeleportSpawn", "SettingsClose", "VoteYes", "DefeatNext", "Replay", "UnitPanelClose"])
+    gLearnButton := app.AddDropDownList("x28 y174 w220 Choose1 c20212D BackgroundFFFFFF", ["LobbyPlay", "PlayHere", "FindMatch", "PortalOpen", "PortalStart", "PathToggle", "SettingsGear", "TeleportSpawn", "SettingsClose", "VoteYes", "DefeatNext", "Replay", "UnitPanelClose"])
     app.AddText("x28 y211 w405 h58", "F10 saves pixels relative to the Roblox application window, including its title bar. Moving Roblox does not change the saved point. Different window sizes have separate records.")
     app.AddText("x28 y285 w405", "Teach an unreadable card once while its choice is visible:")
     gTeachCard := app.AddDropDownList("x28 y315 w92 Choose1 c20212D BackgroundFFFFFF", ["Card 1", "Card 2", "Card 3"])
@@ -110,6 +110,7 @@ ButtonLabels(name) {
     switch name {
         case "LobbyPlay": return ["play"]
         case "PlayHere": return ["play here"]
+        case "FindMatch": return ["find match"]
         case "PortalOpen": return ["open"]
         case "PortalStart": return ["start"]
         case "TeleportSpawn": return ["teleport back to spawn", "back to spawn", "return to spawn"]
@@ -124,6 +125,7 @@ ButtonLabels(name) {
 ButtonRegion(name) {
     switch name {
         case "LobbyPlay": return [0, 130, 220, 465]
+        case "FindMatch": return [395, 260, 535, 395]
         case "PathToggle": return [590, 0, 795, 55]
         case "VoteYes": return [280, 60, 500, 145]
         case "Replay": return [270, 65, 650, 165]
