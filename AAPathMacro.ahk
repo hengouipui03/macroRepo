@@ -914,6 +914,25 @@ HasLobbyPlay() {
     return CountRef(65,235,115,315,4,IsLobbyCyan) > 10
 }
 
+ReadVisibleLobbyPlay() {
+    global REF_W,REF_H,gRunning
+    if !gRunning || !HasLobbyPlay() || !(geometry := WindowGeometry())
+        return false
+    for row in ReadOcrRows(ButtonRegion("LobbyPlay")*) {
+        if NormalizeWords(row.text)!="play"
+            continue
+        x := (row.x+row.w/2)*REF_W/geometry.cw
+        y := (row.y+row.h/2)*REF_H/geometry.ch
+        if LobbyPlayAt(x,y)
+            return {x:x,y:y}
+    }
+    return false
+}
+
+LobbyPlayAt(x,y) {
+    return CountRef(Max(0,x-20),Max(0,y-34),x+20,y+8,4,IsLobbyCyan)>8
+}
+
 IsLobbyCyan(color) {
     RGB(color,&r,&g,&b)
     return r < 110 && g > 155 && b > 175
@@ -1241,37 +1260,36 @@ HasValue(list,value) {
 
 TryStartFromLobby() {
     global gRunning,gQueueMode
+    play := 0
     Loop 2 {
-        retry := A_Index > 1
-        if !ClickButton("LobbyPlay",-1,0,retry) {
-            if gRunning && gQueueMode
-                Notify("Lobby Play could not be clicked. Teach LobbyPlay in Learning with F10.")
+        if A_Index=2 && HasMatchmakingPanel()
+            break
+        if !WaitFor(() => (play := ReadVisibleLobbyPlay()),30000,500) {
+            if gRunning
+                Notify("Lobby Play could not be verified on screen.")
             return false
         }
+        if !ClickRef(play.x,play.y,() => LobbyPlayAt(play.x,play.y)) || !ActionPause(250)
+            return false
+        Log("Lobby Play verified and clicked (" A_Index "/2).")
+    }
+    found := HasMatchmakingPanel()
+    if !found && gRunning {
         Log("Play clicked. Hold W until the matchmaking panel appears, then release W.")
         Send "{w down}"
         try found := WaitFor(HasMatchmakingPanel,7000,150)
         finally Send "{w up}"
-        if found {
-            ConfirmObservedTransition("LobbyPlay")
-            if gQueueMode
-                return StartQueueMatch()
-            if !ClickButton("PlayHere",-1,HasOpenPortal)
-                return false
-            if !ClickButton("PortalOpen")
-                return false
-            return TryStartPortal()
-        }
-        geometry := WindowGeometry()
-        if geometry
-            ForgetButton("LobbyPlay",geometry)
-        Log("Play flow did not open; re-detect the actual Play label and replace its coordinate.")
-        if !gRunning
-            return false
     }
-    if gRunning && gQueueMode
-        Notify("The matchmaking panel did not appear after walking from Play.")
-    return false
+    if !found || !gRunning {
+        if gRunning
+            Notify("The matchmaking panel did not appear after walking from Play.")
+        return false
+    }
+    if gQueueMode
+        return StartQueueMatch()
+    if !ClickButton("PlayHere",-1,HasOpenPortal) || !ClickButton("PortalOpen")
+        return false
+    return TryStartPortal()
 }
 
 ; One click on the visible Yes. A counted vote closes the panel within about
@@ -1791,11 +1809,15 @@ ReconnectAndRestart() {
         return
     }
     gRunning := true
-    deadline := A_TickCount+RECONNECT_GIVE_UP_MS,nextClick := 0,clicks := 0
+    deadline := A_TickCount+RECONNECT_GIVE_UP_MS,nextClick := 0,clicks := 0,lobbyReadyAt := 0
     while gRunning && gReconnecting && A_TickCount<deadline {
         ; The disconnected dialog can sit over the lobby and leave Play visible.
         disconnected := HasDisconnectDialog()
-        if !disconnected && HasLobbyPlay() {
+        if disconnected || !HasLobbyPlay()
+            lobbyReadyAt := 0
+        else if !lobbyReadyAt
+            lobbyReadyAt := A_TickCount+2000
+        else if A_TickCount>=lobbyReadyAt && ReadVisibleLobbyPlay() && gRunning && gReconnecting {
             gReconnecting := false
             gAwaitingReplayMap := false
             ResetEndGameFlow()
