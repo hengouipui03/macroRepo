@@ -12,22 +12,22 @@ StartQueueMatch() {
             Notify("Find Match could not be clicked. Teach FindMatch in Learning with F10.")
         return false
     }
-    prompt := 0
-    Loop 3 {
+    attempts := 0
+    while gRunning {
         geometry := WindowGeometry()
-        if !gRunning || !geometry
+        if !geometry
             return false
         prompt := ParseQueuePrompt(ReadOcrRows(245,205,555,435,true,3),geometry)
         if prompt && QueuePromptVisible(prompt)
             break
-        prompt := 0
-        if !ActionPause(350)
+        attempts += 1
+        if attempts=3 && gRunning
+            Notify("Queue number unreadable. Waiting and retrying the read.")
+        if !ActionPause(attempts<3?350:2500,false)
             return false
     }
-    if !prompt {
-        Notify("Could not read one number above the Submit and Cancel buttons.")
+    if !gRunning
         return false
-    }
     visible := () => QueuePromptVisible(prompt)
     if !ClickRef(prompt.inputX,prompt.inputY,visible) || !BeginInputAction()
         return false
@@ -38,6 +38,7 @@ StartQueueMatch() {
     finally EndInputAction()
     if !ClickRef(prompt.submit.x,prompt.submit.y,visible)
         return false
+    submittedAt := A_TickCount
     if !WaitFor(() => !QueuePromptVisible(prompt),5000,150) {
         if gRunning
             Notify("The number prompt stayed open after Submit.")
@@ -45,7 +46,37 @@ StartQueueMatch() {
     }
     ConfirmObservedTransition("FindMatch")
     Notify("Queue submitted. Waiting for matchmaking and Vote Start.")
-    return true
+    return submittedAt
+}
+
+WaitForQueuedMatch(submittedAt) {
+    global gRunning
+    lobbyCheckAt := submittedAt?submittedAt+10000:0
+    retryAt := 0
+    while gRunning {
+        if HasVoteStart() {
+            if WaitForVoteStart(1000)
+                return true
+        } else if retryAt && A_TickCount>=retryAt {
+            retryAt := 0
+            if HasLobbyPlay() {
+                Notify("Lobby Play is still visible. Starting a fresh queue.")
+                submittedAt := TryStartFromLobby()
+                if !submittedAt
+                    return false
+                lobbyCheckAt := submittedAt+10000
+            }
+        } else if lobbyCheckAt && A_TickCount>=lobbyCheckAt {
+            lobbyCheckAt := 0
+            if HasLobbyPlay() {
+                retryAt := A_TickCount+15000
+                Notify("Lobby Play is still visible 10 seconds after Submit. Waiting another 15 seconds before retrying.")
+            }
+        }
+        if !ActionPause(250,false)
+            break
+    }
+    return false
 }
 
 ; The number and input are stacked between the two button centres. Measure

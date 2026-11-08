@@ -1510,6 +1510,7 @@ RunMacro() {
                 return outcome
         }
     } else {
+        submittedAt := 0
         if !HasVoteStart() {
             if IsEndGameBlocking() {
                 if TryEndState()
@@ -1520,7 +1521,8 @@ RunMacro() {
                 Notify("Match already running. A fresh Vote Start is required for a new build.")
                 return
             }
-            if !TryStartFromLobby() {
+            submittedAt := TryStartFromLobby()
+            if !submittedAt {
                 if gRunning && !gQueueMode
                     Notify("Could not find the lobby Play flow. Teach LobbyPlay with F10 if OCR cannot read it.")
                 return
@@ -1528,13 +1530,7 @@ RunMacro() {
         }
         Notify("Waiting for Vote Start before any map preparation.")
         if gQueueMode {
-            ; The lobby stays visible while searching. Never start another queue
-            ; just because matchmaking takes longer than Solo's load timeout.
-            while gRunning && !WaitForVoteStart(30000) {
-                if !ActionPause(250,false)
-                    return
-            }
-            if !gRunning
+            if !WaitForQueuedMatch(submittedAt)
                 return
         } else if !WaitForVoteStart(45000) {
             outcome := RecoverVoteStart()
@@ -1797,7 +1793,9 @@ ReconnectAndRestart() {
     gRunning := true
     deadline := A_TickCount+RECONNECT_GIVE_UP_MS,nextClick := 0,clicks := 0
     while gRunning && gReconnecting && A_TickCount<deadline {
-        if HasLobbyPlay() {
+        ; The disconnected dialog can sit over the lobby and leave Play visible.
+        disconnected := HasDisconnectDialog()
+        if !disconnected && HasLobbyPlay() {
             gReconnecting := false
             gAwaitingReplayMap := false
             ResetEndGameFlow()
@@ -1807,7 +1805,7 @@ ReconnectAndRestart() {
             return
         }
         ; One click, then 20 s for the rejoin before clicking again.
-        if A_TickCount>=nextClick && HasDisconnectDialog() {
+        if disconnected && A_TickCount>=nextClick {
             clicks += 1
             Log("Reconnect click " clicks ".")
             ClickReconnectButton()
