@@ -831,13 +831,16 @@ EnsureRouteAndSpawn() {
     } else if !ProbePlayer()
         return false
     gMapModel.baseHidden := false
-    if gMapModel.HasProp("threePaths") && gMapModel.threePaths {
-        ; Sky Island: all three paths meet beside the base. Walk to that exact
-        ; spot and place there; relocation never leaves it.
-        stand := MapNearest(gMapModel.nodes,THREE_PATH_STAND.x,THREE_PATH_STAND.y)
-        gMapModel.standPoint := THREE_PATH_STAND,gMapModel.checkpoints := [stand,stand,stand]
+    threePaths := gMapModel.HasProp("threePaths") && gMapModel.threePaths
+    standPoint := threePaths?THREE_PATH_STAND:FabledKingdomStand(gMapModel)
+    if standPoint {
+        stand := MapNearest(gMapModel.nodes,standPoint.x,standPoint.y)
+        gMapModel.standPoint := standPoint,gMapModel.checkpoints := [stand,stand,stand]
         gMapModel.checkpointIndex := 0,gMapModel.target := stand
-        Log("Three-path map: walk to the fixed spot where the paths meet beside the base (" THREE_PATH_STAND.x "," THREE_PATH_STAND.y ").")
+        if threePaths
+            Log("Three-path map: walk to the fixed spot where the paths meet beside the base (" standPoint.x "," standPoint.y ").")
+        else
+            Log("Fabled Kingdom (Summer): walk to the fixed bend above the enemy entrance (" standPoint.x "," standPoint.y ").")
         return true
     }
     gMapModel.checkpoints := MapPlacementCheckpoints(gMapModel)

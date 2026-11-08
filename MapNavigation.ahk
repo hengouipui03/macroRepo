@@ -342,6 +342,18 @@ MapPlacementCheckpoints(model) {
     return MapRouteQuarters(model,MapNearest(model.nodes,model.baseMarker.x,model.baseMarker.y)).points
 }
 
+FabledKingdomStand(model) {
+    ; The map title is hidden during Vote Start. Match the supplied minimap
+    ; instead, allowing for icons over the road and small capture offsets.
+    try reference := RegExReplace(FileRead(A_ScriptDir "\fabled-kingdom-route.txt"),"[\r\n]")
+    catch
+        return false
+    visible := model.explained?model.explained:MapFromBits(model.raw)
+    if OccludedShapeMatch(model.raw,visible,reference)
+        return {x:44.35,y:70.71,minimapOnly:true}
+    return false
+}
+
 MapFarthestNode(nodes,start) {
     tree := MapDistances(nodes,start),far := start,longest := -1
     for node,distance in tree.distance
@@ -1156,7 +1168,8 @@ NavigateWithKeys() {
             joining := MapDistance(p.x,p.y,sx,sy)>10
             ; While getting around an obstacle, aim ahead along the route
             ; rather than back at the nearest point, which is the obstacle.
-            if stand && MapDistance(p.x,p.y,tx,ty)<=6 {
+            directStand := stand && MapDistance(p.x,p.y,tx,ty)<=6
+            if directStand {
                 ; The last few cells go straight to the exact spot, even where
                 ; an icon hid the line on the drawing.
                 wx := tx,wy := ty
@@ -1182,7 +1195,7 @@ NavigateWithKeys() {
                 Log("Measured W and D movements are parallel; cannot steer.")
                 return false
             }
-            if gPathLit
+            if gPathLit && !(directStand && stand.HasProp("minimapOnly"))
                 presses := FollowLitPath(presses)
             expected := MovePrediction(presses,gMoveKeys),before := {x:p.x,y:p.y}
             if !HoldKeys(presses) || !MovementPause(90)
