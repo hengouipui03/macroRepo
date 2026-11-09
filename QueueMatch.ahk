@@ -14,20 +14,16 @@ ReadVisibleFindMatch() {
         ; OCR can lose the initial F against the card artwork.
         if !RegExMatch(label,"^(?:f|-)?indmatch$")
             continue
-        x := (row.x+row.w/2)*REF_W/geometry.cw,y := (row.y+row.h/2)*REF_H/geometry.ch
-        if FindMatchAt(x,y)
-            return {x:x,y:y}
+        return {x:(row.x+row.w/2)*REF_W/geometry.cw,y:(row.y+row.h/2)*REF_H/geometry.ch}
     }
     return false
 }
 
-FindMatchAt(x,y) {
-    return CountRef(x-52,y-7,x+52,y+30,4,IsLobbyCyan)>8
-}
-
 StartQueueMatch(findMatch) {
     global gRunning
-    if !ClickRef(findMatch.x,findMatch.y,() => FindMatchAt(findMatch.x,findMatch.y))
+    ; The Find Match outline can change under the cursor. Check the panel
+    ; using Play Here, then verify the click by waiting for the number prompt.
+    if !ClickRef(findMatch.x,findMatch.y,HasMatchmakingPanel)
         return RetryQueueMatch("Find Match could not be clicked.")
     Log("Clicked visible Find Match. Waiting for the number prompt.")
     deadline := A_TickCount+8000,prompt := false
