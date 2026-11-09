@@ -1263,36 +1263,44 @@ HasValue(list,value) {
 
 TryStartFromLobby() {
     global gRunning,gQueueMode
-    play := 0
+    play := 0,findMatch := 0
+    panelReady := gQueueMode ? () => (findMatch := ReadVisibleFindMatch()) : HasMatchmakingPanel
     while gRunning {
-        Loop 2 {
-            if A_Index=2 && HasMatchmakingPanel()
-                break
-            if !WaitFor(() => (play := ReadVisibleLobbyPlay()),30000,500) {
-                if gRunning
-                    Notify("Lobby Play could not be verified on screen.")
-                return false
+        panelOpen := gQueueMode && panelReady.Call()
+        if !panelOpen {
+            Loop 2 {
+                if !WaitFor(() => (play := ReadVisibleLobbyPlay()),30000,500) {
+                    if gRunning
+                        Notify("Lobby Play could not be verified on screen.")
+                    return false
+                }
+                if !ClickRef(play.x,play.y,() => LobbyPlayAt(play.x,play.y)) || !ActionPause(250)
+                    return false
+                Log("Lobby Play verified and clicked (" A_Index "/2).")
+                if (panelOpen := panelReady.Call())
+                    break
             }
-            if !ClickRef(play.x,play.y,() => LobbyPlayAt(play.x,play.y)) || !ActionPause(250)
-                return false
-            Log("Lobby Play verified and clicked (" A_Index "/2).")
         }
-        if HasMatchmakingPanel() || !gRunning
+        if !panelOpen && gRunning {
+            Log("Play clicked. Hold W until the matchmaking panel appears, then release W.")
+            Send "{w down}"
+            try panelOpen := WaitFor(panelReady,7000,150)
+            finally Send "{w up}"
+            if !panelOpen && gRunning {
+                Log("Matchmaking panel did not appear after 7 seconds of walking. Wait 3 seconds before retrying Lobby Play.")
+                panelOpen := WaitFor(panelReady,3000,150)
+            }
+        }
+        if !panelOpen || !gRunning
+            continue
+        if !gQueueMode
             break
-        Log("Play clicked. Hold W until the matchmaking panel appears, then release W.")
-        Send "{w down}"
-        try found := WaitFor(HasMatchmakingPanel,7000,150)
-        finally Send "{w up}"
-        if found || !gRunning
-            break
-        Log("Matchmaking panel did not appear after 7 seconds of walking. Wait 3 seconds before retrying Lobby Play.")
-        if WaitFor(HasMatchmakingPanel,3000,150)
-            break
+        submittedAt := StartQueueMatch(findMatch)
+        if submittedAt != "retry"
+            return submittedAt
     }
     if !gRunning
         return false
-    if gQueueMode
-        return StartQueueMatch()
     if !ClickButton("PlayHere",-1,HasOpenPortal) || !ClickButton("PortalOpen")
         return false
     return TryStartPortal()

@@ -5,29 +5,51 @@ SaveMatchMode(control,*) {
     try IniWrite control.Text,UNIT_SETTINGS_FILE,"Macro","mode"
 }
 
-StartQueueMatch() {
-    global gRunning
-    if !ClickButton("FindMatch") {
-        if gRunning
-            Notify("Find Match could not be clicked. Teach FindMatch in Learning with F10.")
+ReadVisibleFindMatch() {
+    global REF_W,REF_H,gRunning
+    if !gRunning || !HasMatchmakingPanel() || !(geometry := WindowGeometry())
         return false
+    for row in ReadOcrRows(ButtonRegion("FindMatch")*) {
+        label := StrReplace(NormalizeWords(row.text)," ")
+        ; OCR can lose the initial F against the card artwork.
+        if !RegExMatch(label,"^(?:f|-)?indmatch$")
+            continue
+        x := (row.x+row.w/2)*REF_W/geometry.cw,y := (row.y+row.h/2)*REF_H/geometry.ch
+        if FindMatchAt(x,y)
+            return {x:x,y:y}
     }
-    attempts := 0
-    while gRunning {
+    return false
+}
+
+FindMatchAt(x,y) {
+    return CountRef(x-52,y-7,x+52,y+30,4,IsLobbyCyan)>8
+}
+
+StartQueueMatch(findMatch) {
+    global gRunning
+    if !ClickRef(findMatch.x,findMatch.y,() => FindMatchAt(findMatch.x,findMatch.y))
+        return RetryQueueMatch("Find Match could not be clicked.")
+    Log("Clicked visible Find Match. Waiting for the number prompt.")
+    deadline := A_TickCount+8000,prompt := false
+    while gRunning && A_TickCount<deadline {
         geometry := WindowGeometry()
         if !geometry
             return false
-        prompt := ParseQueuePrompt(ReadOcrRows(245,205,555,435,true,3),geometry)
-        if prompt && QueuePromptVisible(prompt)
-            break
-        attempts += 1
-        if attempts=3 && gRunning
-            Notify("Queue number unreadable. Waiting and retrying the read.")
-        if !ActionPause(attempts<3?350:2500,false)
+        read := ParseQueuePrompt(ReadOcrRows(245,205,555,435,true,3),geometry)
+        if read && QueuePromptVisible(read) {
+            prompt := read
+            if prompt.number!=""
+                break
+        }
+        if !ActionPause(350,false)
             return false
     }
     if !gRunning
         return false
+    if !prompt || !QueuePromptVisible(prompt)
+        return RetryQueueMatch("The number prompt did not appear after Find Match.")
+    if prompt.number=""
+        return RetryQueueMatch("The queue number could not be read.",prompt)
     visible := () => QueuePromptVisible(prompt)
     if !ClickRef(prompt.inputX,prompt.inputY,visible) || !BeginInputAction()
         return false
@@ -39,14 +61,26 @@ StartQueueMatch() {
     if !ClickRef(prompt.submit.x,prompt.submit.y,visible)
         return false
     submittedAt := A_TickCount
-    if !WaitFor(() => !QueuePromptVisible(prompt),5000,150) {
-        if gRunning
-            Notify("The number prompt stayed open after Submit.")
-        return false
-    }
-    ConfirmObservedTransition("FindMatch")
+    if !WaitFor(() => !visible.Call(),5000,150)
+        return RetryQueueMatch("The number prompt stayed open after Submit.",prompt)
     Notify("Queue submitted. Waiting for matchmaking and Vote Start.")
     return submittedAt
+}
+
+RetryQueueMatch(reason,prompt := false) {
+    global gRunning
+    if !gRunning
+        return false
+    if prompt && QueuePromptVisible(prompt) {
+        if !ClickRef(prompt.cancel.x,prompt.cancel.y,() => QueuePromptVisible(prompt))
+            || !WaitFor(() => !QueuePromptVisible(prompt),3000,150) {
+            if gRunning
+                Notify(reason " The number prompt could not be dismissed.")
+            return false
+        }
+    }
+    Notify(reason " Checking Find Match again or restarting from Lobby Play.")
+    return ActionPause(3000,false) ? "retry" : false
 }
 
 WaitForQueuedMatch(submittedAt) {
@@ -105,14 +139,14 @@ ParseQueuePrompt(rows,geometry) {
         rise := submit.y-point.y
         if Abs(point.x-centre)>gap*.25 || rise<gap*.34 || rise>gap*.72
             continue
-        if number
-            return false
+        if number {
+            number := 0
+            break
+        }
         number := point
     }
-    if !number
-        return false
     sx := REF_W/geometry.cw,sy := REF_H/geometry.ch
-    return {number:number.number,inputX:centre*sx,inputY:(number.y+submit.y)/2*sy,
+    return {number:number?number.number:"",inputX:centre*sx,inputY:number?(number.y+submit.y)/2*sy:0,
         submit:{x:submit.x*sx,y:submit.y*sy},cancel:{x:cancel.x*sx,y:cancel.y*sy}}
 }
 
