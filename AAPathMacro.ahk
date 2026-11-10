@@ -235,13 +235,13 @@ MoveRef(rx, ry) {
     return false
 }
 
-SmoothMoveTo(sx, sy,gapMs := 0,travelMs := 0) {
+SmoothMoveTo(sx, sy,gapMs := 0,travelMs := 0,waitBeforeMove := true) {
     global gRunning, gInputEpoch,ACTION_HOLD_MS
     MouseGetPos(&startX, &startY)
     distance := Sqrt((sx-startX)**2 + (sy-startY)**2)
     if distance < 2
         return true
-    if !BeginInputAction(gRunning,gapMs)
+    if waitBeforeMove && !BeginInputAction(gRunning,gapMs)
         return false
     ; Interpolate an eased path over real time. A single MouseMove with a
     ; speed value is still instantaneous under AutoHotkey's SendInput mode.
@@ -758,7 +758,8 @@ CameraReset(*) {
     if !HoldCameraKey("i",holdMs,epoch)
         return false
     tilt := Min(CAMERA_TILT_PIXELS,Round(ch*0.38))
-    if !SmoothMoveTo(cx+cw//2,cy+ch//2+tilt,0,travelMs)
+    ; Tilt as soon as I is released. O still waits for the mouse to settle.
+    if !SmoothMoveTo(cx+cw//2,cy+ch//2+tilt,0,travelMs,false)
         return false
     if !InputPause(fast?125:250,epoch)
         return false
@@ -1386,21 +1387,22 @@ SitOutMatch(reason) {
 ; ending the run, keep reading the screen until it shows something to act on:
 ; Vote Start -> continue, lobby -> restart from LobbyPlay, end screen -> Replay,
 ; match already running -> sit it out. F7 and disconnects still end this.
-RecoverVoteStart() {
+RecoverVoteStart(fromQueue := false) {
     global gRunning,gReconnecting,gAwaitingReplayMap
     ; F7 also ends the Vote Start wait; that is a stop, not a timeout.
     if !gRunning || gReconnecting
         return ""
     ; A stale replay latch would make every end-screen check pass at once.
     gAwaitingReplayMap := false
-    Notify("Vote Start not seen in time. Watching the screen to recover.")
+    Notify(fromQueue?"Queue flow interrupted. Watching for Lobby Play or Vote Start."
+        :"Vote Start not seen in time. Watching the screen to recover.")
     matchSince := 0,nextNote := A_TickCount+30000
     while gRunning && !gReconnecting {
         if HasVoteStart() {
             matchSince := 0
             if WaitForVoteStart(5000)
                 return "vote"
-        } else if HasLobbyPlay() {
+        } else if HasLobbyPlay() && (!fromQueue || ReadVisibleLobbyPlay()) {
             ResetEndGameFlow()
             Notify("Recovery: back in the lobby. Restarting from LobbyPlay.")
             return "restart"
@@ -1542,8 +1544,8 @@ RunMacro() {
                 return outcome
         }
     } else {
-        submittedAt := 0
-        if !HasVoteStart() {
+        submittedAt := 0,voteVisible := HasVoteStart()
+        if !voteVisible {
             if IsEndGameBlocking() {
                 if TryEndState()
                     return "replay"
@@ -1554,16 +1556,19 @@ RunMacro() {
                 return
             }
             submittedAt := TryStartFromLobby()
-            if !submittedAt {
-                if gRunning && !gQueueMode
+            if !submittedAt && (!gRunning || !gQueueMode) {
+                if gRunning
                     Notify("Could not find the lobby Play flow. Teach LobbyPlay with F10 if OCR cannot read it.")
                 return
             }
         }
         Notify("Waiting for Vote Start before any map preparation.")
         if gQueueMode {
-            if !WaitForQueuedMatch(submittedAt)
-                return
+            if (!voteVisible && !submittedAt) || !WaitForQueuedMatch(submittedAt) {
+                outcome := RecoverVoteStart(true)
+                if outcome!="vote"
+                    return outcome
+            }
         } else if !WaitForVoteStart(45000) {
             outcome := RecoverVoteStart()
             if outcome!="vote"
@@ -1800,17 +1805,21 @@ CheckDisconnect() {
     SetTimer ReconnectAndRestart, -300
 }
 
-; The Reconnect button is found by its label (OCR) and clicked in its centre;
-; without a readable label, its usual place in the dialog is clicked.
-ClickReconnectButton() {
+; Use individual words so Leave and Reconnect on the same line cannot be
+; mistaken for a single button. Keep the text above them for diagnosis.
+ClickReconnectButton(&details) {
     global REF_W,REF_H
+    details := "",x := 455,y := 356
     if GetClient(&cx,&cy,&cw,&ch) {
-        for row in ReadOcrRows(285,330,516,380) {
-            if InStr(NormalizeWords(row.text),"reconnect")
-                return ClickRef((row.x+row.w/2)*REF_W/cw,(row.y+row.h/2)*REF_H/ch)
+        for row in ReadOcrRows(285,216,516,382,true) {
+            ry := (row.y+row.h/2)*REF_H/ch
+            if ry>=330 && NormalizeWords(row.text)="reconnect"
+                x := (row.x+row.w/2)*REF_W/cw,y := ry
+            else if ry<340
+                details .= (details=""?"":" ") row.text
         }
     }
-    return ClickRef(455,356)
+    return HasDisconnectDialog() && ClickRef(x,y)
 }
 
 ReconnectAndRestart() {
@@ -1823,7 +1832,7 @@ ReconnectAndRestart() {
         return
     }
     gRunning := true
-    deadline := A_TickCount+RECONNECT_GIVE_UP_MS,nextClick := 0,clicks := 0,lobbyReadyAt := 0
+    deadline := A_TickCount+RECONNECT_GIVE_UP_MS,nextClick := 0,clicks := 0,lobbyReadyAt := 0,reported := false
     while gRunning && gReconnecting && A_TickCount<deadline {
         ; The disconnected dialog can sit over the lobby and leave Play visible.
         disconnected := HasDisconnectDialog()
@@ -1842,10 +1851,19 @@ ReconnectAndRestart() {
         }
         ; One click, then 20 s for the rejoin before clicking again.
         if disconnected && A_TickCount>=nextClick {
-            clicks += 1
-            Log("Reconnect click " clicks ".")
-            ClickReconnectButton()
-            nextClick := A_TickCount+20000
+            clicked := ClickReconnectButton(&details)
+            if !gRunning || !gReconnecting
+                break
+            if !reported {
+                Log(details=""?"Disconnect dialog text could not be read.":"Disconnect dialog OCR: " details)
+                reported := true
+            }
+            if clicked {
+                clicks += 1
+                Log("Reconnect click " clicks " sent. Waiting for the lobby.")
+            } else
+                Log("Reconnect click was not sent. Checking the dialog again in 3 seconds.")
+            nextClick := A_TickCount+(clicked?20000:3000)
         }
         if !ActionPause(500,false)
             break

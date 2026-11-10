@@ -518,7 +518,8 @@ PlacementClickRef(rx,ry,guardCards := false,purchase := 0,allowUnitPanel := fals
         if !WinWaitActive("ahk_id " hwnd,,1)
             return false
     }
-    if !SmoothMoveTo(sx,sy,UNIT_ACTION_MS,UNIT_ACTION_MS)
+    ; Start moving while input is idle. The click still waits after arrival.
+    if !SmoothMoveTo(sx,sy,UNIT_ACTION_MS,UNIT_ACTION_MS,false)
         return false
     if !BeginInputAction(true,UNIT_ACTION_MS) || (guardCards && (HasCardChoice() || (!allowUnitPanel && HasUnitPanel()) || IsEndGameBlocking()))
         return false
@@ -916,8 +917,11 @@ PlacementStillBesidePath(candidate) {
     }
     row := candidate.HasProp("row")?candidate.row:1
     reply := VisionRequest("placementvalid " candidate.x " " candidate.y " " row " " (seeds=""?"-":seeds))
-    if VisionOk(reply) && reply["valid"]="1"
+    if !VisionOk(reply)
+        return false
+    if reply["valid"]="1"
         return true
+    candidate.pathRejected := true
     Log("Reject stale/off-path coordinate " candidate.x "," candidate.y "; no placement click sent.")
     RememberFailedPlacementSpot(candidate)
     return false
@@ -1020,9 +1024,9 @@ RegisterPlacementEdgeMiss(point) {
     return state.attempts
 }
 
-TryPlacementPoints(unit,points) {
+TryPlacementPoints(unit,points,replanStaleLine := false) {
     global gPlacementYenWait,gRunning,gPlacementAttemptClicked,gPendingPlacement
-    queue := points.Clone(),seen := Map()
+    queue := points.Clone(),seen := Map(),stale := 0
     while queue.Length {
         if !gRunning || IsEndGameBlocking()
             return false
@@ -1045,8 +1049,13 @@ TryPlacementPoints(unit,points) {
         ; must not block the edge.
         if (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
             return false
-        if !gPlacementAttemptClicked
+        if !gPlacementAttemptClicked {
+            if replanStaleLine && point.HasProp("pathRejected") && ++stale>=2 {
+                Log("Two path-side spots no longer fit the visible road; refresh the lane before trying this copy again.")
+                return false
+            }
             continue
+        }
         if point.HasProp("row") && point.row=2
             continue
         misses := RegisterPlacementEdgeMiss(point)
@@ -1319,7 +1328,7 @@ PlaceUnitAction(unit) {
     }
     ; Saved coordinates are reusable only where they match this visible edge.
     points := MatchSavedPlacementsToPath(unit,points)
-    if TryPlacementPoints(unit,points)
+    if TryPlacementPoints(unit,points,true)
         return true
     if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
         return FinishPlacement(unit,gPendingPlacement)
