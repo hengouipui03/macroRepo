@@ -13,7 +13,7 @@ SetTitleMatchMode 2
 ; Session logs (see SessionLogLine): one file per F6 run in logs\.
 global LOG_DIR := A_ScriptDir "\logs",gSessionLogFile := "",gSessionLogHasRun := false,SESSION_LOG_DAYS := 30
 ; Disconnect recovery (see CheckDisconnect).
-global gReconnecting := false,gMacroThreadActive := false,RECONNECT_GIVE_UP_MS := 30*60000
+global gReconnecting := false,gReconnectButton := false,gMacroThreadActive := false
 global REF_W := 800
 global REF_H := 600
 global WINDOW_W := 1401
@@ -1262,18 +1262,27 @@ HasValue(list,value) {
     return false
 }
 
-TryStartFromLobby() {
+TryStartFromLobby(afterReturnToLobby := false) {
     global gRunning,gQueueMode
     play := 0,findMatch := 0
+    playWaitMs := afterReturnToLobby ? 60000 : 30000
     panelReady := gQueueMode ? () => (findMatch := ReadVisibleFindMatch()) : HasMatchmakingPanel
     while gRunning {
         panelOpen := gQueueMode && panelReady.Call()
         if !panelOpen {
             Loop 2 {
-                if !WaitFor(() => (play := ReadVisibleLobbyPlay()),30000,500) {
-                    if gRunning
+                playDeadline := A_TickCount+playWaitMs
+                if !WaitFor(() => (play := ReadVisibleLobbyPlay()),playWaitMs,500) {
+                    if !gRunning
+                        return false
+                    if !afterReturnToLobby || A_TickCount<playDeadline {
                         Notify("Lobby Play could not be verified on screen.")
-                    return false
+                        return false
+                    }
+                    if !ClickSavedLobbyPlay()
+                        return false
+                    panelOpen := panelReady.Call()
+                    break
                 }
                 if !ClickRef(play.x,play.y,() => LobbyPlayAt(play.x,play.y)) || !ActionPause(250)
                     return false
@@ -1305,6 +1314,16 @@ TryStartFromLobby() {
     if !ClickButton("PlayHere",-1,HasOpenPortal) || !ClickButton("PortalOpen")
         return false
     return TryStartPortal()
+}
+
+ClickSavedLobbyPlay() {
+    geometry := WindowGeometry()
+    if !geometry || !(point := ReadButtonRecord("LobbyPlay",geometry)) {
+        Notify("Lobby Play is still unverified and has no saved position for this window. Teach it with F10.")
+        return false
+    }
+    Notify("Lobby Play was not detected for 60 seconds. Clicking its saved position.")
+    return ClickWindowOnce(point,geometry) && ActionPause(250)
 }
 
 ; One click on the visible Yes. A counted vote closes the panel within about
@@ -1528,15 +1547,9 @@ RunMacro() {
     ResetIdleKeepAlive()
     EndUnitManagerPhase()
     plan := ReadUnitPlan()
-    if gAwaitingLobby {
+    returningToLobby := gAwaitingLobby
+    if returningToLobby
         Notify("Waiting for lobby Play before queuing again.")
-        if !WaitFor(HasLobbyPlay,180000,300) {
-            if gRunning
-                Notify("Lobby Play did not appear after returning from the match.")
-            return
-        }
-        ResetEndGameFlow()
-    }
     if gAwaitingReplayMap {
         if !WaitForReplayVoteStart() {
             outcome := RecoverVoteStart()
@@ -1546,22 +1559,24 @@ RunMacro() {
     } else {
         submittedAt := 0,voteVisible := HasVoteStart()
         if !voteVisible {
-            if IsEndGameBlocking() {
+            if !returningToLobby && IsEndGameBlocking() {
                 if TryEndState()
                     return "replay"
                 return
             }
-            if !HasLobbyPlay() && GetMiniMapRoutePoints().Length>=8 {
+            if !returningToLobby && !HasLobbyPlay() && GetMiniMapRoutePoints().Length>=8 {
                 Notify("Match already running. A fresh Vote Start is required for a new build.")
                 return
             }
-            submittedAt := TryStartFromLobby()
+            submittedAt := TryStartFromLobby(returningToLobby)
             if !submittedAt && (!gRunning || !gQueueMode) {
                 if gRunning
                     Notify("Could not find the lobby Play flow. Teach LobbyPlay with F10 if OCR cannot read it.")
                 return
             }
         }
+        if returningToLobby && gRunning
+            ResetEndGameFlow()
         Notify("Waiting for Vote Start before any map preparation.")
         if gQueueMode {
             if (!voteVisible && !submittedAt) || !WaitForQueuedMatch(submittedAt) {
@@ -1739,8 +1754,8 @@ RunMacroSafely() {
 }
 
 StopMacro(*) {
-    global gReconnecting
-    gReconnecting := false
+    global gReconnecting,gReconnectButton
+    gReconnecting := false,gReconnectButton := false
     SetTimer CheckDisconnect, 0
     SetTimer ReconnectAndRestart, 0
     AbandonCurrentAction()
@@ -1762,68 +1777,81 @@ AbandonCurrentAction() {
     ReleaseMovementKeys()
 }
 
-; Disconnect recovery. Roblox's "Disconnected" dialog, whatever its error
-; code, is a flat dark-grey panel with a white Reconnect button. While the
-; macro runs it is checked every 3 s. On sight the current action is
-; abandoned (as with F7), Reconnect is clicked, and once the lobby Play
-; button is back the macro restarts from it, exactly as after F6 in the lobby.
-HasDisconnectDialog() {
-    panel := RefPixels(290,224,510,378)
-    if !panel.valid
-        return false
-    grey := 0,greyTotal := 0,y := 224
-    while y<=378 {
-        x := 290
-        while x<=510 {
-            RGB(panel.AtRef(x,y),&r,&g,&b),top := Max(r,g,b)
-            grey += Abs(r-g)<=8 && Abs(g-b)<=8 && top>=42 && top<=75
-            greyTotal += 1,x += 6
-        }
-        y += 6
-    }
-    if grey<greyTotal*0.6
-        return false
-    white := 0,whiteTotal := 0,y := 348
-    while y<=364 {
-        x := 410
-        while x<=500 {
-            RGB(panel.AtRef(x,y),&r,&g,&b)
-            white += Min(r,g,b)>=230,whiteTotal += 1,x += 4
-        }
-        y += 4
-    }
-    return white>=whiteTotal*0.6
+; Look for the centered dark panel before paying for OCR during a run.
+HasDisconnectPanel() {
+    return CountRef(315,240,485,335,8,IsDisconnectGrey)>=140
+}
+
+IsDisconnectGrey(color) {
+    RGB(color,&r,&g,&b)
+    lightest := Max(r,g,b)
+    return lightest>=20 && lightest<=95 && lightest-Min(r,g,b)<=16
 }
 
 CheckDisconnect() {
-    global gRunning,gReconnecting
-    if !gRunning || gReconnecting || !HasDisconnectDialog()
+    global gRunning,gReconnecting,gReconnectButton,gOcrPid,gInputEpoch
+    if !gRunning || gReconnecting || gOcrPid || !HasDisconnectPanel()
         return
-    gReconnecting := true
-    Notify("Disconnected: abandon the current action, click Reconnect, then restart from the lobby Play button.")
+    epoch := gInputEpoch
+    button := FindReconnectButton(&disconnected)
+    if !button || !gRunning || epoch!=gInputEpoch
+        return
+    gReconnecting := true,gReconnectButton := button
     AbandonCurrentAction()
+    Notify("Disconnected. Clicking Reconnect once a second until lobby Play returns.")
     SetTimer ReconnectAndRestart, -300
 }
 
-; Use individual words so Leave and Reconnect on the same line cannot be
-; mistaken for a single button. Keep the text above them for diagnosis.
-ClickReconnectButton(&details) {
+; Read individual words so Leave and Reconnect on the same line stay separate.
+FindReconnectButton(&disconnected) {
     global REF_W,REF_H
-    details := "",x := 455,y := 356
-    if GetClient(&cx,&cy,&cw,&ch) {
-        for row in ReadOcrRows(285,216,516,382,true) {
-            ry := (row.y+row.h/2)*REF_H/ch
-            if ry>=330 && NormalizeWords(row.text)="reconnect"
-                x := (row.x+row.w/2)*REF_W/cw,y := ry
-            else if ry<340
-                details .= (details=""?"":" ") row.text
+    disconnected := false
+    hwnd := FindRoblox()
+    if !hwnd || !GetClient(&cx,&cy,&cw,&ch)
+        return false
+    titleY := 0,button := false
+    for word in ReadOcrRows(220,185,580,425,true) {
+        switch NormalizeWords(word.text) {
+        case "disconnected": titleY := word.y
+        case "reconnect": button := word
         }
     }
-    return HasDisconnectDialog() && ClickRef(x,y)
+    disconnected := titleY>0
+    if !disconnected || !button || button.y<=titleY || FindRoblox()!=hwnd
+        return false
+    box := [button.x*REF_W/cw,button.y*REF_H/ch,(button.x+button.w)*REF_W/cw,(button.y+button.h)*REF_H/ch]
+    label := RefPixels(box*)
+    return label.valid ? {hwnd:hwnd,box:box,label:label,x:(box[1]+box[3])/2,y:(box[2]+box[4])/2} : false
+}
+
+; Reuse the located label while it stays visible. Compare its light and dark
+; pixels separately so a blank patch cannot match, even if the text is small.
+ReconnectButtonVisible(button) {
+    if FindRoblox()!=button.hwnd
+        return false
+    label := button.label,frame := RefPixels(button.box*)
+    if !frame.valid || frame.width!=label.width || frame.height!=label.height
+        return false
+    dark := 0,light := 0,darkMatches := 0,lightMatches := 0
+    y := 0
+    while y<frame.height {
+        x := 0
+        while x<frame.width {
+            wasLight := (label.At(x,y)&0xFF00)>=0x8000
+            isLight := (frame.At(x,y)&0xFF00)>=0x8000
+            if wasLight
+                light += 1,lightMatches += isLight
+            else
+                dark += 1,darkMatches += !isLight
+            x += 2
+        }
+        y += 2
+    }
+    return dark>0 && light>0 && darkMatches>=dark*0.75 && lightMatches>=light*0.75
 }
 
 ReconnectAndRestart() {
-    global gRunning,gReconnecting,gMacroThreadActive,gAwaitingReplayMap,RECONNECT_GIVE_UP_MS
+    global gRunning,gReconnecting,gReconnectButton,gMacroThreadActive
     if !gReconnecting
         return
     ; The interrupted run must finish unwinding before anything is clicked.
@@ -1831,49 +1859,34 @@ ReconnectAndRestart() {
         SetTimer ReconnectAndRestart, -300
         return
     }
-    gRunning := true
-    deadline := A_TickCount+RECONNECT_GIVE_UP_MS,nextClick := 0,clicks := 0,lobbyReadyAt := 0,reported := false
-    while gRunning && gReconnecting && A_TickCount<deadline {
-        ; The disconnected dialog can sit over the lobby and leave Play visible.
-        disconnected := HasDisconnectDialog()
-        if disconnected || !HasLobbyPlay()
-            lobbyReadyAt := 0
-        else if !lobbyReadyAt
-            lobbyReadyAt := A_TickCount+2000
-        else if A_TickCount>=lobbyReadyAt && ReadVisibleLobbyPlay() && gRunning && gReconnecting {
+    gRunning := true,button := gReconnectButton,gReconnectButton := false
+    nextCheck := 0,clicks := 0
+    readyToClick := () => ReconnectButtonVisible(button) && (nextCheck := A_TickCount+1000)
+    while gRunning && gReconnecting {
+        if A_TickCount<nextCheck {
+            ActionPause(nextCheck-A_TickCount,false)
+            continue
+        }
+        nextCheck := A_TickCount+1000
+        disconnected := false
+        if !button || !ReconnectButtonVisible(button)
+            button := HasDisconnectPanel() ? FindReconnectButton(&disconnected) : false
+        if !gRunning || !gReconnecting
+            return
+        ; A disconnect over the lobby can leave Play visible behind the dialog.
+        if button {
+            if ClickRef(button.x,button.y,readyToClick) {
+                clicks += 1
+                Log("Reconnect click " clicks " sent. Waiting for the lobby.")
+            }
+        } else if !disconnected && ReadVisibleLobbyPlay() && gRunning && gReconnecting {
             gReconnecting := false
-            gAwaitingReplayMap := false
             ResetEndGameFlow()
             ResetCardSelection()
             Notify("Reconnected: back in the lobby after " clicks " Reconnect click(s). Restarting from Play.")
             SetTimer RunMacroSafely, -10
             return
         }
-        ; One click, then 20 s for the rejoin before clicking again.
-        if disconnected && A_TickCount>=nextClick {
-            clicked := ClickReconnectButton(&details)
-            if !gRunning || !gReconnecting
-                break
-            if !reported {
-                Log(details=""?"Disconnect dialog text could not be read.":"Disconnect dialog OCR: " details)
-                reported := true
-            }
-            if clicked {
-                clicks += 1
-                Log("Reconnect click " clicks " sent. Waiting for the lobby.")
-            } else
-                Log("Reconnect click was not sent. Checking the dialog again in 3 seconds.")
-            nextClick := A_TickCount+(clicked?20000:3000)
-        }
-        if !ActionPause(500,false)
-            break
-    }
-    if gReconnecting {
-        gReconnecting := false
-        SetTimer CheckDisconnect, 0
-        gRunning := false
-        Notify("Reconnect did not bring back the lobby within 30 minutes. Stopped.")
-        EndSessionLog("session stopped (reconnect failed)")
     }
 }
 
