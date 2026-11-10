@@ -924,6 +924,8 @@ ProbePlayer() {
     section := "minimap." gMapModel.id,profile := "keys." gCameraOverheadReady
     learned := StrSplit(MemoryRead(section,profile),",")
     known := learned.Length=4 ? {w:{x:Number(learned[1]),y:Number(learned[2])},d:{x:Number(learned[3]),y:Number(learned[4])}} : 0
+    if known && !MoveAxesIndependent(known.w,known.d)
+        known := false
     forward := ProbeKeyPair("w","s"),side := {found:false,vector:false}
     w := forward.vector,d := false
     ; A learned map whose W movement still matches skips the D/A probe.
@@ -938,6 +940,16 @@ ProbePlayer() {
         Log("Movement probe: no white marker moved with W/S or D/A; player not found.")
         return false
     }
+    ; A blocked key can slide the player along the other axis. Keep the
+    ; stronger reading and treat the weaker axis like a blocked probe.
+    if w && d && !MoveAxesIndependent(w,d) {
+        if MapDistance(0,0,w.x,w.y)>=MapDistance(0,0,d.x,d.y)
+            d := false
+        else
+            w := false
+        Log("Movement probes followed the same axis. Estimating the blocked axis from the stronger movement.")
+    }
+    measuredBoth := w && d
     ; One blocked axis: in a top-down view D is W turned a quarter clockwise.
     if w && !d
         d := {x:-w.y,y:w.x}
@@ -948,7 +960,8 @@ ProbePlayer() {
         return false
     }
     gMoveKeys := {w:w,d:d}
-    IniWrite Round(w.x,3) "," Round(w.y,3) "," Round(d.x,3) "," Round(d.y,3),LEARNING_FILE,section,profile
+    if measuredBoth
+        IniWrite Round(w.x,3) "," Round(w.y,3) "," Round(d.x,3) "," Round(d.y,3),LEARNING_FILE,section,profile
     Log("Player found by movement at " Round(gMapModel.player.x,1) "," Round(gMapModel.player.y,1) "; W " Round(w.x,1) "," Round(w.y,1) " D " Round(d.x,1) "," Round(d.y,1) " cells/s.")
     return true
 }
@@ -987,6 +1000,12 @@ ProbeKeyPair(key,opposite) {
 MoveVectorsAgree(a,b) {
     la := MapDistance(0,0,a.x,a.y),lb := MapDistance(0,0,b.x,b.y)
     return la && lb && (a.x*b.x+a.y*b.y)/(la*lb)>0.9 && la/lb>0.6 && la/lb<1.6
+}
+
+MoveAxesIndependent(w,d) {
+    span := MapDistance(0,0,w.x,w.y)*MapDistance(0,0,d.x,d.y)
+    ; Reject axes within about 17 degrees of being parallel in either direction.
+    return span>0 && Abs(w.x*d.y-w.y*d.x)>=0.3*span
 }
 
 ; Express a minimap displacement as W/S and D/A hold times (a 2x2 solve with
@@ -1460,5 +1479,8 @@ LearnMoveKey(press,ox,oy) {
     if !MoveVectorsAgree(observed,gMoveKeys.%name%)
         return
     old := gMoveKeys.%name%
-    gMoveKeys.%name% := {x:old.x*0.7+observed.x*0.3,y:old.y*0.7+observed.y*0.3}
+    refined := {x:old.x*0.7+observed.x*0.3,y:old.y*0.7+observed.y*0.3}
+    other := name="w" ? gMoveKeys.d : gMoveKeys.w
+    if MoveAxesIndependent(refined,other)
+        gMoveKeys.%name% := refined
 }
