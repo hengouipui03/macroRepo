@@ -1789,13 +1789,28 @@ IsDisconnectGrey(color) {
 }
 
 CheckDisconnect() {
-    global gRunning,gReconnecting,gReconnectButton,gOcrPid,gInputEpoch
-    if !gRunning || gReconnecting || gOcrPid || !HasDisconnectPanel()
+    global gRunning,gReconnecting,gReconnectButton,gOcrPid,gInputEpoch,gMacroThreadActive
+    if gReconnecting || gOcrPid || !HasDisconnectPanel()
         return
+    ; F7 cancels this timer, so it only runs while the F6 session is on. If the
+    ; run loop ended by itself (gRunning false, no run thread), Reconnect must
+    ; still work. The OCR read stops while gRunning is false, so it is held true
+    ; for the read and restored if no dialog is confirmed.
+    runEnded := !gRunning
+    if runEnded {
+        if gMacroThreadActive
+            return
+        gRunning := true
+    }
     epoch := gInputEpoch
     button := FindReconnectButton(&disconnected)
-    if !button || !gRunning || epoch!=gInputEpoch
+    if !button || !gRunning || epoch!=gInputEpoch {
+        if runEnded && epoch=gInputEpoch
+            gRunning := false
         return
+    }
+    if runEnded
+        Log("The run loop had ended without F7; the Disconnected dialog is still handled.")
     gReconnecting := true,gReconnectButton := button
     AbandonCurrentAction()
     Notify("Disconnected. Clicking Reconnect once a second until lobby Play returns.")
