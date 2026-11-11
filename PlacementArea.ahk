@@ -271,7 +271,10 @@ RelocatePlacementArea(unit) {
                     Log("Player marker not found after teleporting to spawn.")
             }
         }
-        if !reached
+        ; Both teleports used and another 20 s of walking still failed: stop
+        ; retrying this checkpoint forever and place from where the player is.
+        gaveUp := !reached && gRunning && !IsEndGameBlocking() && gRelocationTeleports>=2 && gRelocationWalkMs>=RELOCATION_TELEPORT_MS
+        if !reached && !gaveUp
             return ContinuePlacementInCurrentView(unit,"Checkpoint " next " not reached yet; keep that destination and retry.")
         gRelocationWalkTarget := 0,gRelocationWalkMs := 0,gRelocationTeleports := 0
         gMapModel.checkpointIndex := next
@@ -280,7 +283,10 @@ RelocatePlacementArea(unit) {
         RefreshPlacementSearch()
         ResetUpgradeSelection()
         SavePlacementRun()
-        Log("Reached checkpoint " next "/3. Resume placement; recorded units remain accessible through F.")
+        if gaveUp
+            Log("Checkpoint " next "/3 not reached after 2 teleports and another 20 s of walking; treat the current position as that checkpoint and resume placement here.")
+        else
+            Log("Reached checkpoint " next "/3. Resume placement; recorded units remain accessible through F.")
         return true
     } finally {
         gPrepDeadline := oldDeadline,gCardAction := previous

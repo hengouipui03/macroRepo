@@ -669,8 +669,15 @@ FinishNavigationTimeout() {
 NavigateDrawing() {
     global gMapModel,gMoveKeys,gNavigationTimedOut
     gNavigationTimedOut := false
-    if gMapModel && gMapModel.source="vision" && gMoveKeys
+    if gMapModel && gMapModel.source="vision" {
+        ; Never fall back to turning the camera with the arrow keys here: that
+        ; spins the overhead view and breaks every later W/D reading.
+        if !gMoveKeys && !ProbePlayer() {
+            Log("No W/D calibration and the movement probe failed; not walking (the camera is left alone).")
+            return false
+        }
         return NavigateWithKeys()
+    }
     return NavigateByHeading()
 }
 
@@ -918,14 +925,22 @@ VisionRefreshPlayer(predicted,radius) {
 
 ProbePlayer() {
     global gMapModel,gMoveKeys,gCameraOverheadReady,LEARNING_FILE
+    ; A failed re-probe keeps the last good calibration for this map instead
+    ; of leaving the walk with no keys at all.
+    previous := gMoveKeys && gMoveKeys.HasProp("map") && gMoveKeys.map=gMapModel.id ? gMoveKeys : 0
     gMoveKeys := 0
     if !VisionSync()
-        return false
+        return RestoreMoveKeys(previous)
     section := "minimap." gMapModel.id,profile := "keys." gCameraOverheadReady
     learned := StrSplit(MemoryRead(section,profile),",")
     known := learned.Length=4 ? {w:{x:Number(learned[1]),y:Number(learned[2])},d:{x:Number(learned[3]),y:Number(learned[4])}} : 0
-    if known && !MoveAxesIndependent(known.w,known.d)
+    ; A saved reading that breaks the top-down geometry (D mirrored, skewed
+    ; or at a different speed from W) came from a bad probe: forget it.
+    if known && !MoveAxesValid(known.w,known.d) {
         known := false
+        IniDelete LEARNING_FILE,section,profile
+        Log("Saved W/D calibration for this map is impossible (D must be W turned a quarter clockwise at a similar speed); deleted it and measuring again.")
+    }
     forward := ProbeKeyPair("w","s"),side := {found:false,vector:false}
     w := forward.vector,d := false
     ; A learned map whose W movement still matches skips the D/A probe.
@@ -938,16 +953,24 @@ ProbePlayer() {
     }
     if !forward.found && !side.found {
         Log("Movement probe: no white marker moved with W/S or D/A; player not found.")
-        return false
+        return RestoreMoveKeys(previous)
     }
-    ; A blocked key can slide the player along the other axis. Keep the
-    ; stronger reading and treat the weaker axis like a blocked probe.
-    if w && d && !MoveAxesIndependent(w,d) {
-        if MapDistance(0,0,w.x,w.y)>=MapDistance(0,0,d.x,d.y)
+    ; In a top-down view D is always W turned a quarter clockwise at about the
+    ; same speed. A probe that breaks that (a blocked key sliding along the
+    ; other axis, a chevron clipped at the frame edge, another player's arrow)
+    ; is rebuilt from the trustworthy axis and never saved.
+    if w && d && !MoveAxesValid(w,d) {
+        lw := MapDistance(0,0,w.x,w.y),ld := MapDistance(0,0,d.x,d.y)
+        turn := (w.x*d.y-w.y*d.x)/(lw*ld)
+        if turn>=0.85 && ld<lw          ; right directions, D slowed by a wall
             d := false
-        else
+        else if turn>=0.85              ; right directions, W slowed by a wall
             w := false
-        Log("Movement probes followed the same axis. Estimating the blocked axis from the stronger movement.")
+        else if Abs(turn)<0.3 && ld>lw  ; both along one axis: keep the stronger
+            w := false
+        else                            ; mirrored or skewed D: trust W
+            d := false
+        Log("W/D probes break the top-down geometry (W " Round(lw,1) ", D " Round(ld,1) " cells/s, turn " Round(turn,2) "); rebuilding " (w?"D from W":"W from D") " and not saving it.")
     }
     measuredBoth := w && d
     ; One blocked axis: in a top-down view D is W turned a quarter clockwise.
@@ -957,9 +980,9 @@ ProbePlayer() {
         w := {x:d.y,y:-d.x}
     if !w {
         Log("Movement probe found the player but it did not travel; keys not calibrated.")
-        return false
+        return RestoreMoveKeys(previous)
     }
-    gMoveKeys := {w:w,d:d}
+    gMoveKeys := {w:w,d:d,map:gMapModel.id}
     if measuredBoth
         IniWrite Round(w.x,3) "," Round(w.y,3) "," Round(d.x,3) "," Round(d.y,3),LEARNING_FILE,section,profile
     Log("Player found by movement at " Round(gMapModel.player.x,1) "," Round(gMapModel.player.y,1) "; W " Round(w.x,1) "," Round(w.y,1) " D " Round(d.x,1) "," Round(d.y,1) " cells/s.")
@@ -1002,10 +1025,20 @@ MoveVectorsAgree(a,b) {
     return la && lb && (a.x*b.x+a.y*b.y)/(la*lb)>0.9 && la/lb>0.6 && la/lb<1.6
 }
 
-MoveAxesIndependent(w,d) {
-    span := MapDistance(0,0,w.x,w.y)*MapDistance(0,0,d.x,d.y)
-    ; Reject axes within about 17 degrees of being parallel in either direction.
-    return span>0 && Abs(w.x*d.y-w.y*d.x)>=0.3*span
+; D must be W turned a quarter clockwise (positive cross product in screen
+; coordinates, within about 30 degrees) and move at a similar speed. A mirrored
+; or one-sided reading is impossible in the overhead view.
+MoveAxesValid(w,d) {
+    lw := MapDistance(0,0,w.x,w.y),ld := MapDistance(0,0,d.x,d.y)
+    return lw>0 && ld>0 && (w.x*d.y-w.y*d.x)/(lw*ld)>=0.85 && ld/lw>0.6 && ld/lw<1.6
+}
+
+RestoreMoveKeys(previous) {
+    global gMoveKeys
+    gMoveKeys := previous
+    if previous
+        Log("Keeping the previous W/D calibration for this map.")
+    return false
 }
 
 ; Express a minimap displacement as W/S and D/A hold times (a 2x2 solve with
@@ -1480,7 +1513,6 @@ LearnMoveKey(press,ox,oy) {
         return
     old := gMoveKeys.%name%
     refined := {x:old.x*0.7+observed.x*0.3,y:old.y*0.7+observed.y*0.3}
-    other := name="w" ? gMoveKeys.d : gMoveKeys.w
-    if MoveAxesIndependent(refined,other)
+    if (name="w") ? MoveAxesValid(refined,gMoveKeys.d) : MoveAxesValid(gMoveKeys.w,refined)
         gMoveKeys.%name% := refined
 }

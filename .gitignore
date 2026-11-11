@@ -15,6 +15,7 @@ __pycache__/
 /placement_layouts.ini
 /placement_run.ini
 /placement_run.ini.tmp
+/button_positions.ini
 
 # Generated diagnostics and backups; keep source test fixtures tracked
 /cache/
