@@ -407,3 +407,24 @@ SelectManagedUnit(purchaseId) {
         return true
     return UnitManagerFail(HasCardChoice()?"card":"panel")
 }
+
+; The unit panel is the primary proof of a purchase. When it never showed, the
+; F manager is the fallback: one more unit than recorded flips the parity of
+; its bottom row. F is opened for this check only and closed again.
+ManagerHoldsUnrecordedUnit() {
+    global gPlacements,gRunning,gUnitManagerPhase
+    if !gRunning || gUnitManagerPhase || HasCardChoice() || IsEndGameBlocking()
+        return false
+    BeginUnitManagerPhase("The unit panel was not seen after the purchase; checking the F manager for the unit.")
+    found := false
+    try {
+        if (state := EnsureUnitManagerOpen()) && (state := ResetUnitManagerBottom(state)) {
+            seen := state.Has("lastcount")?Integer(state["lastcount"]):0
+            found := seen && seen!=(Mod(gPlacements.Length,2)?1:2)
+        }
+    } finally {
+        CloseUnitManagerIfOpen("Unit manager check done; press F once to close it.")
+        EndUnitManagerPhase()
+    }
+    return found
+}

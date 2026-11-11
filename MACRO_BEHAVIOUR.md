@@ -71,6 +71,7 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
 | No opening F during cards or the end screen. | `UnitManagerBlocked()` checks `HasCardChoice()` and `IsEndGameBlocking()` before every open attempt. The only F during cards is the single closing press above. |
 | If the game closes it, it is reopened once. | `MaintainUnitManager()` checks every 3 s in the watch loop and reopens through the same guarded `EnsureUnitManagerOpen()`. |
 | Leftover manager before placement. | `EnsureRouteAndSpawn` closes it with one F, only after two readings confirm it is open (`CloseUnitManagerIfOpen`). Left open it hid the weather and Level Modifiers at match start. F is still never used to **open** the manager before the build is complete. |
+| Purchase check when no unit panel showed. | The unit panel is the primary proof of a purchase. If it never appears (after the click and the two reselect probes), `ManagerHoldsUnrecordedUnit()` opens F once, scrolls to the bottom and compares the bottom row's tile count with the recorded build: one more unit than recorded flips its parity. If it does, the unit is recorded (`FinishPlacement(...,true)`) instead of being counted as a failed purchase and blacklisted. F is closed again afterwards; this is the only F before the build is complete. |
 
 ### Finding purchase #N (`LocateManagedUnit`)
 1. Refuse while a placement purchase is unresolved, or while a card is up (reason `card`).

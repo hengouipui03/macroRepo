@@ -730,11 +730,11 @@ CountSlotPlacements(slot) {
     return count
 }
 
-FinishPlacement(unit,point) {
+FinishPlacement(unit,point,managerConfirmed := false) {
     global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses,gLastYenRead,gPlacements
     if !point || CandidateOccupied(point.x,point.y)
         return false
-    if HasCardChoice() || !HasUnitPanel()
+    if HasCardChoice() || (!managerConfirmed && !HasUnitPanel())
         return false
     point.panelSeen := true
     if !point.HasProp("pendingSlot") || point.pendingSlot!=unit.slot
@@ -884,6 +884,11 @@ RecoverPendingPlacement(unit) {
         return false
     }
     ; Two completed selection-only probes found no model after the purchase wait.
+    ; The unit panel never showed, so the F manager decides before this is a miss.
+    if ManagerHoldsUnrecordedUnit() {
+        Log(unit.name ": no unit panel was seen, but the F manager lists the new unit; recording it.")
+        return FinishPlacement(unit,point,true)
+    }
     gPendingPlacement := 0
     RecordFailedPlacement(unit,point)
     ; Short of Yen: the spot itself was never tested, so it stays usable.

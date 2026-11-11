@@ -133,6 +133,7 @@ Assert(condition,message) {
 }
 Pending(slot,copy) => {x:400,y:330,pendingSlot:slot,pendingCopy:copy}
 IsEndGameBlocking(*) => false
+ManagerHoldsUnrecordedUnit(*) => false
 HasCardChoice(*) => cards
 HasUnitPanel(*) => panel
 CloseUnitPanel(*) {
