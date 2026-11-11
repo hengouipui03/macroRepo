@@ -12,7 +12,6 @@ __pycache__/
 /settings.ini
 /unit_settings.ini
 /card_preferences.ini
-/learning.ini
 /placement_layouts.ini
 /placement_run.ini
 /placement_run.ini.tmp
@@ -40,7 +39,5 @@ Thumbs.db
 *.7z
 
 # Ignore configuration initialization files
-*.ini
-
 # Ignore debug images
 *-debug.png
