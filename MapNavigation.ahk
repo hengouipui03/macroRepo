@@ -13,6 +13,9 @@ global gMapWalking := false, gMapSpeed := 8.0
 global VISION_PYTHON := "pythonw.exe"
 global gVision := 0, gVisionFailed := false, gMoveKeys := 0, gPathLit := false,gPathToggleClicked := false
 global gVisionRetryAt := 0
+; P clicks per attempt while the glyph stays unchanged, and the P-glyph
+; brightness change that proves a click registered.
+global PATH_TOGGLE_CLICKS := 3,PATH_TOGGLE_CHANGE := 25
 global PROBE_MS := 220, PROBE_SETTLE_MS := 140
 ; A card that appears mid-walk pauses movement: keys are released first, the
 ; card is chosen, then the walk resumes from the player's actual position.
@@ -1361,15 +1364,17 @@ EscapeObstacle(dx,dy,attempt) {
 ; are placed just outside it. W is screen-up and D screen-right overhead.
 ; -----------------------------------------------------------------------------
 
-; A toggle receives at most one click. Subsequent reads only wait for the
-; visual state to catch up; a delayed grey reading must never turn P back off.
+; A click that visibly changed the P glyph is never repeated: a delayed grey
+; reading must not turn P back off. A click that left the glyph exactly as it
+; was did not register (it landed during a transition), so P is clicked again,
+; up to PATH_TOGGLE_CLICKS in all; a later call may also try again.
 ; P is switched ON: the lit path is placement's first source (RefreshPathView)
 ; and steers walking (FollowLitPath). On maps with no lit path, P being on
 ; draws nothing, so the red no-place overlay fallback works with P left on.
-; Only the P glyph is trusted (white = on, dim = off): at most one click per
-; game, and an unread or unconfirmed state never stops the macro.
+; Only the P glyph is trusted (white = on, dim = off), and an unread or
+; unconfirmed state never stops the macro.
 EnsurePathLit() {
-    global gPathLit,REF_W,REF_H,gPathToggleClicked,gRunning
+    global gPathLit,REF_W,REF_H,gPathToggleClicked,gRunning,PATH_TOGGLE_CLICKS,PATH_TOGGLE_CHANGE
     if !gRunning
         return false
     gPathLit := false
@@ -1407,20 +1412,32 @@ EnsurePathLit() {
         return true
     }
     ; levels = P glyph, i glyph brightness: the evidence if P is misread.
-    Log("P is off (levels " reply["levels"] "); click it once to light the path.")
-    if !ClickRef(px*REF_W/cw,py*REF_H/ch)
-        return gRunning
-    gPathToggleClicked := true
-    Loop 4 {
-        if !ActionPause(700) || !GetClient(&cx,&cy,&cw,&ch)
+    Log("P is off (levels " reply["levels"] "); click it to light the path.")
+    offLevel := Number(StrSplit(reply["levels"],",")[1])
+    Loop PATH_TOGGLE_CLICKS {
+        if A_Index>1
+            Log("P glyph unchanged (levels " reply["levels"] "); the click did not register. Click P again (" A_Index "/" PATH_TOGGLE_CLICKS ").")
+        if !ClickRef(px*REF_W/cw,py*REF_H/ch)
             return gRunning
-        reply := VisionRequest(command)
-        if VisionOk(reply) && reply["on"]="1" {
-            Log("P is on; placement reads the lit path first, the red overlay only as fallback.")
-            return gPathLit := true
+        Loop 4 {
+            if !ActionPause(700) || !GetClient(&cx,&cy,&cw,&ch)
+                return gRunning
+            reply := VisionRequest(command)
+            if VisionOk(reply) && reply["on"]="1" {
+                Log("P is on; placement reads the lit path first, the red overlay only as fallback.")
+                return gPathLit := true
+            }
+        }
+        if !VisionOk(reply)
+            break
+        ; The glyph changed but does not read as lit: a toggle happened, so a
+        ; further click could turn P off again. Stop clicking for this game.
+        if Abs(Number(StrSplit(reply["levels"],",")[1])-offLevel)>=PATH_TOGGLE_CHANGE {
+            gPathToggleClicked := true
+            break
         }
     }
-    Log("P still looks off after one click (levels " (VisionOk(reply)?reply["levels"]:"unread") "); no second toggle. Placement falls back to the red overlay if no lit path shows.")
+    Log("P still looks off (levels " (VisionOk(reply)?reply["levels"]:"unread") "). Placement falls back to the red overlay if no lit path shows.")
     SaveClickMissCrop("p",600,0,800,50)
     return true
 }

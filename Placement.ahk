@@ -9,7 +9,7 @@ global gPathViewReady := false,gPathViewSavedThisGame := false
 ; measure 2.4-5% in the fixtures, maps without one read 0.
 global LIT_PATH_MIN_FRACTION := 0.01
 ; Reads in a row with neither a lit path nor a red road before giving up.
-global PATH_READ_ATTEMPTS := 3,gPathReadFailures := 0,gPathReadGaveUp := false
+global PATH_READ_ATTEMPTS := 3,gPathReadFailures := 0,gPathReadGaveUp := false,gPathRelightTried := false
 global gHillPlacementUnavailable := false
 global gPlacementAttemptClicked := false
 global FAILED_PLACEMENT_RADIUS := 28
@@ -27,9 +27,9 @@ global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),g
 
 ResetPlacementSearch() {
     global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
-    global gPathReadFailures,gPathReadGaveUp
+    global gPathReadFailures,gPathReadGaveUp,gPathRelightTried
     gPathViewReady := false,gPathViewSavedThisGame := false
-    gPathReadFailures := 0,gPathReadGaveUp := false
+    gPathReadFailures := 0,gPathReadGaveUp := false,gPathRelightTried := false
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
     gPlacementYenWait := 0,gLastYenRead := 0
@@ -1171,6 +1171,7 @@ PlaceUnit(unit) {
 ; source save the frame and give up (the build then sits the match out).
 RefreshPathView(unit) {
     global gPathViewReady,gPathViewSavedThisGame,gPathReadFailures,gPathReadGaveUp,PATH_READ_ATTEMPTS,LIT_PATH_MIN_FRACTION
+    global gPathLit,gPathRelightTried
     if gPathViewReady
         return true
     if !GetClient(&cx,&cy,&cw,&ch) || !CloseUnitPanel() || !CancelUnitPreview() || HasCardChoice()
@@ -1182,6 +1183,20 @@ RefreshPathView(unit) {
         gPathViewReady := true,gPathReadFailures := 0
         Log("Path read from the lit P path.")
         return true
+    }
+    if !gPathLit && !gPathRelightTried {
+        ; The match-start P click may not have registered: try P once more
+        ; before the red overlay (which can also fail, e.g. in a blizzard).
+        gPathRelightTried := true
+        Log("No lit P path in view and P was never confirmed on; try P again before the red overlay.")
+        if EnsurePathLit() && gPathLit && ActionPause(400) && GetClient(&cx,&cy,&cw,&ch) {
+            lit := VisionRequest("world " cx " " cy " " cw " " ch)
+            if VisionOk(lit) && Number(lit["path"])>=cw*ch*LIT_PATH_MIN_FRACTION {
+                gPathViewReady := true,gPathReadFailures := 0
+                Log("Path read from the lit P path.")
+                return true
+            }
+        }
     }
     Log("No lit P path in view; fall back to the red no-place overlay.")
     if !SelectPlacementUnit(unit)

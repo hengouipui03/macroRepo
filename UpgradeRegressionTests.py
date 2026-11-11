@@ -46,7 +46,8 @@ global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUnitManage
 global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
 global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true,dimmed := 0
 global placeTries := 0,lagMs := 0,opened := [],flashLevel := Map(),warnings := 0
-global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,gPathReadGaveUp := false
+global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,pIgnoreClicks := 0,gPathReadGaveUp := false
+global PATH_TOGGLE_CLICKS := 3,PATH_TOGGLE_CHANGE := 25
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
 global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
@@ -224,6 +225,9 @@ try {
     Assert(EnsurePathLit() && pClicks=1 && !gPathLit,"P was toggled a second time in one game")
     gPathToggleClicked := false,pVisible := false
     Assert(EnsurePathLit() && pClicks=1,"an unreadable P button was clicked")
+    ; A click that leaves the P glyph unchanged did not register: click again.
+    pVisible := true,pOn := false,gPathLit := false,pIgnoreClicks := 1
+    Assert(EnsurePathLit() && pClicks=3 && pOn && gPathLit,"an unregistered P click was not retried")
     pVisible := true,pOn := false
     panel := false
     candidate := {x:450,y:400,row:1}
@@ -454,7 +458,7 @@ VisionRequest(command) {
     if InStr(command,"toolbarfixed ")=1 {
         fixedCalls += 1
         Assert(InStr(command,"715 21"),"saved P coordinate shifted")
-        return pVisible?Map("status","ok","on",pOn?"1":"0"):false
+        return pVisible?Map("status","ok","on",pOn?"1":"0","levels",pOn?"230,85":"80,85"):false
     }
     if InStr(command,"placementvalid ")=1
         return Map("status","ok","valid",spotValid?"1":"0")
@@ -476,9 +480,13 @@ VisionRequest(command) {
     return Map("status","ok","path","100")
 }
 ClickRef(x,y,stillValid := 0) {
-    global pClicks,pOn
+    global pClicks,pOn,pIgnoreClicks
     Assert(x=715 && y=21,"P click missed the fixed coordinate")
-    pClicks += 1,pOn := !pOn
+    pClicks += 1
+    if pIgnoreClicks>0
+        pIgnoreClicks -= 1
+    else
+        pOn := !pOn
     return true
 }
 IsEndGameBlocking(*) => false
