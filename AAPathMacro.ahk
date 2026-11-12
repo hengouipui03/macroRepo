@@ -61,6 +61,7 @@ global gActivityLog := 0
 #Include QueueMatch.ahk
 #Include LearningTests.ahk
 #Include MapNavigation.ahk
+#Include PathLight.ahk
 #Include MapTests.ahk
 #Include Discord.ahk
 #Include Endgame.ahk
@@ -798,13 +799,13 @@ HoldCameraKey(key,duration,epoch) {
 }
 
 EnsureRouteAndSpawn() {
-    global gMapModel,gCameraOverheadReady,gPathToggleClicked,THREE_PATH_STAND
+    global gMapModel,gCameraOverheadReady,THREE_PATH_STAND
     ; F opens the manager only after every unit is placed. One left open from
     ; the last match hides the weather and Level Modifiers, so it is closed
     ; now (one F, only after two readings confirm it is open). The manager's
     ; own state was cleared by ResetMatchState at Vote Start.
     CloseUnitManagerIfOpen("Unit manager left open from the last match; press F once to close it before placement.")
-    gCameraOverheadReady := false,gPathToggleClicked := false
+    gCameraOverheadReady := false
     ; New match: the vision forgets the last map's path colour (yellow on Sand Village).
     VisionRequest("worldreset")
     gMapModel := VisionMapModel()
@@ -823,7 +824,7 @@ EnsureRouteAndSpawn() {
     BeginTimedPreparation()
     ; P is switched ON (placement reads the lit path first, the red overlay
     ; only as fallback). Only a stop or a lost Roblox window ends preparation.
-    if !EnsurePathLit()
+    if !EnsurePathLight("vote")
         return false
     ; Even fallback minimap detection must enable P before checking the arrow.
     if gMapModel.source!="vision" && !gMapModel.player {
@@ -1637,6 +1638,9 @@ RunMacro() {
     }
     Log("Starting ordered placement from the player along one side of the illuminated path.")
     SetPhase("Placing")
+    ; P again, now that the vote is over: a lit path must show if this map
+    ; variant is known to have one (EnsurePathLight, once-per-match off-on).
+    EnsurePathLight("placing")
     PreparePlacementMemory()
     LoadRememberedHillMisses()
     BeginPlacementRun()

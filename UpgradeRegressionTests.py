@@ -25,7 +25,10 @@ names = ["UpgradeQueue", "ResetUpgradeSelection", "ResetUpgradeTracking",
          "TileIdentityMismatch", "StableTileRead", "UpgradeOnceAction"]
 logic = "\n\n".join(function("PlacedUnits.ahk", name) for name in names)
 logic += "\n" + function("Learning.ahk", "NormalizeWords")
-logic += "\n" + function("MapNavigation.ahk", "EnsurePathLit")
+for name in ["ResetPathLight", "PathLightOn", "PathLightAction", "VariantShowsLitPath", "RecordLitPathSeen", "ReadLitPath",
+             "PathButtonTarget", "ReadPathGlyph", "ClickPathButton", "ClickUntilGlyph", "EnsurePathLight"]:
+    logic += "\n" + function("PathLight.ahk", name)
+logic += "\n" + function("Learning.ahk", "MemoryRead")
 logic += "\n" + function("Placement.ahk", "PlacementStillBesidePath")
 logic += "\n" + function("Placement.ahk", "TryPlacementCandidateAction")
 logic += "\n" + function("Placement.ahk", "TrySelectUnitAt")
@@ -53,8 +56,9 @@ global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUnitManage
 global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
 global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true,dimmed := 0
 global placeTries := 0,lagMs := 0,opened := [],flashLevel := Map(),warnings := 0
-global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,pIgnoreClicks := 0,gPathReadGaveUp := false
-global PATH_TOGGLE_CLICKS := 3,PATH_TOGGLE_CHANGE := 25
+global savedP := false,pHalf := false,pHalfState := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,pIgnoreClicks := 0,gPathReadGaveUp := false
+global PATH_CLICK_LIMIT := 3,PATH_TOGGLE_CHANGE := 25,PATH_GLYPH_POLLS := 4,PATH_GLYPH_POLL_MS := 700,LIT_PATH_MIN_FRACTION := 0.01
+global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false,LEARNING_FILE := A_ScriptDir "\\path-light-regression.ini"
 global gSlotCaps := Map(),gLookupMisses := Map(),gOpenFailures := 0,gEscalationAudits := 0,gAuditDue := false,gLastAudit := 0
 global MANAGER_LOOKUP_LIMIT := 6,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_OPEN_FAIL_LIMIT := 30,UPGRADE_DEFER_LIMIT := 40
 global BUILD_COPY_ATTEMPT_LIMIT := 40,BUILD_RELOCATE_WAIT_LIMIT := 20,HILL_RETRY_LIMIT := 12,CARD_RESUME_LIMIT := 5,gPathVisionErrors := 0,PATH_VISION_ERROR_LIMIT := 6
@@ -229,17 +233,24 @@ try {
 
     ; P must end up ON (lit path first, red overlay as fallback). Discovered
     ; once; later calls use the exact saved coordinate. Never stops the macro.
-    Assert(EnsurePathLit() && findCalls=1 && pClicks=1 && pOn && gPathLit,"dim P was not lit with one saved click")
-    gPathToggleClicked := false,gPathLit := false
-    Assert(EnsurePathLit() && findCalls=1 && pClicks=1 && gPathLit,"P already on was clicked, or its coordinate rediscovered")
-    gPathToggleClicked := true,pOn := false,gPathLit := false
-    Assert(EnsurePathLit() && pClicks=1 && !gPathLit,"P was toggled a second time in one game")
-    gPathToggleClicked := false,pVisible := false
-    Assert(EnsurePathLit() && pClicks=1,"an unreadable P button was clicked")
+    ; (PathLight.ahk: P is clicked, never pressed; the glyph verifies each click.)
+    ResetPathLight()
+    Assert(EnsurePathLight("vote") && findCalls=1 && pClicks=1 && pOn && PathLightOn(),"dim P was not lit with one saved click")
+    ResetPathLight()
+    Assert(EnsurePathLight("vote") && findCalls=1 && pClicks=1 && PathLightOn(),"P already on was clicked, or its coordinate rediscovered")
+    ; A click that changed the glyph (but it does not read lit) is never repeated in the same call:
+    ; a further click could switch P off again.
+    pOn := false,pHalf := true,ResetPathLight()
+    Assert(EnsurePathLight("vote") && pClicks=2 && !PathLightOn(),"a click that changed the P glyph was repeated (" pClicks " clicks)")
+    pHalf := false,pHalfState := false,pVisible := false,ResetPathLight()
+    Assert(EnsurePathLight("vote") && pClicks=2,"an unreadable P button was clicked")
     ; A click that leaves the P glyph unchanged did not register: click again.
-    pVisible := true,pOn := false,gPathLit := false,pIgnoreClicks := 1
-    Assert(EnsurePathLit() && pClicks=3 && pOn && gPathLit,"an unregistered P click was not retried")
-    pVisible := true,pOn := false
+    pVisible := true,pOn := false,pIgnoreClicks := 1,ResetPathLight()
+    Assert(EnsurePathLight("vote") && pClicks=4 && pOn && PathLightOn(),"an unregistered P click was not retried")
+    ; ... but at most PATH_CLICK_LIMIT clicks per call.
+    pOn := false,pIgnoreClicks := 99,ResetPathLight()
+    Assert(EnsurePathLight("vote") && pClicks=4+PATH_CLICK_LIMIT && !PathLightOn(),"P clicks were not bounded by PATH_CLICK_LIMIT")
+    pVisible := true,pOn := false,pIgnoreClicks := 0
     panel := false
     candidate := {x:450,y:400,row:1}
     a.count := 2
@@ -533,6 +544,8 @@ VisionRequest(command) {
     if InStr(command,"toolbarfixed ")=1 {
         fixedCalls += 1
         Assert(InStr(command,"715 21"),"saved P coordinate shifted")
+        if pHalfState
+            return Map("status","ok","on","0","levels","150,85")
         return pVisible?Map("status","ok","on",pOn?"1":"0","levels",pOn?"230,85":"80,85"):false
     }
     if InStr(command,"placementvalid ")=1
@@ -555,11 +568,13 @@ VisionRequest(command) {
     return Map("status","ok","path","100")
 }
 ClickRef(x,y,stillValid := 0) {
-    global pClicks,pOn,pIgnoreClicks
+    global pClicks,pOn,pIgnoreClicks,pHalf,pHalfState
     Assert(x=715 && y=21,"P click missed the fixed coordinate")
     pClicks += 1
     if pIgnoreClicks>0
         pIgnoreClicks -= 1
+    else if pHalf
+        pHalfState := true
     else
         pOn := !pOn
     return true
@@ -638,6 +653,7 @@ StopMacro(*) {
     gRunning := false
 }
 Notify(*) => 0
+SaveClickMissCrop(*) => 0
 PlaceUnit(unit) {
     global gPlacements,gHillPlacementUnavailable,placeTries
     placeTries += 1

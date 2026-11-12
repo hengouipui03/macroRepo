@@ -64,4 +64,5 @@ ResetMatchState() {
     ResetEndGameFlow()
     ResetUnitManagerState()
     ResetBuildAudit()
+    ResetPathLight()
 }

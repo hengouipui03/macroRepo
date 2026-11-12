@@ -11,11 +11,8 @@ global gMapWalking := false, gMapSpeed := 8.0
 ; MinimapVision.py reads the minimap; AHK keeps all input. gMoveKeys holds the
 ; measured minimap movement (grid units/second) of W and D in overhead view.
 global VISION_PYTHON := "pythonw.exe"
-global gVision := 0, gVisionFailed := false, gMoveKeys := 0, gPathLit := false,gPathToggleClicked := false
+global gVision := 0, gVisionFailed := false, gMoveKeys := 0
 global gVisionRetryAt := 0
-; P clicks per attempt while the glyph stays unchanged, and the P-glyph
-; brightness change that proves a click registered.
-global PATH_TOGGLE_CLICKS := 3,PATH_TOGGLE_CHANGE := 25
 global PROBE_MS := 220, PROBE_SETTLE_MS := 140
 ; A card that appears mid-walk pauses movement: keys are released first, the
 ; card is chosen, then the walk resumes from the player's actual position.
@@ -1182,7 +1179,7 @@ TakeMovementCardMs() {
 }
 
 NavigateWithKeys() {
-    global gMapModel,gRunning,gMapWalking,gMoveKeys,gPathLit,MAP_GRID,gMovementInterrupted
+    global gMapModel,gRunning,gMapWalking,gMoveKeys,MAP_GRID,gMovementInterrupted
     if !gMapModel.player || gMapModel.target<0
         return false
     gMovementInterrupted := false,TakeMovementCardMs()
@@ -1250,7 +1247,7 @@ NavigateWithKeys() {
                 Log("Measured W and D movements are parallel; cannot steer.")
                 return false
             }
-            if gPathLit && !(directStand && stand.HasProp("minimapOnly"))
+            if PathLightOn() && !(directStand && stand.HasProp("minimapOnly"))
                 presses := FollowLitPath(presses)
             expected := MovePrediction(presses,gMoveKeys),before := {x:p.x,y:p.y}
             if !HoldKeys(presses) || !MovementPause(90)
@@ -1364,83 +1361,7 @@ EscapeObstacle(dx,dy,attempt) {
 ; are placed just outside it. W is screen-up and D screen-right overhead.
 ; -----------------------------------------------------------------------------
 
-; A click that visibly changed the P glyph is never repeated: a delayed grey
-; reading must not turn P back off. A click that left the glyph exactly as it
-; was did not register (it landed during a transition), so P is clicked again,
-; up to PATH_TOGGLE_CLICKS in all; a later call may also try again.
-; P is switched ON: the lit path is placement's first source (RefreshPathView)
-; and steers walking (FollowLitPath). On maps with no lit path, P being on
-; draws nothing, so the red no-place overlay fallback works with P left on.
-; Only the P glyph is trusted (white = on, dim = off), and an unread or
-; unconfirmed state never stops the macro.
-EnsurePathLit() {
-    global gPathLit,REF_W,REF_H,gPathToggleClicked,gRunning,PATH_TOGGLE_CLICKS,PATH_TOGGLE_CHANGE
-    if !gRunning
-        return false
-    gPathLit := false
-    if !GetClient(&cx,&cy,&cw,&ch)
-        return false
-    geometry := WindowGeometry()
-    if !geometry
-        return false
-    saved := ReadButtonRecord("PathToggle",geometry)
-    if !saved {
-        ; Discover once per window profile, then persist the exact coordinate.
-        reply := VisionRequest("toolbar " cx " " cy " " cw " " ch)
-        if VisionOk(reply) {
-            point := StrSplit(reply["p"],",")
-            saved := {x:geometry.cx-geometry.x+Number(point[1]),y:geometry.cy-geometry.y+Number(point[2])}
-        } else {
-            ButtonPosition("PathToggle",&rx,&ry)
-            saved := {x:geometry.cx-geometry.x+rx*cw/REF_W,y:geometry.cy-geometry.y+ry*ch/REF_H}
-        }
-        SaveButtonRecord("PathToggle",saved,geometry,"fixed P coordinate")
-    }
-    px := saved.x-(geometry.cx-geometry.x),py := saved.y-(geometry.cy-geometry.y)
-    command := "toolbarfixed " cx " " cy " " cw " " ch " " px " " py
-    reply := VisionRequest(command)
-    if !VisionOk(reply) {
-        Log("P button unreadable; leaving P as it is. Placement still tries the lit path first.")
-        return true
-    }
-    if reply["on"]="1" {
-        Log("P is on; placement reads the lit path first, the red overlay only as fallback.")
-        return gPathLit := true
-    }
-    if gPathToggleClicked {
-        Log("P still looks off, but it was already clicked this game; no second toggle.")
-        return true
-    }
-    ; levels = P glyph, i glyph brightness: the evidence if P is misread.
-    Log("P is off (levels " reply["levels"] "); click it to light the path.")
-    offLevel := Number(StrSplit(reply["levels"],",")[1])
-    Loop PATH_TOGGLE_CLICKS {
-        if A_Index>1
-            Log("P glyph unchanged (levels " reply["levels"] "); the click did not register. Click P again (" A_Index "/" PATH_TOGGLE_CLICKS ").")
-        if !ClickRef(px*REF_W/cw,py*REF_H/ch)
-            return gRunning
-        Loop 4 {
-            if !ActionPause(700) || !GetClient(&cx,&cy,&cw,&ch)
-                return gRunning
-            reply := VisionRequest(command)
-            if VisionOk(reply) && reply["on"]="1" {
-                Log("P is on; placement reads the lit path first, the red overlay only as fallback.")
-                return gPathLit := true
-            }
-        }
-        if !VisionOk(reply)
-            break
-        ; The glyph changed but does not read as lit: a toggle happened, so a
-        ; further click could turn P off again. Stop clicking for this game.
-        if Abs(Number(StrSplit(reply["levels"],",")[1])-offLevel)>=PATH_TOGGLE_CHANGE {
-            gPathToggleClicked := true
-            break
-        }
-    }
-    Log("P still looks off (levels " (VisionOk(reply)?reply["levels"]:"unread") "). Placement falls back to the red overlay if no lit path shows.")
-    SaveClickMissCrop("p",600,0,800,50)
-    return true
-}
+; (The P button itself, EnsurePathLight, lives in PathLight.ahk.)
 
 WorldRequest(line := "") {
     if !GetClient(&cx,&cy,&cw,&ch)

@@ -1,7 +1,7 @@
 ﻿# AA Path Macro
 
 Keep this folder together. Run AAPathMacro.ahk with AutoHotkey v2. The runtime
-files are UnitSettings.ahk, Placement.ahk, PlacementArea.ahk, PlacedUnits.ahk, Learning.ahk, CardContext.ahk, MapNavigation.ahk, Discord.ahk, Endgame.ahk, MinimapVision.py,
+files are UnitSettings.ahk, Placement.ahk, PlacementArea.ahk, PlacedUnits.ahk, Learning.ahk, CardContext.ahk, MapNavigation.ahk, PathLight.ahk, BuildAudit.ahk, Discord.ahk, Endgame.ahk, MinimapVision.py,
 OCRBridge.ps1 and button_positions.ini (settings.ini holds the Discord webhook
 once saved); LearningTests.ahk, MapTests.ahk, MinimapVisionTests.py,
 minimap-fixture.mapframe, minimap-screenshot.png, path-world-screenshot.png,
@@ -65,7 +65,7 @@ used instead.
   size/DPI and reused across runs. Only the first unsaved view locates the glyph;
   if that fails, the static coordinate in button_positions.ini is used and saved.
   P is grey when off and white when on; brightness is read at the saved point,
-  and it is clicked at most once. P is the leftmost glyph of the P/i/FX/heart
+  and P is clicked (never pressed as a key: the key does nothing) by PathLight.ahk at Vote Start and again when placing starts, verified by the glyph, at most 3 clicks per check and never again once a click changed the glyph. When a lit path is read, the minimap variant is marked lit_path=1 in learning.ini; on such a variant with P on and no lit path at the start of placing, P is switched off and on once per match. P is the leftmost glyph of the P/i/FX/heart
   pill (FX can show as separate F and X), never the i next to it. Once the player is on or next to the lit
   band (or it lies straight ahead), each move keeps the minimap plan's length
   but aims at where the band crosses a circle around the player, so the player

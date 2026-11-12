@@ -5,11 +5,9 @@ global gPlacementUp := {x:0,y:0}
 ; True once the path (lit P path, else the red no-place overlay) has been
 ; read for the current view.
 global gPathViewReady := false,gPathViewSavedThisGame := false
-; A lit path counts once it covers this share of the client: real lit paths
-; measure 2.4-5% in the fixtures, maps without one read 0.
-global LIT_PATH_MIN_FRACTION := 0.01
+; (LIT_PATH_MIN_FRACTION and the P button live in PathLight.ahk.)
 ; Reads in a row with neither a lit path nor a red road before giving up.
-global PATH_READ_ATTEMPTS := 3,gPathReadFailures := 0,gPathReadGaveUp := false,gPathRelightTried := false
+global PATH_READ_ATTEMPTS := 3,gPathReadFailures := 0,gPathReadGaveUp := false
 ; Vision errors (no answer at all) in a row; counted apart from empty reads.
 global gPathVisionErrors := 0
 global gHillPlacementUnavailable := false
@@ -44,10 +42,10 @@ global HOTBAR_COUNTER_Y_MIN := 510,HOTBAR_COUNTER_Y_MAX := 535
 
 ResetPlacementSearch() {
     global gPlacementYenWait,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
-    global gPathReadFailures,gPathReadGaveUp,gPathRelightTried,gPathVisionErrors
+    global gPathReadFailures,gPathReadGaveUp,gPathVisionErrors
     gPathViewReady := false,gPathViewSavedThisGame := false
     gPathVisionErrors := 0
-    gPathReadFailures := 0,gPathReadGaveUp := false,gPathRelightTried := false
+    gPathReadFailures := 0,gPathReadGaveUp := false
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
     gPlacementYenWait := 0
@@ -1215,33 +1213,21 @@ PlaceUnit(unit) {
 ; rescan or a moved view. PATH_READ_ATTEMPTS reads in a row with neither
 ; source save the frame and give up (the build then sits the match out).
 RefreshPathView(unit) {
-    global gPathViewReady,gPathViewSavedThisGame,gPathReadFailures,gPathReadGaveUp,PATH_READ_ATTEMPTS,LIT_PATH_MIN_FRACTION
-    global gPathLit,gPathRelightTried,gPathVisionErrors,PATH_VISION_ERROR_LIMIT
+    global gPathViewReady,gPathViewSavedThisGame,gPathReadFailures,gPathReadGaveUp,PATH_READ_ATTEMPTS
+    global gPathVisionErrors,PATH_VISION_ERROR_LIMIT
     if gPathViewReady
         return true
     if !GetClient(&cx,&cy,&cw,&ch) || !CloseUnitPanel() || !CancelUnitPreview() || HasCardChoice()
         return false
     ; Drop any earlier red view first, or the lit read would just return it.
     VisionRequest("pathviewclear")
-    lit := VisionRequest("world " cx " " cy " " cw " " ch)
-    if VisionOk(lit) && Number(lit["path"])>=cw*ch*LIT_PATH_MIN_FRACTION {
+    ; ReadLitPath (PathLight.ahk) also learns that this minimap variant shows
+    ; a lit path. P itself was checked by EnsurePathLight("placing") before the
+    ; first placement; it is not toggled here.
+    if ReadLitPath() {
         gPathViewReady := true,gPathReadFailures := 0
         Log("Path read from the lit P path.")
         return true
-    }
-    if !gPathLit && !gPathRelightTried {
-        ; The match-start P click may not have registered: try P once more
-        ; before the red overlay (which can also fail, e.g. in a blizzard).
-        gPathRelightTried := true
-        Log("No lit P path in view and P was never confirmed on; try P again before the red overlay.")
-        if EnsurePathLit() && gPathLit && ActionPause(400) && GetClient(&cx,&cy,&cw,&ch) {
-            lit := VisionRequest("world " cx " " cy " " cw " " ch)
-            if VisionOk(lit) && Number(lit["path"])>=cw*ch*LIT_PATH_MIN_FRACTION {
-                gPathViewReady := true,gPathReadFailures := 0
-                Log("Path read from the lit P path.")
-                return true
-            }
-        }
     }
     Log("No lit P path in view; fall back to the red no-place overlay.")
     if !SelectPlacementUnit(unit)
