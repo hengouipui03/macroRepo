@@ -57,7 +57,8 @@ SaveLayoutPoint(item) {
     IniWrite gMapModel.id,PLACEMENT_LAYOUT_FILE,section,"map_id"
 }
 
-RegisterPlacedUnit(unit,point) {
+; evidence names what proved the purchase (slot counter, Yen drop or unit panel).
+RegisterPlacedUnit(unit,point,evidence) {
     global gPlacements
     if CandidateOccupied(point.x,point.y) {
         Log("Existing recorded position rejected; slot " unit.slot " count unchanged.")
@@ -75,7 +76,7 @@ RegisterPlacedUnit(unit,point) {
     RememberPlacement(unit,point,true)
     SaveLayoutPoint(item)
     SavePlacementRun()
-    Log("Placed #" item.id " " item.name " at " item.x "," item.y "; priority " item.priority "; unit panel confirmed.")
+    Log("Placed #" item.id " " item.name " at " item.x "," item.y "; priority " item.priority "; confirmed by " evidence ".")
     return item
 }
 

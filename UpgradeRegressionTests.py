@@ -373,6 +373,7 @@ Log(message,*) {
 ClearCardChoice(*) => true
 SaveUpgradeDiagnostic(*) => 0
 PlacementShortOfYen(*) => false
+ReadPurchaseState(*) => {yen:-1,cost:0,counter:false}
 WaitForPlacementYen(*) => false
 TeleportBackToSpawn(*) {
     global teleports

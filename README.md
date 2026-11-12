@@ -124,8 +124,9 @@ auto-started by arrival, the macro proceeds from the mapped destination.
 Placement begins at the closest suitable point beside the illuminated path
 near the player, then follows one continuous side of that path in adjacent
 steps. Cursor movement is smooth, including between placement attempts and
-when closing unit panels. Each attempt presses the configured slot, then sends one left click and
-waits up to 0.8 seconds for the unit panel;
+when closing unit panels. Each attempt presses the configured slot, reads the slot's
+"n/max" counter and the Yen while holding the unit (no click when Yen is short), sends
+one left click and reads the counter and Yen again to see whether it bought a unit;
 a miss pauses briefly before moving to the next neighbouring spot. A confirmed
 unit is recorded for upgrades, and the next unit starts at the next free spot
 beside that unit on the same line. A rescan continues beside the newest edge
@@ -151,7 +152,7 @@ first-row anchor. Hill and Money units are never anchors. A successful opposite-
 around the screen, or fall back to unrelated ground when the nearby line ends.
 Failed placement coordinates are remembered in memory for the current game,
 across copies, slots, card interruptions and rescans. After an actual placement
-click finishes without a unit-panel confirmation, that ground/Hill coordinate
+click is refused (the slot counter did not rise), that ground/Hill coordinate
 and its surrounding 14-reference-pixel-radius area are skipped for the rest
 of the game. This blocks neighbouring grid points and coordinate jitter, not
 just exact coordinate repeats.
@@ -198,11 +199,13 @@ spot cannot toggle placement off and turn the following click into unit selectio
 The old unit panel must be closed before each new placement click. Counts
 advance from newly registered placements, with per-slot confirmed/target logs;
 before buying, a selection-only click rejects spots which already open an
-existing model. Each purchase is bound to its slot and next copy number. The side unit panel
-appearing after that purchase confirms placement; placement does not read or
-require UPG 0. Panels obscured by cards never count.
-After cards close, one shared recovery function reselects the exact pending
-position without buying again, then verifies that purchase before recording it.
+existing model. Each purchase is bound to its slot and next copy number. The slot counter
+(then the Yen drop, then a side panel with no recorded unit nearby) confirms placement;
+the panel alone never does, and placement does not read or require UPG 0. Panels
+obscured by cards never count. After cards close, one shared recovery function probes
+the same evidence for the exact pending purchase, without clicking the field or buying
+again, then records it. A purchase that stays unknown after a few probes counts as a failed
+attempt without blacklisting its spot (see MACRO_BEHAVIOUR.md).
 duplicate recorded coordinates and a panel open before the click do not count. Every confirmed placement cancels
 the preview and clicks empty game space above/outside the card area to dismiss
 the unit panel, including when cards overlap it. Cards pause placement and restore

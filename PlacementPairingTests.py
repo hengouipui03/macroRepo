@@ -146,7 +146,7 @@ TryPlacementCandidate(unit,point) {
     gPlacementAttemptClicked := true,tried.Push(point)
     if point.row=2 ? (partnerWall.Has(point.anchor) && partnerWall[point.anchor]) : (point.x=420 && wall.Has(point.index) && wall[point.index])
         return false
-    RegisterPlacedUnit(unit,point)
+    RegisterPlacedUnit(unit,point,"test")
     if point.HasProp("index") && !(unit.HasProp("money") && unit.money)
         gLastPlacedIndex := point.index,gPlacementPreferredSide := point.side
     return true

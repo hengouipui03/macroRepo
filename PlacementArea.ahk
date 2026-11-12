@@ -36,11 +36,8 @@ RecordFailedPlacement(unit,point) {
         || (point.HasProp("failureCounted") && point.failureCounted)
         return false
     point.failureCounted := true
-    ; Not enough Yen is not a bad spot: do not count it.
-    if PlacementShortOfYen(unit) {
-        point.yenShort := true
-        return false
-    }
+    ; Yen was checked before the click (PlacementShortOfYen), so a purchase that
+    ; did not go through is a real failure.
     PlacementCopyFailures(unit,true)
     return true
 }

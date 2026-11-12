@@ -51,6 +51,7 @@ global gActivityLog := 0
 #Include MatchState.ahk
 #Include UnitSettings.ahk
 #Include Placement.ahk
+#Include PurchaseVerifier.ahk
 #Include PlacementArea.ahk
 #Include UnitManager.ahk
 #Include PlacedUnits.ahk
