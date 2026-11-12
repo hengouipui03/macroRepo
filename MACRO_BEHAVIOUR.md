@@ -11,7 +11,7 @@ to the live Roblox client area at run time. Roblox is sized to 1401 x 975 outer 
 | File | Role |
 |---|---|
 | `AAPathMacro.ahk` | Entry point, GUI, hotkeys, input primitives, colour helpers, card detection/choice, lobby/vote flow, the match state machine (`RunMacro`), idle keep-alive, self-tests. |
-| `MatchState.ahk` | The one owner of the match phase (`gPhase`: Idle, Lobby, Preparing, Placing, Upgrading, Ended) and of the per-match reset. `SetPhase`, `InPhase`, `ResetMatchState`. |
+| `MatchState.ahk` | The one owner of the match phase (`gPhase`: Idle, Lobby, Preparing, Placing, Upgrading, Watching, Ended) and of the per-match reset. `SetPhase`, `InPhase`, `ResetMatchState`, `EndRun`. |
 | `UnitSettings.ahk` | Six unit slots (enabled, name, count, priority, target, Hill only / Hybrid / Money, mutually exclusive) saved to `unit_settings.ini`. |
 | `MapNavigation.ahk` | Minimap reading (Python vision or AHK fallback), route graph, checkpoints, player probing, movement, obstacle escape, P (path light) toggle. |
 | `Placement.ahk` | Placement candidates, purchase clicks, unit-panel detection, click-away, pending-purchase recovery, the build loop. |
@@ -45,7 +45,7 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
   ├─ PlaceConfiguredBuild           every enabled slot × count, cards handled throughout, NO upgrades, NO F
   ├─ BeginUnitManagerPhase (phase Upgrading) + EnsureUnitManagerOpen      ← the FIRST time F can be pressed
   └─ Watch loop until the match ends:
-        cards → ClearCardChoice
+        cards → ClearCardChoice (a timeout is logged and the loop carries on; it never ends the run)
         end screen → TryEndState (phase Ended; Next, rewards, Replay) → return "replay"
         RefreshMatchModifiers, MaintainUnitManager, UpgradePriorityPass, IdleKeepAliveTick
 ```
@@ -65,8 +65,8 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
 
 | Rule | How it is enforced |
 |---|---|
-| F is pressed **only after every configured unit is placed**. | The match phase is not `Upgrading` until `RunMacro` calls `BeginUnitManagerPhase()` (which is `SetPhase("Upgrading")` plus the manager's own reset) after `PlaceConfiguredBuild` returns `complete`. `PressUnitManagerKey()` refuses to send F to open the manager unless `UnitManagerActive()` (phase `Upgrading` and not every target done) holds. The only exception is the temporary unit-panel fallback below, which does not change the phase. Placement, relocation and route preparation no longer touch F at all. |
-| Once open, it **stays open while upgrades remain**, except during card choice. | Unit switching, finished targets, paused units and idle clicks never close it. **Once every upgrade target is reached** the watch loop closes it once (`CloseUnitManagerIfOpen`, F only after two readings confirm it is open) and calls `EndUnitManagerPhase()` (the phase stays `Upgrading`; the manager's "finished" latch keeps F shut), so it stays closed; a target raised in the GUI mid-match opens it again. **Cards:** `CloseUnitManagerForCards()` presses F only if two readings agree the manager is open (at most twice), and the cards are read only after two readings in a row confirm it is **closed**. The open manager covers the right-hand card. When the card screen is gone, `ReopenUnitManagerAfterCards()` reopens it through the guarded `EnsureUnitManagerOpen()` and resets the upgrade selection, so the top-priority unit is reselected through the manager before any R. |
+| F is pressed **only after every configured unit is placed**. | The match phase is not `Upgrading` until `RunMacro` calls `BeginUnitManagerPhase()` (which is `SetPhase("Upgrading")` plus the manager's own reset) after `PlaceConfiguredBuild` returns `complete`. `PressUnitManagerKey(action)` is the only code that sends F. `"open"` is refused unless `InPhase("Upgrading")` (`UnitManagerActive()` is exactly that); `"close"` is allowed in any phase, and callers send it only after two readings confirm the manager is open. There is no exception: the old F-manager purchase fallback is gone. Placement, relocation and route preparation never touch F. |
+| Once open, it **stays open while upgrades remain**, except during card choice. | Unit switching, finished targets, paused units and idle clicks never close it. **Once every upgrade target is reached** the watch loop closes it once (`CloseUnitManagerIfOpen`, F only after two readings confirm it is open) and calls `EndUnitManagerPhase()` (phase `Watching`: every target reached, F closed, watching for the end screen), so it stays closed; a target raised in the GUI mid-match opens it again. **Cards are phase-aware:** `CloseUnitManagerForCards()` presses F (to close) only if two readings agree the manager is open (at most twice), and the cards are read only after two readings in a row confirm it is **closed**. The open manager covers the right-hand card. In `Upgrading` the close is remembered, and when the card screen is gone `ReopenUnitManagerAfterCards()` reopens it through the guarded `EnsureUnitManagerOpen()` and resets the upgrade selection, so the top-priority unit is reselected through the manager before any R. In `Placing` (and every other phase) a manager that reads open is a leftover and is only closed; F is never reopened after the cards and the pending purchase resumes without F. **Card timeout:** a card still open after `CARD_CHOICE_TIMEOUT_MS` (20 s) logs "Card choice still open after 20s; the game's vote timer will pick; continuing."; `ClearCardChoice` returns false so the caller takes no action over the open card, and no caller ends the run for it. |
 | Click-aways never hit the manager. | The click-away point moved from (740,150), which is on top of the open manager, to **(497,168)**: empty world between "Return to lobby" and the manager's left edge, above the cards and right of the side unit panel. It is `CLICK_AWAY_X/Y` in `AAPathMacro.ahk`. |
 | F is never sent on a guess. | `EnsureUnitManagerOpen()` presses F only after **3 consecutive "closed" readings**. Failed or unreadable frames reset the count. F is not repeated within **2.5 s** of the last press, so it cannot fire again while the manager is still animating open. |
 | "Open" means the real manager. | Vision (`unit_manager`) only accepts the yellow "Unit Overview" heading when it is a thin text line on the manager's dark panel. Bright yellow scenery in that corner (Sand Village's path) once read as "open": F was skipped after placement and after cards, then pressed during the next card, opening the manager over the right card. |
@@ -74,7 +74,7 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
 | No opening F during cards or the end screen. | `UnitManagerBlocked()` checks `HasCardChoice()` and `IsEndGameBlocking()` before every open attempt. The only F during cards is the single closing press above. |
 | If the game closes it, it is reopened once. | `MaintainUnitManager()` checks every 3 s in the watch loop and reopens through the same guarded `EnsureUnitManagerOpen()`. |
 | Leftover manager before placement. | `EnsureRouteAndSpawn` closes it with one F, only after two readings confirm it is open (`CloseUnitManagerIfOpen`). Left open it hid the weather and Level Modifiers at match start. F is still never used to **open** the manager before the build is complete. |
-| Purchase check when no unit panel showed. | The unit panel is the primary proof of a purchase. If it never appears (after the click and the two reselect probes), `ManagerHoldsUnrecordedUnit()` opens F once, scrolls to the bottom and compares the bottom row's tile count with the recorded build: one more unit than recorded flips its parity. If it does, the unit is recorded (`FinishPlacement(...,true)`) instead of being counted as a failed purchase and blacklisted. F is closed again afterwards; this is the only F before the build is complete. |
+| F never confirms a purchase. | The old fallback that opened F during placement and compared the bottom row's parity (`ManagerHoldsUnrecordedUnit`, which recorded ghost units) was removed. |
 
 ### Finding purchase #N (`LocateManagedUnit`)
 1. Refuse while a placement purchase is unresolved, or while a card is up (reason `card`).
@@ -228,7 +228,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `ReadUnitPlan` | Snapshot of the six slots. |
 | `ResetIdleKeepAlive`, `IdleKeepAliveAllowed`, `IdleKeepAliveTick` | 5-minute keep-alive at the manager-safe point. |
 | `NavigateForPlacement` | Navigation, then the timeout rule. |
-| `RunMacro` | The match state machine (§2). Sets the phases Lobby, Preparing, Placing and Upgrading; calls `ResetMatchState` at Vote Start. |
+| `RunMacro` | The match state machine (§2). Sets the phases Lobby, Preparing, Placing and Upgrading; calls `ResetMatchState` at Vote Start. Every exit goes through `EndRun(reason)` (logs the reason, phase Idle) or returns "replay"/"restart". |
 | `PrepareRunStart` | The start steps F6 and the post-reconnect restart share: Roblox found, sized, attached, focused, mode read, `gRunning` on. |
 | `StartMacro`, `StopMacro`, `RunMacroSafely`, `TestRoutePreparation`, `ReleaseMovementKeys` | Run control. `StartMacro` arms the session (`gSessionArmed`), `StopMacro` disarms it; stop and a run that ends by itself set the phase to Idle. |
 | `CheckDisconnect`, `FindReconnectButton`, `ReconnectAndRestart` | Disconnect recovery, gated on `gSessionArmed` (see §7). |
@@ -237,11 +237,11 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 ### UnitManager.ahk
 | Function | What it does |
 |---|---|
-| `BeginUnitManagerPhase` / `EndUnitManagerPhase` | Enter the Upgrading phase and reset the manager's state / reset it and latch "finished" after the last upgrade target (F stays shut until a target is raised). |
-| `ResetUnitManagerState`, `UnitManagerActive` | The module's per-match reset (called by `ResetMatchState`); true while the phase is Upgrading and not finished. |
+| `BeginUnitManagerPhase` / `EndUnitManagerPhase` | Enter the Upgrading phase and reset the manager's state / reset it and enter Watching after the last upgrade target (F stays shut until a target is raised). |
+| `ResetUnitManagerState`, `UnitManagerActive` | The module's per-match reset (called by `ResetMatchState`); true exactly while the phase is Upgrading. |
 | `ReadUnitManager` | Vision `unitmanager`: open, ready, rows, pitch, bottom-row count, entries (portrait and Upg click points, lit/total segments, Max, portrait colours). |
 | `FocusUnitManagerGame` | Focus Roblox before F or scrolling. |
-| `PressUnitManagerKey` | One F tap. Opening is refused unless the manager is wanted (`UnitManagerMayOpen`); closing is allowed any time. Records the press time. |
+| `PressUnitManagerKey` | One F tap. Takes `"open"` or `"close"`. Opening is refused unless `InPhase("Upgrading")`; closing is allowed in any phase. Records the press time. |
 | `UnitManagerBlocked` | True while a card or end screen is showing. `fresh` re-reads the end screen first (used right before an opening F, because the end screen's XP panel covers the manager and reads as "closed"). Manager scrolling stops as soon as it is true. |
 | `EnsureUnitManagerOpen` | Return the open manager. Press F once only after 3 closed reads, 2.5 s cooldown, 20 s lock after 2 unconfirmed presses. |
 | `MaintainUnitManager` | Every 3 s in the watch loop, reopen the manager if the game closed it. |
@@ -344,7 +344,8 @@ Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `
 - `CheckpointManagerTests.py`: manager selection through 20/19/1-unit layouts. Exactly **one F for the whole match**, **no F before placement**, one F to reopen a closed manager, and the misread guard (2 presses at most).
 - `UpgradeRegressionTests.py`: finite targets and input guards. A missed selection is retried at the same priority before deferral, and no upgrades/F happen before the build is complete.
 - `LearningTests.ahk` (`--self-test`): card policy. Shared resist beats sole 100/75/25, the reported screenshot picks green Range, pixel-only green is found in each position, the reported loss (230% Health, Health +200 offered) now takes resist, the 300/150/2% caps, and Level Modifiers parsing that ignores card wording.
-- `MatchStateTests.py`: `SetPhase`/`InPhase` transitions and invalid-phase rejection, `ResetMatchState` calls every module reset once; `CheckDisconnect` with `gRunning` false and `gSessionArmed` true reads the dialog and never sets `gRunning`, and does nothing after F7.
+- `CardPhaseTests.py`: F opens only in Upgrading and closes in any phase; cards per phase (Placing: no F, leftover manager only closed; Upgrading: close then reopen, unit reselected; Watching: no F); the card timeout logs and returns without ending the run; `RunMacro` has no bare `return` and no `if !ClearCardChoice() return`.
+- `MatchStateTests.py`: `SetPhase`/`InPhase` transitions (including Watching) and invalid-phase rejection, `EndRun` logs its reason and goes Idle, `ResetMatchState` calls every module reset once; `CheckDisconnect` with `gRunning` false and `gSessionArmed` true reads the dialog and never sets `gRunning`, and does nothing after F7.
 - `CardPriorityTests.py`, `UnitManagerVisionTests.py`, and the existing placement/vision tests.
 - The AHK tests need `C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe`.
 

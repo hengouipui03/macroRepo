@@ -1050,6 +1050,10 @@ CardColourKind(rect) {
     return "unknown"
 }
 
+; A card choice that stays open this long is left to the game's own vote timer
+; (it auto-picks); the run continues instead of ending.
+global CARD_CHOICE_TIMEOUT_MS := 20000
+
 CheckCardInterruption() {
     global gRunning,gCardHandling,gCardAction,gCardPollAt,gCardInterruptEpoch
     global gPendingPlacement,gPlacementActiveUnit
@@ -1082,7 +1086,7 @@ ClearCardChoice() {
 }
 
 ClearCardChoiceAction() {
-    global gRunning,gCardSelection,gUnitManagerClosedForCards
+    global gRunning,gCardSelection,gUnitManagerClosedForCards,CARD_CHOICE_TIMEOUT_MS
     if !HasCardChoice() {
         if !gCardSelection {
             if gUnitManagerClosedForCards && WaitForCardChoiceClosed()
@@ -1106,7 +1110,7 @@ ClearCardChoiceAction() {
         return false
     CloseUnitPanelForCards()
     Log("Card choice is open; choosing before continuing.")
-    deadline := A_TickCount+20000
+    deadline := A_TickCount+CARD_CHOICE_TIMEOUT_MS
     while gRunning && A_TickCount<deadline {
         if HasCardChoice()
             TryChooseCard()
@@ -1117,6 +1121,11 @@ ClearCardChoiceAction() {
         }
         ActionPause(150)
     }
+    ; Not cleared. A timeout is not a stop: the caller gets false (so it takes
+    ; no game action over the open card) and its loop carries on; only !gRunning
+    ; ends a run.
+    if gRunning
+        Log("Card choice still open after " Round(CARD_CHOICE_TIMEOUT_MS/1000) "s; the game's vote timer will pick; continuing.")
     return false
 }
 
@@ -1557,7 +1566,7 @@ RunMacro() {
         if !WaitForReplayVoteStart() {
             outcome := RecoverVoteStart()
             if outcome!="vote"
-                return outcome
+                return ResultOrEndRun(outcome,"Vote Start was not recovered after Replay (stopped, disconnected, or nothing to act on).")
         }
     } else {
         submittedAt := 0,voteVisible := HasVoteStart()
@@ -1565,18 +1574,18 @@ RunMacro() {
             if !returningToLobby && IsEndGameBlocking() {
                 if TryEndState()
                     return "replay"
-                return
+                return EndRun("The end screen was not handled (stopped or no Replay option).")
             }
             if !returningToLobby && !HasLobbyPlay() && GetMiniMapRoutePoints().Length>=8 {
                 Notify("Match already running. A fresh Vote Start is required for a new build.")
-                return
+                return EndRun("A match is already running; a fresh Vote Start is required for a new build.")
             }
             SetPhase("Lobby")
             submittedAt := TryStartFromLobby(returningToLobby)
             if !submittedAt && (!gRunning || !gQueueMode) {
                 if gRunning
                     Notify("Could not find the lobby Play flow. Teach LobbyPlay with F10 if OCR cannot read it.")
-                return
+                return EndRun(gRunning?"Could not find the lobby Play flow.":"Stopped while starting from the lobby.")
             }
         }
         if returningToLobby && gRunning
@@ -1586,12 +1595,12 @@ RunMacro() {
             if (!voteVisible && !submittedAt) || !WaitForQueuedMatch(submittedAt) {
                 outcome := RecoverVoteStart(true)
                 if outcome!="vote"
-                    return outcome
+                    return ResultOrEndRun(outcome,"The queued match did not reach Vote Start (stopped, disconnected, or nothing to act on).")
             }
         } else if !WaitForVoteStart(45000) {
             outcome := RecoverVoteStart()
             if outcome!="vote"
-                return outcome
+                return ResultOrEndRun(outcome,"Vote Start was not seen and recovery ended without a result.")
         }
     }
     ; Only a fresh Vote Start releases the old endgame state. The map is
@@ -1602,14 +1611,14 @@ RunMacro() {
     gMatchReported := false
     ReadMatchConditions()
     if !EnsureRouteAndSpawn()
-        return SitOutMatch("Minimap preparation stopped. The Activity tab and minimap-debug.png show the missing signal.")
+        return ResultOrEndRun(SitOutMatch("Minimap preparation stopped. The Activity tab and minimap-debug.png show the missing signal."),"Minimap preparation stopped and the match was sat out until stopped.")
     Notify("Following the green minimap route into position.")
     if !NavigateForPlacement()
-        return SitOutMatch("Navigation to the placement area failed.")
+        return ResultOrEndRun(SitOutMatch("Navigation to the placement area failed."),"Navigation to the placement area failed and the match was sat out until stopped.")
     if !TryVoteStart() {
         if !gRunning
-            return
-        return SitOutMatch("Vote Start stayed open for over a minute after clicking Yes.")
+            return EndRun("Stopped while waiting for the vote to close.")
+        return ResultOrEndRun(SitOutMatch("Vote Start stayed open for over a minute after clicking Yes."),"Vote Start stayed open and the match was sat out until stopped.")
     }
     ; If the vote obscured the weather, read the panel once more before buying.
     if !gMatchWeather && !gMapModel.HasProp("standPoint") {
@@ -1620,7 +1629,7 @@ RunMacro() {
                 gMapModel.checkpoints := points,gMapModel.checkpointIndex := 0,gMapModel.target := points[1]
                 Log("Sandstorm: travel to the 35% waypoint before placement.")
                 if !NavigateForPlacement()
-                    return SitOutMatch("Navigation to the Sandstorm waypoint failed.")
+                    return ResultOrEndRun(SitOutMatch("Navigation to the Sandstorm waypoint failed."),"Navigation to the Sandstorm waypoint failed and the match was sat out until stopped.")
             }
         }
     }
@@ -1631,7 +1640,7 @@ RunMacro() {
     BeginPlacementRun()
     buildResult := PlaceConfiguredBuild(plan)
     if buildResult!="complete"
-        return buildResult="replay"?"replay":""
+        return buildResult="replay"?"replay":EndRun("Placement ended without a complete build (result '" buildResult "').")
     Notify("Build placed: " gPlacements.Length " units. Watching upgrades/end screen.")
     ; Only now may F open the manager; it stays open while upgrades remain.
     BeginUnitManagerPhase()
@@ -1640,8 +1649,10 @@ RunMacro() {
     while gRunning {
         if HasCardChoice() {
             ResetIdleKeepAlive()
-            if !ClearCardChoice()
-                return
+            ; A card that stays open (timeout) or a failed step is not a reason to
+            ; end the run: the loop looks again. Only !gRunning leaves the loop.
+            ClearCardChoice()
+            ActionPause(150)
             continue
         }
         if TryEndState() {
@@ -1674,6 +1685,7 @@ RunMacro() {
         IdleKeepAliveTick()
         ActionPause(100)
     }
+    return EndRun("Stopped while watching upgrades and the end screen.")
 }
 
 ; The steps every run start shares (F6 and the restart after a reconnect):
@@ -1757,8 +1769,10 @@ RunMacroSafely() {
                 break
         }
     }
-    catch as err
+    catch as err {
         Notify("Stopped: " err.Message)
+        EndRun("error: " err.Message)
+    }
     finally {
         if gRunning {
             gRunning := false

@@ -7,18 +7,18 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 RESETS = ["ResetPlacementSearch", "ResetPlacedUnits", "ResetCardSelection",
           "ResetMatchCardContext", "ResetEndGameFlow", "ResetUnitManagerState"]
 
-phase_logic = "\n".join(function("MatchState.ahk", n) for n in ["SetPhase", "InPhase", "ResetMatchState"])
+phase_logic = "\n".join(function("MatchState.ahk", n) for n in ["SetPhase", "InPhase", "ResetMatchState", "EndRun", "ResultOrEndRun"])
 phase_fixture = r"""
 #Requires AutoHotkey v2.0
 #SingleInstance Off
 #Warn All, Off
-global gPhase := "Idle",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Ended"]
+global gPhase := "Idle",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"]
 global calls := [],logs := []
 try {
     Assert(InPhase("Idle") && !InPhase("Lobby") && !InPhase(),"fresh state is not Idle only")
     ; Every phase can be entered, is reported by InPhase, and logs old -> new.
     last := "Idle"
-    for name in ["Lobby","Preparing","Placing","Upgrading","Ended","Idle"] {
+    for name in ["Lobby","Preparing","Placing","Upgrading","Watching","Ended","Idle"] {
         logs := []
         Assert(SetPhase(name) && gPhase=name && InPhase(name),"could not enter " name)
         Assert(logs.Length=1 && logs[1]="Phase: " last " -> " name,"transition log wrong for " name ": " (logs.Length?logs[1]:"none"))
@@ -27,11 +27,13 @@ try {
     ; InPhase takes several names.
     SetPhase("Placing")
     Assert(InPhase("Preparing","Placing") && !InPhase("Upgrading","Ended"),"InPhase with several names")
+    Assert(SetPhase("Watching") && InPhase("Upgrading","Watching") && !InPhase("Upgrading"),"Watching is its own phase")
+    SetPhase("Placing")
     ; The same phase again is a quiet no-op.
     logs := []
     Assert(SetPhase("Placing") && !logs.Length,"re-entering the same phase logged or failed")
     ; An unknown name (or a wrong case/empty) is rejected and nothing moves.
-    for bad in ["Upgrade","","placing","Watching"] {
+    for bad in ["Upgrade","","placing","Watch"] {
         logs := []
         Assert(!SetPhase(bad) && gPhase="Placing" && logs.Length=1 && InStr(logs[1],"rejected"),"invalid phase '" bad "' was accepted")
     }
@@ -47,7 +49,19 @@ try {
         Assert(found=1,name " was called " found " times by ResetMatchState")
     }
     Assert(gPhase="Placing","ResetMatchState changed the phase")
-    FileAppend "PASS: phase transitions and log, invalid-phase rejection, InPhase with several names, ResetMatchState calls every module reset once.`n","*","UTF-8"
+    ; EndRun always logs its reason, goes Idle and returns the empty "stop" result.
+    SetPhase("Upgrading"),logs := []
+    Assert(EndRun("because of a test")="" && gPhase="Idle","EndRun did not return empty and go Idle")
+    Assert(logs.Length=2 && logs[1]="Run ended: because of a test" && logs[2]="Phase: Upgrading -> Idle","EndRun log wrong: " (logs.Length?logs[1]:"none"))
+    ; From Idle it still logs (a reason is always recorded).
+    logs := []
+    EndRun("already idle")
+    Assert(logs.Length=1 && logs[1]="Run ended: already idle","EndRun from Idle did not log")
+    ; Sub-results pass through; an empty one ends the run with its reason.
+    SetPhase("Placing"),logs := []
+    Assert(ResultOrEndRun("replay","x")="replay" && ResultOrEndRun("restart","x")="restart" && !logs.Length && gPhase="Placing","a real outcome was turned into an exit")
+    Assert(ResultOrEndRun("","gave up")="" && gPhase="Idle" && logs[1]="Run ended: gave up","an empty outcome did not end the run with a reason")
+    FileAppend "PASS: phase transitions and log, invalid-phase rejection, InPhase with several names, Watching phase, EndRun logs its reason and goes Idle, ResetMatchState calls every module reset once.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"

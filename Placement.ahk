@@ -730,11 +730,11 @@ CountSlotPlacements(slot) {
     return count
 }
 
-FinishPlacement(unit,point,managerConfirmed := false) {
+FinishPlacement(unit,point) {
     global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses,gLastYenRead,gPlacements
     if !point || CandidateOccupied(point.x,point.y)
         return false
-    if HasCardChoice() || (!managerConfirmed && !HasUnitPanel())
+    if HasCardChoice() || !HasUnitPanel()
         return false
     point.panelSeen := true
     if !point.HasProp("pendingSlot") || point.pendingSlot!=unit.slot
@@ -882,12 +882,6 @@ RecoverPendingPlacement(unit) {
     if point.HasProp("panelSeen") && point.panelSeen {
         Log(unit.name ": purchase panel was seen; reselect this unit to confirm it without another purchase.")
         return false
-    }
-    ; Two completed selection-only probes found no model after the purchase wait.
-    ; The unit panel never showed, so the F manager decides before this is a miss.
-    if ManagerHoldsUnrecordedUnit() {
-        Log(unit.name ": no unit panel was seen, but the F manager lists the new unit; recording it.")
-        return FinishPlacement(unit,point,true)
     }
     gPendingPlacement := 0
     RecordFailedPlacement(unit,point)

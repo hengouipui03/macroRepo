@@ -1,10 +1,11 @@
 ﻿; The one owner of the match phase and of the per-match reset.
 ; Phases: Idle (no run), Lobby (waiting at / clicking lobby Play), Preparing
 ; (Vote Start, minimap, walk to the spot, P), Placing (ordered placement),
-; Upgrading (F manager and upgrades), Ended (endgame screens).
+; Upgrading (F manager open while upgrades remain), Watching (every upgrade
+; target reached, F closed, watching for the end screen), Ended (endgame screens).
 ; Modules never keep their own copy of the phase: they ask InPhase().
 global gPhase := "Idle"
-global MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Ended"]
+global MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"]
 
 ; Moves to a named phase and logs the change. An unknown name is rejected and
 ; the phase stays as it was.
@@ -36,6 +37,20 @@ InPhase(phases*) {
             return true
     }
     return false
+}
+
+; Every exit from the run loop goes through here: it logs why the run ended,
+; puts the phase back to Idle and returns "" (the "stop" result of RunMacro).
+EndRun(reason) {
+    Log("Run ended: " reason)
+    SetPhase("Idle")
+    return ""
+}
+
+; A RunMacro sub-result: "replay"/"restart"/"vote" pass through, an empty
+; result (stopped, gave up) ends the run with the given reason.
+ResultOrEndRun(outcome,reason) {
+    return outcome!=""?outcome:EndRun(reason)
 }
 
 ; The ONLY per-match reset. Each module resets its own state; nothing else
