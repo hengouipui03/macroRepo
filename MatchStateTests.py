@@ -184,10 +184,60 @@ assert not re.search(r"gRunning\s*:=", disc_logic), "CheckDisconnect writes gRun
 # The default of ReadOcrRows is unchanged: stop when gRunning goes false.
 assert "keepReading ? keepReading() : gRunning" in (ROOT / "Learning.ahk").read_text(encoding="utf-8-sig")
 
+# F6 while a reconnect is pending is refused with a log line.
+start_logic = function("AAPathMacro.ahk", "StartMacro")
+start_fixture = r"""
+#Requires AutoHotkey v2.0
+#SingleInstance Off
+#Warn All, Off
+global gRunning := false,gSessionArmed := false,gQueueMode := true,gReconnecting := false,logs := [],prepared := 0,timers := 0
+try {
+    gReconnecting := true,gRunning := true
+    StartMacro()
+    Assert(logs.Length=1 && logs[1]="Reconnect in progress; F6 ignored. Press F7 to stop." && !prepared && !gSessionArmed && !timers,"F6 during a reconnect was not refused with its log line")
+    gRunning := false
+    StartMacro()
+    Assert(logs.Length=2 && !prepared && !timers,"F6 with a reconnect pending and no run still started something")
+    gReconnecting := false,gRunning := true,logs := []
+    StartMacro()
+    Assert(!logs.Length && !prepared,"F6 while a run is live was not a quiet no-op")
+    gRunning := false
+    StartMacro()
+    Assert(prepared=1 && gSessionArmed && timers=2,"F6 with nothing pending did not start the session")
+    FileAppend "PASS: F6 during a pending reconnect is refused with a log line; a normal F6 still starts the session.`n","*","UTF-8"
+    ExitApp 0
+} catch as err {
+    FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
+    ExitApp 1
+}
+Assert(value,message) {
+    if !value
+        throw Error(message)
+}
+Log(text) {
+    global logs
+    logs.Push(text)
+}
+PrepareRunStart() {
+    global prepared
+    prepared += 1
+    return true
+}
+BeginSessionLog(*) => 0
+Notify(*) => 0
+CheckDisconnect(*) => 0
+RunMacroSafely(*) => 0
+SetTimer(*) {
+    global timers
+    timers += 1
+}
+"""
+
 if __name__ == "__main__":
     for name, fixture, logic in [("match-state", phase_fixture, phase_logic),
                                  ("check-disconnect", disc_fixture, disc_logic),
-                                 ("find-reconnect", find_fixture, find_logic)]:
+                                 ("find-reconnect", find_fixture, find_logic),
+                                 ("start-macro", start_fixture, start_logic)]:
         target = ROOT / "cache" / f"{name}-regression.ahk"
         target.parent.mkdir(exist_ok=True)
         target.write_text(fixture + "\n" + logic, encoding="utf-8-sig")

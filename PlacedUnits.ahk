@@ -255,12 +255,22 @@ SlotDisplayName(slot) {
 ; The first tile seen for a slot teaches that slot's portrait colours. A
 ; later tile is refused only on clear evidence: far from its own slot's look
 ; and at most half as far from another slot's. Look-alike units never block.
+; A unit whose place in the purchase order is uncertain (item.orderUncertain:
+; a missed purchase was recorded after it, see AddMissedPurchases) is checked
+; the same way, and where the portrait cannot be used it is logged (once per
+; unit) before the upgrade goes ahead.
 TileIdentityMismatch(item,entry) {
     global gSlotPortraits
-    if entry.sig=""
+    uncertain := item.HasProp("orderUncertain") && item.orderUncertain
+    if entry.sig="" {
+        if uncertain
+            NoteUncertainOrderUnchecked(item,"its tile portrait is unreadable")
         return false
+    }
     if !gSlotPortraits.Has(item.slot) {
         gSlotPortraits[item.slot] := entry.sig
+        if uncertain
+            NoteUncertainOrderUnchecked(item,"no portrait of its slot was learned before this tile")
         return false
     }
     own := PortraitDistance(entry.sig,gSlotPortraits[item.slot])
@@ -276,6 +286,13 @@ TileIdentityMismatch(item,entry) {
         }
     }
     return false
+}
+
+NoteUncertainOrderUnchecked(item,why) {
+    if item.HasProp("orderWarned") && item.orderWarned
+        return
+    item.orderWarned := true
+    Log("#" item.id " " item.name ": its purchase order is uncertain (a missed purchase was recorded after it) and the portrait check cannot be used (" why "); upgrading it unchecked.")
 }
 
 ClickTileUpgrade(entry) {
@@ -324,10 +341,10 @@ UpgradeOnceAction(item) {
         if reason="manager" && NoteManagerOpenFailure()
             return false
         ; A tile that cannot be matched to this purchase (bottom row, missing,
-        ; scroll trouble): retried at most MANAGER_LOOKUP_LIMIT times per audit
-        ; cycle. Then the build is audited, or (audits used up) the unit is
+        ; scroll trouble): retried at most ManagerLookupLimit() times per audit
+        ; cycle (fewer once the audits are used up). Then the build is audited, or (audits used up) the unit is
         ; given up as unreachable and the others go on.
-        if (reason="mismatch" || reason="missing" || reason="scroll") && NoteManagerLookupMiss(item.id)>=MANAGER_LOOKUP_LIMIT {
+        if (reason="mismatch" || reason="missing" || reason="scroll") && NoteManagerLookupMiss(item.id)>=ManagerLookupLimit() {
             SaveUpgradeDiagnostic(item)
             EscalateManagerLookup(item,reason)
             CloseUnitPanel()
@@ -348,7 +365,7 @@ UpgradeOnceAction(item) {
     if TileIdentityMismatch(item,entry) {
         SaveUpgradeDiagnostic(item)
         ; The same kind of disagreement: bounded by the same lookup limit.
-        if NoteManagerLookupMiss(item.id)>=MANAGER_LOOKUP_LIMIT {
+        if NoteManagerLookupMiss(item.id)>=ManagerLookupLimit() {
             EscalateManagerLookup(item,"portrait mismatch")
             CloseUnitPanel()
             ResetUpgradeSelection()

@@ -10,11 +10,17 @@
 ; macro learns whether a lit path was ever seen (learning.ini, section
 ; [minimap.<id>], key lit_path), because many maps draw nothing at all.
 ;
-;   glyph off        click P, verify by glyph polls; at most PATH_CLICK_LIMIT
-;                    clicks per call. A click that left the glyph unchanged did
-;                    not register and is repeated; a click that changed the glyph
-;                    by PATH_TOGGLE_CHANGE toggled it, so no further click is sent
-;                    (it could switch P off again).
+; At "placing" the lit path is looked for FIRST, whatever the glyph reads. A
+; lit path that is detected means P is on: P is never clicked then.
+;   glyph off        click P (only when no lit path is detected), verify by
+;                    glyph polls; at most PATH_CLICK_LIMIT clicks per call. A
+;                    click that left the glyph unchanged did not register and is
+;                    repeated; a click that changed the glyph by
+;                    PATH_TOGGLE_CHANGE toggled it, so no further click is sent
+;                    in that call (it could switch P off again). That toggle is
+;                    remembered for the match: when the glyph still reads off at
+;                    "placing" but sits where the toggle left it, P is not
+;                    clicked again.
 ;   glyph on         nothing, except at "placing" when this variant is known to
 ;                    show a lit path and none is read now: one verified off-on
 ;                    cycle (two clicks, each verified by the glyph), once per
@@ -30,14 +36,18 @@ global PATH_GLYPH_POLLS := 4,PATH_GLYPH_POLL_MS := 700
 ; A lit path counts once it covers this share of the client: real lit paths
 ; measure 2.4-5% in the fixtures, maps without one read 0.
 global LIT_PATH_MIN_FRACTION := 0.01
+; Waits inside EnsurePathLight: after the off-on cycle before the lit path is
+; read, and the path-view settle.
+global PATH_LIT_SETTLE_MS := 400
 ; Per-match state of this module (ResetPathLight): the glyph read lit at the
 ; last EnsurePathLight; the off-on cycle was used; this variant's lit path was
-; recorded.
-global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false
+; recorded; the P glyph levels {before,after} of a click that registered
+; (changed the glyph) without the glyph reading on, or 0.
+global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false,gPathToggle := 0
 
 ResetPathLight() {
-    global gPathGlyphOn,gPathCycleDone,gLitPathRecorded
-    gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false
+    global gPathGlyphOn,gPathCycleDone,gLitPathRecorded,gPathToggle
+    gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false,gPathToggle := 0
 }
 
 ; True when the glyph read lit at the last EnsurePathLight (walking then
@@ -50,13 +60,17 @@ PathLightOn() {
 ; The decision, pure. glyph is "on", "off" or "unread"; context "vote" or
 ; "placing"; variantLit: this minimap variant is known to show a lit path;
 ; litSeen: a lit path is read now (only asked at "placing"); cycleDone: the
-; off-on cycle was already used this match. Returns "click", "cycle", "none"
-; or "unreadable".
-PathLightAction(glyph,context,variantLit,litSeen,cycleDone) {
+; off-on cycle was already used this match; toggleHeld: a click earlier this
+; match already moved the glyph and it still sits there (only meaningful at
+; "placing"). Returns "click", "cycle", "none" or "unreadable". A lit path that
+; is detected is never clicked, whatever the glyph says.
+PathLightAction(glyph,context,variantLit,litSeen,cycleDone,toggleHeld) {
+    if context="placing" && litSeen
+        return "none"
     if glyph="unread"
         return "unreadable"
     if glyph="off"
-        return "click"
+        return context="placing" && toggleHeld ? "none" : "click"
     if context="placing" && variantLit && !litSeen && !cycleDone
         return "cycle"
     return "none"
@@ -169,10 +183,21 @@ ClickUntilGlyph(button,want,startLevel) {
     return glyph
 }
 
+; True when an earlier click this match registered (moved the glyph by
+; PATH_TOGGLE_CHANGE) without it reading on, and the glyph still sits nearer the
+; level that click left than the level it started from: a further click would
+; only toggle it back.
+PathToggleStillHeld(glyph) {
+    global gPathToggle
+    if !IsObject(gPathToggle) || glyph.level<0
+        return false
+    return Abs(glyph.level-gPathToggle.after)<Abs(glyph.level-gPathToggle.before)
+}
+
 ; Called at Vote Start (context "vote") and at the start of Placing ("placing").
 ; Never stops the macro: true unless the run stopped or Roblox is gone.
 EnsurePathLight(context) {
-    global gRunning,gPathGlyphOn,gPathCycleDone
+    global gRunning,gPathGlyphOn,gPathCycleDone,gPathToggle,PATH_LIT_SETTLE_MS,PATH_TOGGLE_CHANGE
     if context!="vote" && context!="placing" {
         Log("EnsurePathLight: unknown context '" context "'; P left as it is.")
         return gRunning
@@ -184,8 +209,19 @@ EnsurePathLight(context) {
     if !button
         return false
     glyph := ReadPathGlyph(button)
-    litSeen := context="placing" && glyph.state="on" && ReadLitPath()?true:false
-    action := PathLightAction(glyph.state,context,VariantShowsLitPath(),litSeen,gPathCycleDone)
+    ; At "placing" the world is read first: a lit path means P is on.
+    litSeen := context="placing" && ReadLitPath()?true:false
+    toggleHeld := context="placing" && PathToggleStillHeld(glyph)
+    action := PathLightAction(glyph.state,context,VariantShowsLitPath(),litSeen,gPathCycleDone,toggleHeld)
+    if action="none" && litSeen && glyph.state!="on" {
+        gPathGlyphOn := true
+        Log("A lit path is detected although the P glyph reads " glyph.state "; P is left as it is.")
+        return true
+    }
+    if action="none" && toggleHeld && glyph.state="off" {
+        Log("P glyph reads off (levels " glyph.levels ") but it sits where the click at Vote Start left it; no second click.")
+        return true
+    }
     if action="unreadable" {
         Log("P button unreadable; leaving P as it is. Placement still tries the lit path first, then the red overlay.")
         return true
@@ -200,6 +236,8 @@ EnsurePathLight(context) {
         result := ClickUntilGlyph(button,"on",glyph.level)
         if result.state="stopped"
             return gRunning
+        if result.state!="on" && glyph.level>=0 && result.level>=0 && Abs(result.level-glyph.level)>=PATH_TOGGLE_CHANGE
+            gPathToggle := {before:glyph.level,after:result.level}
         if result.state="on" {
             gPathGlyphOn := true
             Log("P is on; placement reads the lit path first, the red overlay only as fallback.")
@@ -230,7 +268,7 @@ EnsurePathLight(context) {
         return true
     }
     gPathGlyphOn := true
-    if ActionPause(400) && ReadLitPath()
+    if ActionPause(PATH_LIT_SETTLE_MS) && ReadLitPath()
         Log("P is on again and the lit path shows.")
     else
         Log("P is on again but no lit path shows; the red overlay is the fallback.")

@@ -7,7 +7,7 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 lobby_logic = "\n".join(function("LobbyFlow.ahk", n) for n in ["TryStartFromLobby", "ReconnectAndRestart", "ReconnectGiveUp"])
 lobby_logic += "\n" + function("MatchState.ahk", "InPhase")
 lobby_constants = r"""
-global LOBBY_PLAY_WAIT_MS := 30,LOBBY_PLAY_WAIT_AFTER_RETURN_MS := 60,LOBBY_PLAY_POLL_MS := 5
+global LOBBY_PLAY_WAIT_MS := 30,LOBBY_PLAY_WAIT_AFTER_RETURN_MS := 60,LOBBY_PLAY_POLL_MS := 5,LOBBY_CLICK_SETTLE_MS := 1,LOBBY_PANEL_POLL_MS := 1
 global LOBBY_PLAY_CLICK_LIMIT := 2,LOBBY_PLAY_CLICK_FAIL_LIMIT := 3,LOBBY_SAVED_PLAY_FALLBACK := true
 global LOBBY_WALK_MS := 10,LOBBY_WALK_GRACE_MS := 5,LOBBY_WALK_ROUND_LIMIT := 3,LOBBY_QUEUE_RETRY_LIMIT := 4
 global LOBBY_PORTAL_ATTEMPT_LIMIT := 3,LOBBY_PORTAL_RETRY_PAUSE_MS := 1,LOBBY_RESTART_LIMIT := 2
@@ -296,11 +296,54 @@ try {
 }
 """
 
+# WaitForQueuedMatch: bounded by QUEUE_WAIT_LIMIT_MS, with a logged escalation.
+queue_wait_logic = function("QueueMatch.ahk", "WaitForQueuedMatch")
+queue_wait_fixture = r"""
+#Requires AutoHotkey v2.0
+#SingleInstance Off
+#Warn All, Off
+global gRunning := true,QUEUE_WAIT_LIMIT_MS := 300,QUEUE_WAIT_POLL_MS := 20,QUEUE_LOBBY_CHECK_MS := 10000,QUEUE_LOBBY_RETRY_WAIT_MS := 15000
+global logs := [],voteAfter := 0,polls := 0
+Notify(text) {
+    global logs
+    logs.Push(text)
+}
+HasVoteStart() {
+    global voteAfter,polls
+    return voteAfter && polls>=voteAfter
+}
+WaitForVoteStart(*) => true
+HasLobbyPlay() => false
+TryStartFromLobby(*) => false
+ActionPause(ms,interruptible := true) {
+    global polls
+    polls += 1
+    Sleep ms
+    return gRunning
+}
+try {
+    started := A_TickCount
+    Assert(!WaitForQueuedMatch(0),"an endless queue wait returned true")
+    Assert(A_TickCount-started<3000 && logs.Length=1 && InStr(logs[1],"did not reach Vote Start"),"the queue wait was not bounded or did not log its escalation")
+    polls := 0,voteAfter := 3,logs := []
+    Assert(WaitForQueuedMatch(0) && !logs.Length,"a Vote Start inside the bound was not returned")
+    FileAppend "PASS: WaitForQueuedMatch is bounded by QUEUE_WAIT_LIMIT_MS and logs the hand-over to recovery.`n","*","UTF-8"
+    ExitApp 0
+} catch as err {
+    FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
+    ExitApp 1
+}
+Assert(value,message) {
+    if !value
+        throw Error(message)
+}
+"""
+
 if __name__ == "__main__":
-    for name, fixture in [("lobby-stages", queue_fixture), ("reconnect", reconnect_fixture)]:
+    for name, fixture, logic_text in [("lobby-stages", queue_fixture, lobby_logic), ("reconnect", reconnect_fixture, lobby_logic), ("queue-wait", queue_wait_fixture, queue_wait_logic)]:
         target = ROOT / "cache" / f"{name}-regression.ahk"
         target.parent.mkdir(exist_ok=True)
-        target.write_text(fixture + "\n" + lobby_logic, encoding="utf-8-sig")
+        target.write_text(fixture + "\n" + logic_text, encoding="utf-8-sig")
         result = subprocess.run([str(RUNTIME), "/ErrorStdOut=UTF-8", str(target)],
                                 capture_output=True, timeout=60)
         print(result.stdout.decode("utf-8-sig"), end="")

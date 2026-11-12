@@ -10,7 +10,7 @@ logic = "\n".join(function("Placement.ahk", n) for n in [
     "ReadPlacementMoney", "DigitsValue", "UnitPlacementCost", "PlacementShortOfYen",
     "WaitForPlacementYen"])
 logic += "\n" + "\n".join(function("PurchaseVerifier.ahk", n) for n in [
-    "ReadHotbarPass", "ReadPurchaseState", "AgreedCounter", "SlotCounterFromWords", "ParseCounterWords"])
+    "ReadHotbarPass", "ReadPurchaseState", "YenReadsAgree", "AgreedCounter", "SlotCounterFromWords", "ParseCounterWords"])
 logic += "\n" + "\n".join(function("PlacementArea.ahk", n) for n in [
     "RecordFailedPlacement", "PlacementCopyFailures", "PlacementFailureLimitReached"])
 logic = logic.replace("A_TickCount", "testNow")
@@ -21,6 +21,7 @@ fixture = r'''
 #Warn All, Off
 global testNow := 10000,gRunning := true,REF_W := 800,REF_H := 600,LEARNING_FILE := A_Temp "\yen-wait-test.ini"
 global HOTBAR_SLOT_X := [251,315,379,443,508,571],HOTBAR_COUNTER_Y_MIN := 510,HOTBAR_COUNTER_Y_MAX := 535
+global YEN_READ_TOLERANCE_ABS := 300,YEN_READ_TOLERANCE_FRACTION := 0.05,YEN_WAIT_MS := 20000,YEN_WAIT_UNREADABLE_LIMIT := 3
 global PURCHASE_READ_ATTEMPTS := 4,COUNTER_WORD_GAP := 10,COUNTER_SLOT_GAP := 30,COUNTER_MAX_PLAUSIBLE := 99
 global gLastOcrRect := "",gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gPendingPlacement := 0,gCardInterruptEpoch := 0
 global gPlacementAreaFailures := Map(),gConsecutivePlacementFailures := 0,PLACEMENT_FAILURE_LIMIT := 6,gMapModel := 0,gPlacements := []
@@ -59,6 +60,18 @@ try {
     yenSchedule := [100,9401,50,7000],ocrCalls := 0
     state := ReadPurchaseState(dark)
     Assert(state.yen=-1 && ocrCalls=4 && !PlacementShortOfYen(dark,state),"disagreeing Yen reads were believed or not bounded")
+    ; M6: Yen moves between passes (income): two reads within the tolerance agree, the LOWER one is used
+    yenSchedule := [9401,9560],ocrCalls := 0
+    state := ReadPurchaseState(dark)
+    Assert(state.yen=9401 && state.yenMax=9560 && ocrCalls=2,"two Yen reads within the tolerance were not accepted (min/max)")
+    yen := 1300,yenSchedule := [1450,1300],ocrCalls := 0
+    state := ReadPurchaseState(dark)
+    Assert(state.yen=1300 && state.yenMax=1450 && PlacementShortOfYen(dark,state),"the lower of two agreeing Yen reads was not used for the affordability check")
+    gPlacementYenWait := 0
+    ; reads further apart than the tolerance do not agree
+    yenSchedule := [1000,1400,2000,2600],ocrCalls := 0
+    state := ReadPurchaseState(dark)
+    Assert(state.yen=-1 && ocrCalls=4,"Yen reads outside the tolerance agreed")
     yenSchedule := 0
     ; Unreadable Yen or an unknown cost never blocks the click.
     yen := -1,ocrCalls := 0

@@ -6,8 +6,8 @@ import subprocess
 from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 logic = "\n".join(function("PurchaseVerifier.ahk", n) for n in [
-    "NewPurchaseEvidence", "JudgePurchase", "DecidePurchase", "ParseCounterWords",
-    "SlotCounterFromWords", "AgreedCounter", "ProbePurchase", "ProbeSlotCounter"])
+    "NewPurchaseEvidence", "YenReadsAgree", "JudgePurchase", "DecidePurchase", "ParseCounterWords",
+    "SlotCounterFromWords", "AgreedCounter", "ProbePurchase", "ProbeSlotCounter", "ConfirmHeldCounter"])
 logic += "\n" + function("Placement.ahk", "RecoverPendingPlacement")
 logic += "\n" + function("Placement.ahk", "CountSlotPlacements")
 logic = logic.replace("A_TickCount", "testNow")
@@ -19,8 +19,10 @@ fixture = r'''
 global testNow := 10000,gRunning := true,gPlacements := [],gPendingPlacement := 0,gCardInterruptEpoch := 0
 global HOTBAR_SLOT_X := [251,315,379,443,508,571]
 global PURCHASE_YEN_DROP_FRACTION := 0.5,PURCHASE_REPROBE_LIMIT := 3,PURCHASE_SETTLE_MS := 300
+global YEN_READ_TOLERANCE_ABS := 300,YEN_READ_TOLERANCE_FRACTION := 0.05,COUNTER_AGREE_ATTEMPTS := 4
+global events := [],endScreen := false,cardUp := false,cardClears := true,marked := 0,missed := 0,finishFails := false,hotbarCounters := []
 global COUNTER_WORD_GAP := 10,COUNTER_SLOT_GAP := 30,COUNTER_MAX_PLAUSIBLE := 99
-global scripted := [],slotKeys := 0,drops := 0,failures := 0,blacklisted := 0,registered := [],panel := false,occupied := false,panelChecks := 0,logs := []
+global panelClosed := 0,scripted := [],slotKeys := 0,drops := 0,failures := 0,blacklisted := 0,registered := [],panel := false,occupied := false,panelChecks := 0,logs := []
 try {
     ; ---- DecidePurchase: every branch of the rule list ----
     ; counter rule
@@ -38,8 +40,19 @@ try {
     ; Yen rule
     Assert(Verdict({yb:5000,ya:3650,cost:1350})="confirmed","a full Yen drop did not confirm")
     Assert(Verdict({yb:5000,ya:4325,cost:1350})="confirmed","a drop of exactly half the cost did not confirm (675)")
-    Assert(Verdict({yb:5000,ya:4326,cost:1350})="denied","a drop below half the cost did not deny")
+    ; M6: a drop below half the cost is neither confirmed nor denied (Yen moves with income)
+    Assert(Verdict({yb:5000,ya:4326,cost:1350})="unknown","a drop below half the cost was decided")
     Assert(Verdict({yb:5000,ya:5000,cost:1350})="denied" && Verdict({yb:5000,ya:5400,cost:1350})="denied","no Yen drop did not deny")
+    ; M6: each Yen value is a range of two agreeing reads: confirmed only when even the highest
+    ; Yen after is half a cost below the lowest Yen before; denied only when the lowest Yen
+    ; after is not below the highest Yen before
+    Assert(Verdict({yb:4900,ybm:5000,ya:4100,yam:4200,cost:1350})="confirmed","a ranged Yen drop did not confirm")
+    Assert(Verdict({yb:4900,ybm:5000,ya:4200,yam:4300,cost:1350})="unknown","an overlapping Yen drop was decided")
+    Assert(Verdict({yb:4900,ybm:5000,ya:4950,yam:5050,cost:1350})="unknown","overlapping Yen ranges denied")
+    Assert(Verdict({yb:4900,ybm:5000,ya:5000,yam:5100,cost:1350})="denied","no drop at all (ranges) did not deny")
+    ; the agreement tolerance: max(300, 5% of the larger read)
+    Assert(YenReadsAgree(5000,5250) && !YenReadsAgree(5000,5301) && YenReadsAgree(1000,1300) && !YenReadsAgree(1000,1301),"Yen agreement tolerance wrong")
+    Assert(YenReadsAgree(20000,20900) && !YenReadsAgree(20000,21100) && !YenReadsAgree(-1,500) && !YenReadsAgree(500,-1),"proportional tolerance or unreadable handling wrong")
     Assert(Verdict({yb:-1,ya:3650,cost:1350})="unknown" && Verdict({yb:5000,ya:-1,cost:1350})="unknown","one unreadable Yen decided")
     Assert(Verdict({yb:5000,ya:3650,cost:0})="unknown","Yen decided without a known cost")
     ; weak panel rule
@@ -90,10 +103,12 @@ try {
     judged := ProbePurchase(unit,point)
     Assert(judged.verdict="denied","an open panel overruled an unchanged counter")
     ; counter unreadable after the click: the slot key reads it, Q drops the hold
-    slotKeys := 0,drops := 0,panel := false
+    slotKeys := 0,drops := 0,panel := false,events := []
     Script([{yen:-1,cost:1350,counter:false},{yen:-1,cost:1350,counter:C(2,3)}])
     judged := ProbePurchase(unit,point)
-    Assert(judged.verdict="confirmed" && slotKeys=1 && drops=1,"the held unit's counter was not re-read once through its slot key")
+    Assert(judged.verdict="confirmed" && slotKeys=1 && drops=2,"the held unit's counter was not re-read once through its slot key")
+    ; the hold is dropped BEFORE the slot key (pressing it again would toggle the hold off), and again after
+    Assert(events.Length=3 && events[1]="drop" && events[2]="key" && events[3]="drop","the probe did not drop the hold before pressing the slot key: " Join(events))
     ; counter fine on the first read: no extra key presses
     slotKeys := 0,drops := 0
     Script([{yen:-1,cost:1350,counter:C(2,3)}])
@@ -152,6 +167,52 @@ try {
     gRunning := false,slotKeys := 0
     Assert(!ProbeSlotCounter(unit) && slotKeys=0,"the counter probe pressed a key after a stop")
     gRunning := true
+    ; M4: the end screen hides the hotbar: no key is pressed over it
+    endScreen := true,slotKeys := 0
+    Script([{yen:-1,cost:1350,counter:C(2,3)}])
+    Assert(!ProbeSlotCounter(unit) && slotKeys=0,"the counter probe pressed a key over the end screen")
+    endScreen := false
+    ; M4: a card is chosen first; a card that cannot be cleared stops the probe
+    cardUp := true,cardClears := true,slotKeys := 0
+    Assert(ProbeSlotCounter(unit) && slotKeys=1 && !cardUp,"a card was not cleared before the counter probe")
+    cardUp := true,cardClears := false,slotKeys := 0
+    Assert(!ProbeSlotCounter(unit) && slotKeys=0,"the counter probe pressed a key over a card it could not clear")
+    cardUp := false,cardClears := true
+    ; M3: ConfirmHeldCounter: a second read must agree (at most COUNTER_AGREE_ATTEMPTS-1 more passes)
+    hotbarCounters := [C(2,3)]
+    Assert(ConfirmHeldCounter(unit,C(2,3)),"an agreeing second read did not confirm")
+    hotbarCounters := [C(1,3),C(0,3),C(1,3)]
+    Assert(!ConfirmHeldCounter(unit,C(2,3)),"disagreeing reads confirmed")
+    hotbarCounters := [false,C(1,3),C(2,3)]
+    Assert(ConfirmHeldCounter(unit,C(2,3)),"a late agreeing read was not accepted")
+    hotbarCounters := [false,false,false,C(2,3)]
+    Assert(!ConfirmHeldCounter(unit,C(2,3)),"ConfirmHeldCounter was not bounded by COUNTER_AGREE_ATTEMPTS")
+    hotbarCounters := [C(2,3)],endScreen := true
+    Assert(!ConfirmHeldCounter(unit,C(2,3)),"a counter was confirmed over the end screen")
+    endScreen := false
+
+    ; ---- M1: confirmed but not recordable: recorded at once with no anchor, panel and preview closed ----
+    ResetFlow()
+    finishFails := true
+    gPendingPlacement := MakePending(point.x,{n:0,max:3})
+    Script([{yen:-1,cost:1350,counter:C(1,3)}])
+    drops := 0,missed := 0
+    Assert(RecoverPendingPlacement(unit) && missed=1 && failures=0 && !gPendingPlacement && drops>=1 && panelClosed>=1,"a confirmed purchase that could not be recorded was lost, counted as a failure, or left the panel/preview open")
+    finishFails := false
+    ; ---- M1: an unknown purchase marks its slot for reconciliation ----
+    ResetFlow()
+    marked := 0
+    gPendingPlacement := MakePending(point.x,{n:0,max:3})
+    Script([{yen:-1,cost:1350,counter:false}])
+    RecoverPendingPlacement(unit)
+    Assert(marked=1 && failures=1 && blacklisted=0,"an unknown purchase did not mark its slot (marked " marked ")")
+    ; a denied or confirmed one does not
+    ResetFlow()
+    marked := 0
+    gPendingPlacement := MakePending(point.x,{n:0,max:3})
+    Script([{yen:-1,cost:1350,counter:C(0,3)}])
+    RecoverPendingPlacement(unit)
+    Assert(marked=0,"a denied purchase marked its slot")
     FileAppend "PASS: DecidePurchase table (counter, Yen at the half-cost edge, weak panel, precedence, reasons); counter parsing and slot mapping; weak panel rejected next to a recorded unit; counter re-read through the slot key; confirmed registers with its evidence, denied blacklists, unknown re-probes 1+3 times then fails without blacklist.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
@@ -163,6 +224,12 @@ Assert(value,message) {
         throw Error(message)
 }
 C(n,cap) => {n:n,max:cap}
+Join(list) {
+    text := ""
+    for item in list
+        text .= (text=""?"":",") item
+    return text
+}
 W(l,r,text) => {l:l,r:r,text:text}
 Parse(words) => ParseCounterWords(words)
 ; A compact evidence literal: cb/ca counters, yb/ya Yen, cost, panel, near.
@@ -174,8 +241,12 @@ Evidence(spec) {
         ev.counterAfter := spec.ca
     if spec.HasProp("yb")
         ev.yenBefore := spec.yb
+    if spec.HasProp("ybm")
+        ev.yenBeforeMax := spec.ybm
     if spec.HasProp("ya")
         ev.yenAfter := spec.ya
+    if spec.HasProp("yam")
+        ev.yenAfterMax := spec.yam
     if spec.HasProp("cost")
         ev.cost := spec.cost
     if spec.HasProp("panel")
@@ -200,18 +271,43 @@ ResetFlow() {
 ReadPurchaseState(unit) {
     global scripted
     state := scripted.Length>1?scripted.RemoveAt(1):scripted[1]
-    return {yen:state.yen,cost:state.cost,counter:state.counter}
+    return {yen:state.yen,yenMax:state.yen,cost:state.cost,counter:state.counter}
+}
+ReadHotbarPass(unit) {
+    global hotbarCounters
+    counter := hotbarCounters.Length?hotbarCounters.RemoveAt(1):false
+    return {yen:-1,cost:0,counter:counter}
 }
 SelectPlacementUnit(*) {
-    global slotKeys
+    global slotKeys,events
     slotKeys += 1
+    events.Push("key")
     return true
 }
 CancelUnitPreview(*) {
-    global drops
+    global drops,events
     drops += 1
+    events.Push("drop")
     return true
 }
+ClearCardChoice(*) {
+    global cardUp,cardClears
+    if cardClears
+        cardUp := false
+    return cardClears
+}
+MarkSlotForReconcile(*) {
+    global marked
+    marked += 1
+}
+AddMissedPurchases(unit,count,immediate) {
+    global missed,gPlacements
+    missed += count
+    Loop count
+        gPlacements.Push({slot:unit.slot})
+    return count
+}
+ResetPlacementFailureStreak(*) => 0
 ActionPause(*) => gRunning
 HasUnitPanel(*) {
     global panelChecks
@@ -219,9 +315,13 @@ HasUnitPanel(*) {
     return panel
 }
 CandidateOccupied(*) => occupied
-HasCardChoice(*) => false
-IsEndGameBlocking(*) => false
-CloseUnitPanel(*) => true
+HasCardChoice(*) => cardUp
+IsEndGameBlocking(*) => endScreen
+CloseUnitPanel(*) {
+    global panelClosed
+    panelClosed += 1
+    return true
+}
 PlacementTerrain(*) => "ground"
 RememberHillOutcome(*) => 0
 Log(text) {
@@ -238,7 +338,9 @@ RememberFailedPlacementSpot(*) {
     blacklisted += 1
 }
 FinishPlacement(unit,point,evidence) {
-    global registered,gPlacements,gPendingPlacement
+    global registered,gPlacements,gPendingPlacement,finishFails
+    if finishFails
+        return false
     registered.Push(evidence)
     gPlacements.Push({slot:unit.slot})
     gPendingPlacement := 0

@@ -8,13 +8,22 @@
 ;                 the unit manager's tiles are in purchase order
 ;   recorded < n  a purchase the macro missed: it is recorded as placed with
 ;                 no anchor position (so the build does not buy it again and
-;                 no position-based code uses it), at the end of the list
+;                 no position-based code uses it), at the end of the list.
+;                 Its true place in the purchase order is unknown, so every
+;                 unit recorded after that slot's last entry is flagged
+;                 orderUncertain: the unit manager tile for it must pass the
+;                 portrait check (TileIdentityMismatch) before it is upgraded.
+; Nothing here changes the record, caps a slot or writes a learned penalty on
+; one read: two agreeing counter reads are required, and a removal only
+; blacklists the spot for the current game (no learning.ini write: which
+; entry is the ghost is a guess).
 ; The audit runs when placement believes the build is complete, and again
 ; when the unit manager keeps disagreeing with the record (see
 ; RepairBuildAfterManagerMismatch). Every retry here has a named bound.
 
-; Reads of one slot's counter per audit; still unreadable: trust the record.
-global AUDIT_COUNTER_ATTEMPTS := 3
+; Probes of one slot's counter per audit. The record (or a cap) changes only
+; when TWO of them agree; otherwise the slot is left as recorded.
+global AUDIT_COUNTER_ATTEMPTS := 4
 ; Audits at build completion per match. An audit that finds the build
 ; incomplete sends placement back to work, so this stops a loop of
 ; place, audit, place when the two keep disagreeing.
@@ -25,6 +34,13 @@ global AUDIT_LIMIT_PER_MATCH := 2
 ; match", "reached the top without it", portrait mismatch, scroll trouble)
 ; per audit cycle, before the audit is requested.
 global MANAGER_LOOKUP_LIMIT := 6
+; Once the audits are used up a failing lookup can no longer be repaired, so
+; each unit gets only this many before it is given up as unreachable (instead
+; of scrolling the manager MANAGER_LOOKUP_LIMIT times for every unit).
+global MANAGER_LOOKUP_LIMIT_AFTER_AUDITS := 2
+; F presses (each confirmed by two readings) to close the manager before the
+; repair audit; if it will not close, upgrades go on and the audit is skipped.
+global REPAIR_CLOSE_ATTEMPTS := 3
 ; Consecutive lookups that failed only because F would not open (no card,
 ; no other reason) before upgrades pause for the cooldown below. The match is
 ; never given up: after the cooldown the same bounded attempts start again,
@@ -33,6 +49,9 @@ global MANAGER_OPEN_FAIL_LIMIT := 30
 global UNIT_MANAGER_GIVEUP_COOLDOWN_MS := 30000
 global gManagerCooldownUntil := 0
 
+; Slot -> unit whose last purchase ended "unknown" (the click may have bought):
+; reconciled with its counter before the NEXT purchase of any slot.
+global gSlotsToReconcile := Map()
 global gLookupMisses := Map(),gOpenFailures := 0
 global gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false
 ; Slot -> the most units the game lets this slot hold, or that placement gave
@@ -43,7 +62,8 @@ global gLastAudit := 0
 
 ; Per-match state (called by ResetMatchState).
 ResetBuildAudit() {
-    global gLookupMisses,gOpenFailures,gEscalationAudits,gCompletionAudits,gAuditDue,gSlotCaps,gLastAudit,gManagerCooldownUntil
+    global gLookupMisses,gOpenFailures,gEscalationAudits,gCompletionAudits,gAuditDue,gSlotCaps,gLastAudit,gManagerCooldownUntil,gSlotsToReconcile
+    gSlotsToReconcile := Map()
     gLookupMisses := Map(),gOpenFailures := 0,gManagerCooldownUntil := 0
     gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false
     gSlotCaps := Map(),gLastAudit := 0
@@ -74,25 +94,68 @@ SlotCounterFull(counter) {
     return IsObject(counter) && counter.n>=counter.max
 }
 
-; One slot's counter with up to AUDIT_COUNTER_ATTEMPTS reads; false if none.
+; One slot's counter from up to AUDIT_COUNTER_ATTEMPTS separate probes (slot
+; key, read, Q). Returns it once two probes agree; false when none agree, the
+; run stopped, the end screen shows or a card could not be cleared.
 AuditReadCounter(unit) {
     global gRunning,AUDIT_COUNTER_ATTEMPTS
+    seen := []
     Loop AUDIT_COUNTER_ATTEMPTS {
-        if !gRunning
+        if !gRunning || IsEndGameBlocking()
             return false
         if HasCardChoice() && !ClearCardChoice()
             return false
         counter := ProbeSlotCounter(unit)
-        if counter
-            return counter
-        Log("Build audit: slot " unit.slot " counter unreadable (" A_Index "/" AUDIT_COUNTER_ATTEMPTS ").")
+        if counter {
+            for earlier in seen
+                if earlier.n=counter.n && earlier.max=counter.max
+                    return counter
+            seen.Push(counter)
+        } else
+            Log("Build audit: slot " unit.slot " counter unreadable (" A_Index "/" AUDIT_COUNTER_ATTEMPTS ").")
     }
+    if seen.Length
+        Log("Build audit: slot " unit.slot " counter reads never agreed (" seen.Length " read); the record is left as it is.")
     return false
 }
 
-; Brings one slot's records in line with its counter. source says what
-; triggered it (for the log). Returns {removed,added} (counts).
-ReconcileSlot(unit,counter,source) {
+; A purchase that ended "unknown": remember the slot so that it is checked
+; before the next purchase of any slot.
+MarkSlotForReconcile(unit) {
+    global gSlotsToReconcile
+    gSlotsToReconcile[unit.slot] := unit
+}
+
+; Reconciles every slot marked by MarkSlotForReconcile (two agreeing reads,
+; see AuditReadCounter). A slot whose counter cannot be confirmed is dropped
+; from the list with a log line; the end-of-build audit checks it again.
+; Returns false when the run stopped or the end screen / a card interrupted.
+ReconcilePendingSlots() {
+    global gSlotsToReconcile,gRunning
+    pending := []
+    for slot,unit in gSlotsToReconcile
+        pending.Push(unit)
+    for unit in pending {
+        if !gRunning || IsEndGameBlocking() || HasCardChoice()
+            return false
+        counter := AuditReadCounter(unit)
+        if !counter {
+            if !gRunning || IsEndGameBlocking()
+                return false
+            Log("Slot " unit.slot " (" unit.name "): the counter could not be confirmed after an uncertain purchase; the build audit will check it.")
+        } else
+            ReconcileSlot(unit,counter,"after an uncertain purchase",true)
+        gSlotsToReconcile.Delete(unit.slot)
+    }
+    return true
+}
+
+; Brings one slot's records in line with its counter. The counter MUST be one
+; that two reads agreed on (AuditReadCounter / ConfirmHeldCounter): this is
+; where records are removed, purchases added and a slot capped. source says
+; what triggered it (for the log). immediate: see AddMissedPurchases.
+; Returns {removed,added} (counts).
+ReconcileSlot(unit,counter,source,immediate) {
     recorded := CountSlotPlacements(unit.slot)
     result := {removed:0,added:0}
     if counter.n<recorded {
@@ -100,7 +163,7 @@ ReconcileSlot(unit,counter,source) {
         result.removed := RemoveNewestSlotEntries(unit,recorded-counter.n)
     } else if counter.n>recorded {
         Log("Build audit (" source "): slot " unit.slot " shows " counter.n "/" counter.max " but only " recorded " are recorded; a purchase the macro missed.")
-        result.added := AddMissedPurchases(unit,counter.n-recorded)
+        result.added := AddMissedPurchases(unit,counter.n-recorded,immediate)
     }
     if SlotCounterFull(counter) && counter.max<unit.count
         CapSlot(unit,counter.max,"the game's limit for this unit is " counter.max)
@@ -119,11 +182,10 @@ RemoveNewestSlotEntries(unit,count) {
             removed[item.id] := true
             count -= 1
             Log("Build audit: ghost #" item.id " " item.name " removed (" (PlacementAnchorKnown(item)?"was recorded at " item.x "," item.y:"no anchor position") ").")
-            ; The spot did not hold a unit of ours: keep placement away from it.
-            if PlacementAnchorKnown(item) {
+            ; The spot did not hold a unit of ours: keep placement away from it
+            ; in this game only (no learned penalty: the ghost is a guess).
+            if PlacementAnchorKnown(item)
                 RememberFailedPlacementSpot(item)
-                RememberGhostPlacement(unit,item)
-            }
             if IsObject(gLastAudit)
                 gLastAudit.removed.Push(item.id)
         }
@@ -151,8 +213,23 @@ RenumberPlacements() {
 }
 
 ; Records count purchases the macro missed: placed, no anchor position.
-AddMissedPurchases(unit,count) {
+; immediate is true when the purchase was found before any later purchase was
+; recorded (appending is then the right purchase order); false for a late find
+; (the audit, the counter check before a click), where it is not known.
+AddMissedPurchases(unit,count,immediate) {
     global gPlacements,gLastAudit
+    ; The missed copy was really bought before every purchase made after this
+    ; slot's last recorded entry, but where among them is unknown. Those units
+    ; may sit one tile off in the manager: flag them for the portrait check.
+    last := 0
+    for index,item in gPlacements
+        if item.slot=unit.slot
+            last := index
+    if !immediate && last<gPlacements.Length {
+        Log("Build audit: WARNING: the missed " unit.name " purchase is recorded last, but it was bought earlier; the " (gPlacements.Length-last) " unit(s) recorded after slot " unit.slot "'s last entry are only upgraded when the unit manager portrait matches.")
+        Loop gPlacements.Length-last
+            gPlacements[last+A_Index].orderUncertain := true
+    }
     Loop count {
         item := {id:gPlacements.Length+1,slot:unit.slot,name:unit.name,priority:unit.priority,
             target:unit.target,hill:false,row:1,upgrades:0,x:0,y:0,selectX:0,selectY:0,complete:unit.target=0,
@@ -182,12 +259,21 @@ AuditBuild(plan) {
             summary.complete := false
             return false
         }
+        if IsEndGameBlocking() {
+            Log("Build audit stopped: the end screen is showing; back to the run loop.")
+            summary.complete := false
+            return false
+        }
         counter := AuditReadCounter(unit)
         if counter
-            ReconcileSlot(unit,counter,"slot counter")
-        else if gRunning {
+            ReconcileSlot(unit,counter,"slot counter",false)
+        else if IsEndGameBlocking() {
+            Log("Build audit stopped: the end screen is showing; back to the run loop.")
+            summary.complete := false
+            return false
+        } else if gRunning {
             summary.unreadable.Push(unit.slot)
-            Log("Build audit: slot " unit.slot " counter still unreadable after " AUDIT_COUNTER_ATTEMPTS " reads; trusting the " CountSlotPlacements(unit.slot) " recorded placements.")
+            Log("Build audit: slot " unit.slot " counter not confirmed by two agreeing reads in " AUDIT_COUNTER_ATTEMPTS " probes; trusting the " CountSlotPlacements(unit.slot) " recorded placements.")
         }
         if CountSlotPlacements(unit.slot)<SlotTargetCount(unit)
             summary.complete := false
@@ -215,6 +301,13 @@ VerifyCompletedBuild(plan) {
 
 ; Counts one failed tile lookup for this purchase in the current audit cycle;
 ; returns the count.
+; The lookups allowed per purchase right now: MANAGER_LOOKUP_LIMIT while an
+; audit can still repair a mismatch, MANAGER_LOOKUP_LIMIT_AFTER_AUDITS after.
+ManagerLookupLimit() {
+    global gEscalationAudits,AUDIT_LIMIT_PER_MATCH,MANAGER_LOOKUP_LIMIT,MANAGER_LOOKUP_LIMIT_AFTER_AUDITS
+    return gEscalationAudits<AUDIT_LIMIT_PER_MATCH ? MANAGER_LOOKUP_LIMIT : MANAGER_LOOKUP_LIMIT_AFTER_AUDITS
+}
+
 NoteManagerLookupMiss(purchaseId) {
     global gLookupMisses
     gLookupMisses[purchaseId] := (gLookupMisses.Has(purchaseId)?gLookupMisses[purchaseId]:0)+1
@@ -227,15 +320,16 @@ NoteManagerLookupMiss(purchaseId) {
 ; upgrade queue, so lower priorities go on, and logged.
 ; Returns true when an audit was requested, false when the unit was skipped.
 EscalateManagerLookup(item,reason) {
-    global gAuditDue,gEscalationAudits,AUDIT_LIMIT_PER_MATCH,MANAGER_LOOKUP_LIMIT
+    global gAuditDue,gEscalationAudits,AUDIT_LIMIT_PER_MATCH
     if gAuditDue
         return true
+    limit := ManagerLookupLimit()
     if gEscalationAudits<AUDIT_LIMIT_PER_MATCH {
         gEscalationAudits += 1,gAuditDue := true
-        Log("#" item.id " " item.name ": the unit manager lookup failed " MANAGER_LOOKUP_LIMIT " times (" reason "); close F and audit the build (" gEscalationAudits "/" AUDIT_LIMIT_PER_MATCH ").")
+        Log("#" item.id " " item.name ": the unit manager lookup failed " limit " times (" reason "); close F and audit the build (" gEscalationAudits "/" AUDIT_LIMIT_PER_MATCH ").")
         return true
     }
-    MarkUnitUnreachable(item,"the unit manager lookup failed " MANAGER_LOOKUP_LIMIT " times (" reason ") and the audit limit (" AUDIT_LIMIT_PER_MATCH ") is used up")
+    MarkUnitUnreachable(item,"the unit manager lookup failed " limit " times (" reason ") and the audit limit (" AUDIT_LIMIT_PER_MATCH ") is used up")
     return false
 }
 
@@ -290,19 +384,39 @@ NoteManagerTileFound() {
 ; through the normal path. Returns "complete" when the manager phase is back,
 ; otherwise PlaceConfiguredBuild's result ("replay", "stopped", ...).
 RepairBuildAfterManagerMismatch(plan) {
-    global gAuditDue,gRunning
+    global gAuditDue,gRunning,gCardAction,REPAIR_CLOSE_ATTEMPTS
     gAuditDue := false
     Log("Unit manager and the placement record disagree: closing F and returning to Placing for a build audit.")
-    CloseUnitManagerIfOpen("Unit manager mismatch: press F once to close it before the build audit.")
-    SetPhase("Placing")
-    complete := AuditBuild(plan)
-    if !gRunning
-        return "stopped"
-    if !complete {
-        result := PlaceConfiguredBuild(plan)
-        if result!="complete"
-            return result
+    closed := false
+    Loop REPAIR_CLOSE_ATTEMPTS {
+        if CloseUnitManagerIfOpen("Unit manager mismatch: press F once to close it before the build audit.") {
+            closed := true
+            break
+        }
+        if !gRunning
+            return "stopped"
+        Log("Unit manager not confirmed closed (" A_Index "/" REPAIR_CLOSE_ATTEMPTS ").")
     }
+    if !closed {
+        ; Slot keys must never be pressed with F open: no audit this time, the
+        ; run stays in Upgrading (a later lookup failure asks again).
+        Log("Unit manager would not close; the build audit is skipped and upgrades go on.")
+        return "complete"
+    }
+    ; The watch loop runs with card handling off; the audit and any placing
+    ; need it so a card that appears is chosen before slot keys are pressed.
+    previous := gCardAction,gCardAction := "placement"
+    try {
+        SetPhase("Placing")
+        complete := AuditBuild(plan)
+        if !gRunning
+            return "stopped"
+        if !complete {
+            result := PlaceConfiguredBuild(plan)
+            if result!="complete"
+                return result
+        }
+    } finally gCardAction := previous
     BeginUnitManagerPhase("Build audited (" gPlacements.Length " units); the F unit manager opens again for the upgrades.")
     if !HasCardChoice() && !IsEndGameBlocking()
         EnsureUnitManagerOpen()

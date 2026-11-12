@@ -5,8 +5,11 @@
 ;     when the slot is full). Read before the click and after it: n+1 means
 ;     bought, n unchanged means refused.
 ;  2. Yen: the Yen before the click against the Yen after it (each needs two
-;     agreeing reads). A drop of at least PURCHASE_YEN_DROP_FRACTION of the
-;     unit's cost means bought, no drop means refused.
+;     reads that agree within a tolerance, because Yen keeps changing). Each
+;     value is a range {min,max} of its two reads. Bought when even the highest
+;     Yen after is at least PURCHASE_YEN_DROP_FRACTION of the unit's cost below
+;     the lowest Yen before; refused only when the lowest Yen after is not below
+;     the highest Yen before (no drop at all); in between it is unknown.
 ;  3. Unit panel (weak): the side panel also opens on an already placed unit,
 ;     so it counts only when no recorded unit lies within the CandidateOccupied
 ;     radius of the click point.
@@ -14,6 +17,9 @@
 ; the unit's slot key and Q (to read a counter); they never press F, change the
 ; phase or write placement state. Placement.ahk acts on the verdict.
 global PURCHASE_YEN_DROP_FRACTION := 0.5
+; Two Yen reads agree when they differ by at most
+; max(YEN_READ_TOLERANCE_ABS, YEN_READ_TOLERANCE_FRACTION * the larger one).
+global YEN_READ_TOLERANCE_ABS := 300,YEN_READ_TOLERANCE_FRACTION := 0.05
 ; Probes after the first one, while the verdict stays unknown.
 global PURCHASE_REPROBE_LIMIT := 3
 ; OCR passes per state read; two consecutive agreeing Yen reads end it earlier.
@@ -27,9 +33,18 @@ global COUNTER_SLOT_GAP := 30
 global COUNTER_MAX_PLAUSIBLE := 99
 
 ; All fields a verdict can use. counterBefore/counterAfter are {n,max} or 0;
-; yen values are -1 when unreadable.
+; yenBefore/yenAfter are the LOWER Yen of the agreeing pair and
+; yenBeforeMax/yenAfterMax the higher (all -1 when unreadable).
 NewPurchaseEvidence() {
-    return {counterBefore:0,counterAfter:0,yenBefore:-1,yenAfter:-1,cost:0,panelSeen:false,recordedNearby:false}
+    return {counterBefore:0,counterAfter:0,yenBefore:-1,yenBeforeMax:-1,yenAfter:-1,yenAfterMax:-1,cost:0,panelSeen:false,recordedNearby:false}
+}
+
+; Two Yen reads that belong to the same moment (see YEN_READ_TOLERANCE_*).
+YenReadsAgree(a,b) {
+    global YEN_READ_TOLERANCE_ABS,YEN_READ_TOLERANCE_FRACTION
+    if a<0 || b<0
+        return false
+    return Abs(a-b)<=Max(YEN_READ_TOLERANCE_ABS,YEN_READ_TOLERANCE_FRACTION*Max(a,b))
 }
 
 ; The verdict with the evidence that produced it: {verdict,by}. verdict is
@@ -37,8 +52,10 @@ NewPurchaseEvidence() {
 ; Rule order (the first rule that can decide wins):
 ;  1. counter before and after readable (same max): after=before+1 confirmed,
 ;     after=before denied (any other change is not trusted, next rule)
-;  2. Yen before and after readable and the cost known: a drop of at least
-;     PURCHASE_YEN_DROP_FRACTION*cost confirmed, otherwise denied
+;  2. Yen before and after readable and the cost known: confirmed when
+;     afterMax <= beforeMin - PURCHASE_YEN_DROP_FRACTION*cost; denied when
+;     afterMin >= beforeMax (no drop at all); anything between is not decided
+;     here (next rule)
 ;  3. a unit panel with no recorded unit nearby: confirmed
 ;  4. unknown
 JudgePurchase(ev) {
@@ -51,10 +68,13 @@ JudgePurchase(ev) {
             return {verdict:"denied",by:"slot counter stayed at " after.n "/" after.max}
     }
     if ev.yenBefore>=0 && ev.yenAfter>=0 && ev.cost>0 {
-        drop := ev.yenBefore-ev.yenAfter
-        if drop>=PURCHASE_YEN_DROP_FRACTION*ev.cost
-            return {verdict:"confirmed",by:"Yen " ev.yenBefore " -> " ev.yenAfter " (cost " ev.cost ")"}
-        return {verdict:"denied",by:"Yen " ev.yenBefore " -> " ev.yenAfter " (cost " ev.cost "), no drop"}
+        beforeMin := ev.yenBefore,beforeMax := ev.yenBeforeMax>=0?ev.yenBeforeMax:ev.yenBefore
+        afterMin := ev.yenAfter,afterMax := ev.yenAfterMax>=0?ev.yenAfterMax:ev.yenAfter
+        text := "Yen " beforeMin (beforeMax!=beforeMin?"-" beforeMax:"") " -> " afterMin (afterMax!=afterMin?"-" afterMax:"") " (cost " ev.cost ")"
+        if afterMax<=beforeMin-PURCHASE_YEN_DROP_FRACTION*ev.cost
+            return {verdict:"confirmed",by:text}
+        if afterMin>=beforeMax
+            return {verdict:"denied",by:text ", no drop"}
     }
     if ev.panelSeen && !ev.recordedNearby
         return {verdict:"confirmed",by:"unit panel (no recorded unit nearby)"}
@@ -142,12 +162,14 @@ ReadHotbarPass(unit) {
 }
 
 ; The hotbar state with the safety the verdict needs: Yen is believed only
-; when two consecutive passes agree (two unreadable passes in a row end the
-; read with Yen -1), the counter only when every pass that read one agrees.
+; when two consecutive passes agree within the tolerance (YenReadsAgree; two
+; unreadable passes in a row end the read with Yen -1). yen is the LOWER of
+; the two agreeing reads (the safe one for an affordability check), yenMax the
+; higher. The counter is believed only when every pass that read one agrees.
 ; At most PURCHASE_READ_ATTEMPTS passes.
 ReadPurchaseState(unit) {
     global gRunning,PURCHASE_READ_ATTEMPTS
-    state := {yen:-1,cost:0,counter:false}
+    state := {yen:-1,yenMax:-1,cost:0,counter:false}
     previous := -2,counters := []
     Loop PURCHASE_READ_ATTEMPTS {
         if !gRunning
@@ -157,8 +179,10 @@ ReadPurchaseState(unit) {
             state.cost := pass.cost
         if pass.counter
             counters.Push(pass.counter)
-        if pass.yen=previous {
-            state.yen := pass.yen
+        if pass.yen<0 && previous=-1
+            break
+        if YenReadsAgree(pass.yen,previous) {
+            state.yen := Min(pass.yen,previous),state.yenMax := Max(pass.yen,previous)
             break
         }
         previous := pass.yen
@@ -179,23 +203,28 @@ ProbePurchase(unit,point) {
         ev.counterBefore := point.counterBefore
     if point.HasProp("yenBefore")
         ev.yenBefore := point.yenBefore
+    if point.HasProp("yenBeforeMax")
+        ev.yenBeforeMax := point.yenBeforeMax
     if point.HasProp("cost")
         ev.cost := point.cost
     if !ActionPause(PURCHASE_SETTLE_MS)
         return {verdict:"unknown",by:"",evidence:ev}
     state := ReadPurchaseState(unit)
     if !state.counter && gRunning {
+        ; The unit may still be held: pressing its slot key again would toggle
+        ; the hold OFF (and can select an existing unit), so drop it first.
+        CancelUnitPreview()
         if SelectPlacementUnit(unit) && ActionPause(PURCHASE_SETTLE_MS) {
             held := ReadPurchaseState(unit)
             CancelUnitPreview()
             state.counter := held.counter
             if state.yen<0
-                state.yen := held.yen
+                state.yen := held.yen,state.yenMax := held.yenMax
             if state.cost<=0
                 state.cost := held.cost
         }
     }
-    ev.counterAfter := state.counter,ev.yenAfter := state.yen
+    ev.counterAfter := state.counter,ev.yenAfter := state.yen,ev.yenAfterMax := state.yenMax
     if ev.cost<=0
         ev.cost := state.cost
     ; Weak evidence: only where no recorded unit could own the panel.
@@ -206,13 +235,40 @@ ProbePurchase(unit,point) {
     return judged
 }
 
+; Counter reads that must agree before the record is changed or a slot capped
+; (M3): the most extra reads of the held unit's counter for that.
+global COUNTER_AGREE_ATTEMPTS := 4
+
+; The unit is held and first was read from its counter: reads again (at most
+; COUNTER_AGREE_ATTEMPTS-1 fresh passes) until one agrees with first. Returns
+; first when two reads agree, false otherwise (or on a card, the end screen or
+; a stop).
+ConfirmHeldCounter(unit,first) {
+    global gRunning,COUNTER_AGREE_ATTEMPTS
+    if !IsObject(first)
+        return false
+    Loop COUNTER_AGREE_ATTEMPTS-1 {
+        if !gRunning || HasCardChoice() || IsEndGameBlocking()
+            return false
+        second := ReadHotbarPass(unit).counter
+        if IsObject(second) && second.n=first.n && second.max=first.max
+            return first
+    }
+    return false
+}
+
 ; The slot counter right now, read the way the audit needs it: select the
 ; unit, read the hotbar, drop the hold with Q. {n,max}, or false when the
-; counter cannot be read (or the run stopped). One attempt; callers bound
-; their own retries.
+; counter cannot be read (or the run stopped, a card is up that could not be
+; cleared, or the end screen shows: the hotbar is hidden then and no key may be
+; pressed over it). One attempt; callers bound their own retries.
 ProbeSlotCounter(unit) {
     global gRunning,PURCHASE_SETTLE_MS
-    if !gRunning || !SelectPlacementUnit(unit)
+    if !gRunning || IsEndGameBlocking()
+        return false
+    if HasCardChoice() && !ClearCardChoice()
+        return false
+    if !SelectPlacementUnit(unit)
         return false
     counter := false
     if ActionPause(PURCHASE_SETTLE_MS)

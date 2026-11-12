@@ -22,11 +22,11 @@ def function(file, name):
 names = ["UpgradeQueue", "ResetUpgradeSelection", "ResetUpgradeTracking",
          "RefreshRecordedUpgradeTarget", "UpgradePriorityPass", "DeferUnitUpgrade",
          "UpgradeOnce", "UpgradeWarning", "PortraitDistance", "SlotDisplayName",
-         "TileIdentityMismatch", "StableTileRead", "UpgradeOnceAction"]
+         "TileIdentityMismatch", "NoteUncertainOrderUnchecked", "StableTileRead", "UpgradeOnceAction"]
 logic = "\n\n".join(function("PlacedUnits.ahk", name) for name in names)
 logic += "\n" + function("Learning.ahk", "NormalizeWords")
 for name in ["ResetPathLight", "PathLightOn", "PathLightAction", "VariantShowsLitPath", "RecordLitPathSeen", "ReadLitPath",
-             "PathButtonTarget", "ReadPathGlyph", "ClickPathButton", "ClickUntilGlyph", "EnsurePathLight"]:
+             "PathToggleStillHeld", "PathButtonTarget", "ReadPathGlyph", "ClickPathButton", "ClickUntilGlyph", "EnsurePathLight"]:
     logic += "\n" + function("PathLight.ahk", name)
 logic += "\n" + function("Learning.ahk", "MemoryRead")
 logic += "\n" + function("Placement.ahk", "PlacementStillBesidePath")
@@ -39,7 +39,7 @@ logic += "\n" + function("Placement.ahk", "TryPlacementPoints")
 logic += "\n" + function("Placement.ahk", "PlaceConfiguredBuildAction")
 logic += "\n" + function("Placement.ahk", "MissingBuildPlacements")
 for name in ["SlotTargetCount", "SlotCounterFull", "CapSlot", "ReconcileSlot", "RemoveNewestSlotEntries", "AddMissedPurchases",
-             "RenumberPlacements", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
+             "RenumberPlacements", "ManagerLookupLimit", "MarkSlotForReconcile", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
              "NoteManagerOpenFailure", "NoteManagerTileFound", "ManagerAuditDue"]:
     logic += "\n" + function("BuildAudit.ahk", name)
 logic += "\n" + function("PlacementArea.ahk", "AcceptCurrentPlacementArea")
@@ -52,14 +52,14 @@ fixture = r'''
 global testNow := 10000,gRunning := true,REF_W := 800,REF_H := 600
 global ACTION_HOLD_MS := 300,gPrepDeadline := 0,gNavigationTimedOut := false,navReached := true,endState := false
 global gPlacements := [],gUnitControls := [],gUpgradeSelectedId := 0,gUnitManagerFailure := "",gSlotPortraits := Map()
-global gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
+global yenShortMode := false,orderLogs := 0,gCardAction := "",gCardInterruptEpoch := 0,panel := false,selected := 0
 global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks := 0,ignored := 0,unreadable := 0,ready := true,dimmed := 0
 global placeTries := 0,lagMs := 0,opened := [],flashLevel := Map(),warnings := 0
 global savedP := false,pHalf := false,pHalfState := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,pIgnoreClicks := 0,gPathReadGaveUp := false
 global PATH_CLICK_LIMIT := 3,PATH_TOGGLE_CHANGE := 25,PATH_GLYPH_POLLS := 4,PATH_GLYPH_POLL_MS := 700,LIT_PATH_MIN_FRACTION := 0.01
-global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false,LEARNING_FILE := A_ScriptDir "\\path-light-regression.ini"
+global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false,gPathToggle := 0,PATH_LIT_SETTLE_MS := 400,LEARNING_FILE := A_ScriptDir "\\path-light-regression.ini"
 global gSlotCaps := Map(),gLookupMisses := Map(),gOpenFailures := 0,gEscalationAudits := 0,gAuditDue := false,gLastAudit := 0
-global MANAGER_LOOKUP_LIMIT := 6,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_OPEN_FAIL_LIMIT := 30,UPGRADE_DEFER_LIMIT := 40
+global MANAGER_LOOKUP_LIMIT := 6,MANAGER_LOOKUP_LIMIT_AFTER_AUDITS := 2,YEN_WAIT_ROUND_LIMIT := 30,gSlotsToReconcile := Map(),AUDIT_LIMIT_PER_MATCH := 2,MANAGER_OPEN_FAIL_LIMIT := 30,UPGRADE_DEFER_LIMIT := 40
 global BUILD_COPY_ATTEMPT_LIMIT := 40,BUILD_RELOCATE_WAIT_LIMIT := 20,HILL_RETRY_LIMIT := 12,CARD_RESUME_LIMIT := 5,gPathVisionErrors := 0,PATH_VISION_ERROR_LIMIT := 6
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
@@ -230,6 +230,23 @@ try {
     Assert(clicks=1,"a slightly different portrait of the right unit was refused")
     sigs := Map(),gSlotPortraits := Map()
 
+    ; M2: a unit whose purchase order is uncertain (a missed purchase was recorded after it) is held to
+    ; the same portrait check: refused on clear evidence, and the unusable cases are logged once.
+    a := Unit(1,99),b := Unit(2,99),gPlacements := [a,b],levels[1] := 0,levels[2] := 0,clicks := 0
+    a.orderUncertain := true
+    gSlotPortraits := Map(1,"80.0.0.0.0.0.0.0.0.0.10.10.0.0",2,"0.0.0.0.80.0.0.0.0.0.10.10.0.0")
+    sigs[1] := "0.0.0.0.78.0.0.0.0.0.11.11.0.0"
+    UpgradePriorityPass()
+    Assert(clicks=0 && a.upgradeRetryAt>testNow,"an order-uncertain unit was upgraded on another unit's tile")
+    a.upgradeRetryAt := 0,sigs[1] := "",orderLogs := 0
+    UpgradePriorityPass()
+    Assert(clicks=1 && orderLogs=1,"an order-uncertain unit with an unreadable portrait was not logged (" orderLogs ")")
+    a.upgradeRetryAt := 0,gSlotPortraits := Map(),sigs[1] := "70.0.0.0.6.0.0.0.0.0.12.12.0.0",orderLogs := 0
+    a.orderWarned := false
+    UpgradePriorityPass()
+    Assert(orderLogs=1,"an order-uncertain unit with no learned portrait was not logged")
+    sigs := Map(),gSlotPortraits := Map()
+
     ; P must end up ON (lit path first, red overlay as fallback). Discovered
     ; once; later calls use the exact saved coordinate. Never stops the macro.
     ; (PathLight.ahk: P is clicked, never pressed; the glyph verifies each click.)
@@ -396,6 +413,7 @@ try {
         testNow += 2100,passes += 1
     }
     Assert(a.HasProp("unreachable") && a.unreachable && !a.complete && !ManagerAuditDue() && gEscalationAudits=AUDIT_LIMIT_PER_MATCH,"audit exhaustion did not give the unit up without another audit")
+    Assert(gLookupMisses[1]=MANAGER_LOOKUP_LIMIT_AFTER_AUDITS,"after the audits the unit was looked up " gLookupMisses[1] " times, expected the lower limit " MANAGER_LOOKUP_LIMIT_AFTER_AUDITS)
     Assert(UpgradeQueue().Length=2 && UpgradeQueue()[1].id=2,"an unreachable unit still blocked the queue")
     Assert(levels[2]=0 && levels[3]=0,"a lower priority ran before the limit was used up")
     Loop 12 {
@@ -417,6 +435,11 @@ try {
     result := PlaceConfiguredBuildAction([a])
     Assert(result="complete" && gSlotCaps.Has(1) && placeTries=HILL_RETRY_LIMIT+1,"a Hill unit without Hill space waited forever or was not given up (" placeTries " tries, " result ")")
     a.hill := false,hillBlocked := false,gSlotCaps := Map(),gMapModel := 0
+    ; A unit that never becomes affordable: YEN_WAIT_ROUND_LIMIT waits in a row, then it is given up (logged).
+    a.count := 1,gPlacements := [],gSlotCaps := Map(),placeTries := 0,verifyCalls := 0,yenShortMode := true
+    result := PlaceConfiguredBuildAction([a])
+    Assert(result="complete" && placeTries=YEN_WAIT_ROUND_LIMIT && gSlotCaps.Has(1),"a Yen wait that never ended was not bounded by YEN_WAIT_ROUND_LIMIT (" placeTries " waits, " result ")")
+    yenShortMode := false,gSlotCaps := Map()
     ResetPlacementFailureStreak()
     FileAppend "PASS: manager lookup limit then audit then back to upgrading, audit exhaustion skips the unreachable unit, bounded build loop; checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; tile upgrades: exact targets, slow bars, Yen waits, grey Max, wrong-portrait refusal, MAX targets keep clicking without a counter, a passing grey frame or one wrong level never completes a unit, escalating back-off; build order kept (same unit retried; only Hill-only without Hill lets later units go first); no duplicate purchases; stop handling.`n","*"
     ExitApp 0
@@ -436,15 +459,18 @@ BeginInputAction(*) => true
 EndInputAction(*) => 0
 DiscordWarn(*) => 0
 Log(message,*) {
-    global warnings
+    global warnings,orderLogs
+    if InStr(message,"purchase order is uncertain")
+        orderLogs += 1
     if InStr(message,"Upg click") || InStr(message,"Retry in")
         warnings += 1
 }
 ClearCardChoice(*) => true
 SaveUpgradeDiagnostic(*) => 0
 PlacementShortOfYen(*) => false
-ReadPurchaseState(*) => {yen:-1,cost:0,counter:false}
-WaitForPlacementYen(*) => false
+ReadPurchaseState(*) => {yen:-1,yenMax:-1,cost:0,counter:false}
+ReconcilePendingSlots(*) => true
+WaitForPlacementYen(*) => yenShortMode
 TeleportBackToSpawn(*) {
     global teleports
     teleports += 1

@@ -10,9 +10,9 @@ logic = '\n'.join(function(file,name) for file,name in [
     ('Placement.ahk','FinishPlacement'),('Placement.ahk','CountSlotPlacements'),
     ('Placement.ahk','FailedPlacementSpot'),('Placement.ahk','RememberFailedPlacementSpot'),
     ('Placement.ahk','MissingBuildPlacements'),('Placement.ahk','PlacementShortOfYen'),
-    ('PurchaseVerifier.ahk','ProbePurchase'),('PurchaseVerifier.ahk','JudgePurchase'),('PurchaseVerifier.ahk','NewPurchaseEvidence'),
+    ('PurchaseVerifier.ahk','ProbePurchase'),('PurchaseVerifier.ahk','ConfirmHeldCounter'),('PurchaseVerifier.ahk','YenReadsAgree'),('PurchaseVerifier.ahk','JudgePurchase'),('PurchaseVerifier.ahk','NewPurchaseEvidence'),
     ('AAPathMacro.ahk','CheckCardInterruption')])
-for name in ['SlotTargetCount','SlotCounterFull','CapSlot','ReconcileSlot','RemoveNewestSlotEntries','AddMissedPurchases','RenumberPlacements']:
+for name in ['SlotTargetCount','SlotCounterFull','CapSlot','ReconcileSlot','RemoveNewestSlotEntries','AddMissedPurchases','RenumberPlacements','MarkSlotForReconcile','ReconcilePendingSlots','AuditReadCounter']:
     logic += '\n' + function('BuildAudit.ahk', name)
 logic += '\n' + function('PlacementArea.ahk','PlacementAnchorKnown')
 for name in ['PlacementFailureLimitReached','ResetPlacementFailureStreak','RecordFailedPlacement','PlacementCopyFailures']:
@@ -30,7 +30,8 @@ global gLastPlacedIndex := 0,gPlacementPreferredSide := 0,gPlacementEdgeMisses :
 global gCardHandling := false,gCardAction := "placement",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0,testNow := 10000
 global panel := false,preview := false,existingModel := false,purchased := false,cards := false,buys := 0,slots := 0,registrations := 0
 global gPlacementLine := [],gLayoutValidation := Map(),gPlacementAreaFailures := Map(),PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
-global gSlotCaps := Map(),gLastAudit := 0
+global gSlotCaps := Map(),gLastAudit := 0,gSlotsToReconcile := Map(),AUDIT_COUNTER_ATTEMPTS := 4,COUNTER_AGREE_ATTEMPTS := 4,YEN_READ_TOLERANCE_ABS := 300,YEN_READ_TOLERANCE_FRACTION := 0.05
+global occupiedSpot := false,secondReadOff := false,cardBaseline := 0
 global modelMode := false,models := Map(),hidePanels := false,delayPanel := false,rejectPurchase := false,cardDuringPurchase := false
 global gameCount := Map(),held := false,yen := 90000,UNIT_COST := 1350,GAME_MAX := 9,lastEvidence := "",dropHoldOnBuy := false,probes := 0,unreadableCounter := false,unreadableYen := false
 try {
@@ -44,7 +45,8 @@ try {
     Assert(!preview && !held,"the held unit was not dropped after the purchase")
 
     ; An unrelated panel visible behind a card is never purchase evidence.
-    NewGame(1,0),registrations := 0,purchased := false,panel := true,cards := true,gCardPollAt := 0
+    NewGame(1,0),registrations := 0,purchased := false,panel := true,gCardPollAt := 0
+    RaiseCards()
     gPlacementActiveUnit := unit,gPendingPlacement := Pending(1,1)
     Assert(!FinishPlacement(unit,gPendingPlacement,"test") && registrations=0,"purchase confirmed while a card was up")
     Assert(!RecoverPendingPlacement(unit) && registrations=0 && gPendingPlacement,"a pending purchase was probed under a card")
@@ -54,7 +56,8 @@ try {
 
     ; A real pending purchase survives the card, then is verified from the slot
     ; counter without clicking the field or buying another copy.
-    NewGame(1,0),gameCount[1] := 1,purchased := true,panel := true,cards := true,gCardPollAt := 0,gPendingPlacement := Pending(1,1),buys := 1,registrations := 0
+    NewGame(1,0),gameCount[1] := 1,purchased := true,panel := true,gCardPollAt := 0,gPendingPlacement := Pending(1,1),buys := 1,registrations := 0
+    RaiseCards()
     CheckCardInterruption()
     Assert(registrations=1 && CountSlotPlacements(1)=1 && buys=1,"card recovery lost or duplicated a real purchase")
     Assert(!FinishPlacement(unit,Pending(1,1),"test") && registrations=1,"same pending copy was counted twice")
@@ -168,6 +171,41 @@ try {
     Assert(!TryPlacementCandidateAction(unit,{x:420,y:330}) && buys=0 && SlotTargetCount(unit)=3,"a capped slot was tried again")
     Assert(MissingBuildPlacements([unit])="","a capped slot still counted as missing")
     GAME_MAX := 9,gSlotCaps := Map()
+
+    ; ---- M1: the counter shows MORE units than recorded (slot not full): reconciled first, no extra buy ----
+    unit := {slot:1,name:"Unit 1",count:2,enabled:true,priority:1,target:0}
+    NewGame(1,0),gameCount[1] := 1,buys := 0,gFailedPlacementSpots := [],gSlotsToReconcile := Map()
+    ResetPlacementFailureStreak(),gPlacementYenWait := 0,gSlotCaps := Map()
+    Assert(TryPlacementCandidateAction(unit,point) && buys=0 && CountSlotPlacements(1)=1 && gPlacements[1].anchorless && !held && !preview,"a unit on the field that was never recorded was not recorded before the click (or a click bought an extra unit)")
+    Assert(gConsecutivePlacementFailures=0 && !FailedPlacementSpot(point),"reconciling a missed unit counted a failure or blacklisted the spot")
+    ; the next click then goes ahead, counter 1/9 matching the record
+    Assert(TryPlacementCandidateAction(unit,{x:450,y:330}) && buys=1 && CountSlotPlacements(1)=2,"the copy after the reconcile was not bought")
+    ; fewer units on the field than recorded (a ghost): removed before the click
+    unit.count := 2
+    NewGame(1,0),gPlacements := [FullItem(1,1,300,330)],buys := 0,gFailedPlacementSpots := []
+    Assert(!TryPlacementCandidateAction(unit,point) && buys=0 && CountSlotPlacements(1)=0 && !held,"a ghost record was not removed before the click or a click was sent")
+    ; the second read disagrees: the record is untouched and no click is sent
+    NewGame(1,0),gameCount[1] := 1,buys := 0,secondReadOff := true,gFailedPlacementSpots := []
+    Assert(!TryPlacementCandidateAction(unit,point) && buys=0 && CountSlotPlacements(1)=0 && !held,"one counter read changed the record or allowed a click")
+    secondReadOff := false
+
+    ; ---- M1: a confirmed purchase that cannot be recorded normally is recorded at once, anchorless ----
+    unit.count := 2
+    NewGame(1,0),buys := 0,gFailedPlacementSpots := [],occupiedSpot := true,panel := false
+    ResetPlacementFailureStreak()
+    Assert(TryPlacementCandidateAction(unit,point) && buys=1 && CountSlotPlacements(1)=1 && gPlacements[1].anchorless,"a confirmed but unrecordable purchase was not recorded as an anchorless unit")
+    Assert(gConsecutivePlacementFailures=0 && !gPendingPlacement && !preview && !held && !panel,"that purchase counted a failure or left the preview/panel open")
+    occupiedSpot := false
+
+    ; ---- M1: an unknown purchase is settled against its counter before the NEXT purchase of ANY slot ----
+    unit1 := {slot:1,name:"Unit 1",count:2,enabled:true,priority:1,target:0},unit2 := {slot:2,name:"Unit 2",count:1,enabled:true,priority:2,target:0}
+    NewGame(1,0),buys := 0,gFailedPlacementSpots := [],gSlotsToReconcile := Map(),hidePanels := true,unreadableCounter := true,unreadableYen := true
+    ResetPlacementFailureStreak()
+    Assert(!TryPlacementCandidateAction(unit1,point) && buys=1 && CountSlotPlacements(1)=0 && gSlotsToReconcile.Has(1) && !FailedPlacementSpot(point),"an unknown purchase was recorded, blacklisted, or its slot was not marked")
+    unreadableCounter := false,unreadableYen := false,gPendingPlacement := 0
+    Assert(TryPlacementCandidateAction(unit2,{x:500,y:330}) && buys=2,"the purchase of the other slot was not made")
+    Assert(CountSlotPlacements(1)=1 && gPlacements[1].slot=1 && gPlacements[1].anchorless && gPlacements[2].slot=2 && !gSlotsToReconcile.Count,"the earlier unknown purchase was not recorded BEFORE the other slot's purchase (order " gPlacements[1].slot "," gPlacements[2].slot ")")
+    hidePanels := false
     FileAppend "PASS: a full slot before the click: no click, no failure, reconciled; five actual rejected purchases counted once each; sixth buy blocked after rescan; the slot counter alone confirms a bound purchase (also with the hold dropped or no panel); no UPG OCR; all 16 startup purchases across six slots advance; target four never buys five; existing-model/card/duplicate guards; Yen checked before the click; interruptions.`n","*"
     ExitApp 0
 } catch as err {
@@ -177,6 +215,10 @@ try {
 Assert(condition,message) {
     if !condition
         throw Error(message)
+}
+RaiseCards() {
+    global cards,cardBaseline,registrations
+    cards := true,cardBaseline := registrations
 }
 Pending(slot,copy) => {x:400,y:330,pendingSlot:slot,pendingCopy:copy,counterBefore:{n:copy-1,max:GAME_MAX},yenBefore:90000,cost:UNIT_COST}
 ; The game: gameCount[slot] units placed; a held unit shows its counter.
@@ -200,11 +242,23 @@ CancelUnitPreview(*) {
     preview := false,held := false
     return true
 }
+; A second pass over the held unit's counter (ConfirmHeldCounter); secondReadOff makes it disagree.
+ReadHotbarPass(unit) {
+    global gameCount,held,secondReadOff
+    count := gameCount.Has(unit.slot)?gameCount[unit.slot]:0
+    return {yen:-1,cost:UNIT_COST,counter:held?{n:count+(secondReadOff?1:0),max:GAME_MAX}:false}
+}
+; The audit probe: select, read, drop the hold (two probes agree).
+ProbeSlotCounter(unit) {
+    global gameCount
+    count := gameCount.Has(unit.slot)?gameCount[unit.slot]:0
+    return {n:count,max:GAME_MAX}
+}
 ReadPurchaseState(unit) {
     global gameCount,held,yen,probes
     probes += 1
     count := gameCount.Has(unit.slot)?gameCount[unit.slot]:0
-    return {yen:unreadableYen?-1:yen,cost:UNIT_COST,counter:held && !unreadableCounter?{n:count,max:GAME_MAX}:false}
+    return {yen:unreadableYen?-1:yen,yenMax:unreadableYen?-1:yen,cost:UNIT_COST,counter:held && !unreadableCounter?{n:count,max:GAME_MAX}:false}
 }
 FullItem(id,slot,x,y) => {id:id,slot:slot,name:"Unit " slot,priority:1,target:0,x:x,y:y,anchor:0,partner:"",hill:false,row:1,complete:false}
 ResetUpgradeSelection(*) => 0
@@ -227,7 +281,8 @@ PlacementClickRef(x,y,guard := false,purchase := 0) {
         panel := !rejectPurchase && !delayPanel && !hidePanels
         delayPanel := false
         if cardDuringPurchase {
-            cardDuringPurchase := false,cards := true
+            cardDuringPurchase := false
+            RaiseCards()
             CheckCardInterruption()
         }
     } else
@@ -242,7 +297,8 @@ SelectPlacementUnit(*) {
 }
 ClearCardChoice(*) {
     global panel,cards,preview,held
-    Assert(registrations=0 || purchased,"card interruption counted the obscured panel before clearing it")
+    ; nothing may be registered between the card appearing and it being cleared
+    Assert(registrations=cardBaseline,"card interruption counted the obscured panel before clearing it")
     panel := false,cards := false,preview := false,held := false
     return true
 }
@@ -254,7 +310,7 @@ RegisterPlacedUnit(unit,point,evidence) {
     gPlacements.Push(item)
     return item
 }
-CandidateOccupied(*) => false
+CandidateOccupied(*) => occupiedSpot
 PlacementTerrain(*) => "ground"
 RememberHillOutcome(*) => 0
 UnitPlacementCost(*) => 1350

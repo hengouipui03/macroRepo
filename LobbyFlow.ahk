@@ -7,6 +7,9 @@
 global LOBBY_PLAY_WAIT_MS := 30000
 global LOBBY_PLAY_WAIT_AFTER_RETURN_MS := 60000
 global LOBBY_PLAY_POLL_MS := 500
+; Pause after a Play click or a saved-position click, and the poll while
+; waiting for the matchmaking panel.
+global LOBBY_CLICK_SETTLE_MS := 250,LOBBY_PANEL_POLL_MS := 150
 global LOBBY_PLAY_CLICK_LIMIT := 2        ; verified Play clicks per round
 global LOBBY_PLAY_CLICK_FAIL_LIMIT := 3   ; clicks that could not be sent per round
 ; The label OCR sometimes fails to read "Play". After a return to the lobby the
@@ -87,7 +90,7 @@ TryStartFromLobby(afterReturnToLobby := false) {
                         failed := "find Play (no saved position either)"
                 } else
                     failed := "find Play (not read within " Round(playWaitMs/1000) " s)"
-            } else if !ClickRef(play.x,play.y,() => LobbyPlayAt(play.x,play.y)) || !ActionPause(250) {
+            } else if !ClickRef(play.x,play.y,() => LobbyPlayAt(play.x,play.y)) || !ActionPause(LOBBY_CLICK_SETTLE_MS) {
                 if !gRunning
                     return false
                 playClickFails += 1
@@ -105,11 +108,11 @@ TryStartFromLobby(afterReturnToLobby := false) {
             walkRounds += 1
             Log("Play clicked. Hold W until the matchmaking panel appears, then release W.")
             Send "{w down}"
-            try panelOpen := WaitFor(panelReady,LOBBY_WALK_MS,150)
+            try panelOpen := WaitFor(panelReady,LOBBY_WALK_MS,LOBBY_PANEL_POLL_MS)
             finally Send "{w up}"
             if !panelOpen && gRunning {
                 Log("Matchmaking panel did not appear after " Round(LOBBY_WALK_MS/1000) " seconds of walking. Wait " Round(LOBBY_WALK_GRACE_MS/1000) " seconds before retrying Lobby Play.")
-                panelOpen := WaitFor(panelReady,LOBBY_WALK_GRACE_MS,150)
+                panelOpen := WaitFor(panelReady,LOBBY_WALK_GRACE_MS,LOBBY_PANEL_POLL_MS)
             }
             if panelOpen && gRunning
                 stage := "panel"
@@ -168,7 +171,7 @@ ClickSavedLobbyPlay() {
         return false
     }
     Notify("Lobby Play was not detected in time. Clicking its saved position.")
-    return ClickWindowOnce(point,geometry) && ActionPause(250)
+    return ClickWindowOnce(point,geometry) && ActionPause(LOBBY_CLICK_SETTLE_MS)
 }
 
 ; After a Disconnected dialog: click Reconnect (verified, at the cadence) until

@@ -1,4 +1,4 @@
-global gMatchMode := 0,gQueueMode := false
+﻿global gMatchMode := 0,gQueueMode := false
 
 SaveMatchMode(control,*) {
     global UNIT_SETTINGS_FILE
@@ -79,11 +79,21 @@ RetryQueueMatch(reason,prompt := false) {
     return ActionPause(3000,false) ? "retry" : false
 }
 
+; How long a queued match may take to reach Vote Start before the wait hands
+; over to RecoverVoteStart (which logs what it finds), and the pause per poll.
+global QUEUE_WAIT_LIMIT_MS := 900000,QUEUE_WAIT_POLL_MS := 250
+; Lobby Play still showing this long after Submit; the wait before a fresh queue.
+global QUEUE_LOBBY_CHECK_MS := 10000,QUEUE_LOBBY_RETRY_WAIT_MS := 15000
+
 WaitForQueuedMatch(submittedAt) {
-    global gRunning
-    lobbyCheckAt := submittedAt?submittedAt+10000:0
-    retryAt := 0
+    global gRunning,QUEUE_WAIT_LIMIT_MS,QUEUE_WAIT_POLL_MS,QUEUE_LOBBY_CHECK_MS,QUEUE_LOBBY_RETRY_WAIT_MS
+    lobbyCheckAt := submittedAt?submittedAt+QUEUE_LOBBY_CHECK_MS:0
+    retryAt := 0,startedAt := A_TickCount
     while gRunning {
+        if A_TickCount-startedAt>=QUEUE_WAIT_LIMIT_MS {
+            Notify("The queued match did not reach Vote Start in " Round(QUEUE_WAIT_LIMIT_MS/60000) " minutes; checking the screen for recovery.")
+            return false
+        }
         if HasVoteStart() {
             if WaitForVoteStart(1000)
                 return true
@@ -94,16 +104,16 @@ WaitForQueuedMatch(submittedAt) {
                 submittedAt := TryStartFromLobby()
                 if !submittedAt
                     return false
-                lobbyCheckAt := submittedAt+10000
+                lobbyCheckAt := submittedAt+QUEUE_LOBBY_CHECK_MS
             }
         } else if lobbyCheckAt && A_TickCount>=lobbyCheckAt {
             lobbyCheckAt := 0
             if HasLobbyPlay() {
-                retryAt := A_TickCount+15000
-                Notify("Lobby Play is still visible 10 seconds after Submit. Waiting another 15 seconds before retrying.")
+                retryAt := A_TickCount+QUEUE_LOBBY_RETRY_WAIT_MS
+                Notify("Lobby Play is still visible " Round(QUEUE_LOBBY_CHECK_MS/1000) " seconds after Submit. Waiting another " Round(QUEUE_LOBBY_RETRY_WAIT_MS/1000) " seconds before retrying.")
             }
         }
-        if !ActionPause(250,false)
+        if !ActionPause(QUEUE_WAIT_POLL_MS,false)
             break
     }
     return false

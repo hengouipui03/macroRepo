@@ -955,6 +955,8 @@ HasCardBorder(frame,edgeX) {
 ; A card choice that stays open this long is left to the game's own vote timer
 ; (it auto-picks); the run continues instead of ending.
 global CARD_CHOICE_TIMEOUT_MS := 20000
+; Pause between looks at a card that is still open in the watch loop.
+global WATCH_CARD_RETRY_MS := 150
 
 CheckCardInterruption() {
     global gRunning,gCardHandling,gCardAction,gCardPollAt,gCardInterruptEpoch
@@ -1499,7 +1501,7 @@ RunMacro() {
             ; A card that stays open (timeout) or a failed step is not a reason to
             ; end the run: the loop looks again. Only !gRunning leaves the loop.
             ClearCardChoice()
-            ActionPause(150)
+            ActionPause(WATCH_CARD_RETRY_MS)
             continue
         }
         if TryEndState() {
@@ -1575,7 +1577,13 @@ PrepareRunStart() {
 }
 
 StartMacro(*) {
-    global gRunning,gSessionArmed,gQueueMode
+    global gRunning,gSessionArmed,gQueueMode,gReconnecting
+    ; A reconnect is pending (the Disconnected dialog is being handled): a run
+    ; started now would act over the dialog. gRunning is held by that loop.
+    if gReconnecting {
+        Log("Reconnect in progress; F6 ignored. Press F7 to stop.")
+        return
+    }
     if gRunning
         return
     if !PrepareRunStart()

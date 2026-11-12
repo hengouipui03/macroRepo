@@ -9,7 +9,7 @@ import subprocess
 from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 NAMES = ["ResetPathLight", "PathLightOn", "PathLightAction", "VariantShowsLitPath", "RecordLitPathSeen", "ReadLitPath",
-         "PathButtonTarget", "ReadPathGlyph", "ClickPathButton", "ClickUntilGlyph", "EnsurePathLight"]
+         "PathToggleStillHeld", "PathButtonTarget", "ReadPathGlyph", "ClickPathButton", "ClickUntilGlyph", "EnsurePathLight"]
 logic = "\n".join(function("PathLight.ahk", n) for n in NAMES)
 logic += "\n" + function("Learning.ahk", "MemoryRead")
 
@@ -26,11 +26,11 @@ fixture = r'''
 #SingleInstance Off
 #Warn All, Off
 global gRunning := true,REF_W := 800,REF_H := 600
-global PATH_CLICK_LIMIT := 3,PATH_TOGGLE_CHANGE := 25,PATH_GLYPH_POLLS := 4,PATH_GLYPH_POLL_MS := 700,LIT_PATH_MIN_FRACTION := 0.01
-global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false
+global PATH_CLICK_LIMIT := 3,PATH_TOGGLE_CHANGE := 25,PATH_GLYPH_POLLS := 4,PATH_GLYPH_POLL_MS := 700,LIT_PATH_MIN_FRACTION := 0.01,PATH_LIT_SETTLE_MS := 400
+global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false,gPathToggle := 0
 global LEARNING_FILE := A_ScriptDir "\path-light-matrix.ini"
 global gMapModel := {id:"abc123"},logs := []
-global glyphOn := false,glyphReadable := true,litVisible := false,ignoreClicks := 0,clicks := 0,worldReads := 0,crops := 0,savedP := {x:723,y:51}
+global glyphOn := false,stickyOff := false,glyphReadable := true,litVisible := false,ignoreClicks := 0,clicks := 0,worldReads := 0,crops := 0,savedP := {x:723,y:51}
 try {
     if FileExist(LEARNING_FILE)
         FileDelete LEARNING_FILE
@@ -40,11 +40,12 @@ try {
         for variant in [false,true]
             for lit in [false,true]
                 for context in ["vote","placing"] {
-                    got := PathLightAction(glyph,context,variant,lit,false)
-                    want := glyph="unread" ? "unreadable" : glyph="off" ? "click" : (context="placing" && variant && !lit) ? "cycle" : "none"
+                    got := PathLightAction(glyph,context,variant,lit,false,false)
+                    ; a lit path detected at "placing" is never clicked, whatever the glyph says
+                    want := (context="placing" && lit) ? "none" : glyph="unread" ? "unreadable" : glyph="off" ? "click" : (context="placing" && variant && !lit) ? "cycle" : "none"
                     Assert(got=want,"PathLightAction(" glyph "," context ",variant " variant ",lit " lit ") = " got ", expected " want)
                     ; the cycle is used once per match
-                    Assert(PathLightAction(glyph,context,variant,lit,true)!="cycle","the off-on cycle was offered twice")
+                    Assert(PathLightAction(glyph,context,variant,lit,true,false)!="cycle","the off-on cycle was offered twice")
                     count += 1
                 }
     Assert(count=24,"matrix incomplete")
@@ -58,17 +59,19 @@ try {
                     glyphOn := glyph="on",glyphReadable := glyph!="unread",litVisible := lit
                     Assert(EnsurePathLight(context),"EnsurePathLight stopped the macro (" glyph "," context ")")
                     label := glyph " glyph, variant lit " variant ", lit path " lit ", " context
-                    wantClicks := glyph="unread" ? 0 : glyph="off" ? 1 : (context="placing" && variant && !lit) ? 2 : 0
+                    wantClicks := glyph="unread" ? 0 : glyph="off" ? ((context="placing" && lit) ? 0 : 1) : (context="placing" && variant && !lit) ? 2 : 0
                     Assert(clicks=wantClicks,label ": " clicks " clicks, expected " wantClicks)
-                    if glyph="off"
+                    if glyph="off" && !(context="placing" && lit)
                         Assert(glyphOn && PathLightOn(),label ": P was not switched on")
+                    if glyph="off" && context="placing" && lit
+                        Assert(!glyphOn && PathLightOn(),label ": a lit path was clicked off, or not taken for P on")
                     if glyph="on"
                         Assert(glyphOn && PathLightOn(),label ": P ended off")
                     if glyph="unread"
-                        Assert(!PathLightOn(),label ": an unreadable glyph counted as on")
-                    ; the world reader is only asked at "placing" with the glyph on
-                    Assert(worldReads>=(glyph="on" && context="placing"?1:0),label ": the lit path was not looked for")
-                    if context="vote" || glyph!="on"
+                        Assert(PathLightOn()=(context="placing" && lit),label ": an unreadable glyph counted as on (or a lit path was ignored)")
+                    ; the world reader is asked first at "placing" (any glyph), never at "vote"
+                    Assert(worldReads>=(context="placing"?1:0),label ": the lit path was not looked for")
+                    if context="vote"
                         Assert(worldReads=0,label ": the world was read where it is not needed")
                 }
 
@@ -110,6 +113,24 @@ try {
     EnsurePathLight("placing")
     Assert(clicks=1 && glyphOn,"P off at the Placing call was not simply lit")
 
+    ; ---- M5: a lit path that is detected is never clicked, whatever the glyph says ----
+    Fresh(true)
+    glyphOn := false,litVisible := true
+    EnsurePathLight("placing")
+    Assert(clicks=0 && PathLightOn(),"P was clicked at Placing although a lit path was detected")
+    ; ---- M5: the Vote Start click registered (the glyph moved) but still reads off ----
+    Fresh(false)
+    glyphOn := false,stickyOff := true,litVisible := false
+    EnsurePathLight("vote")
+    Assert(clicks=1 && glyphOn && IsObject(gPathToggle),"the vote click was not recorded as a registered toggle (clicks " clicks ")")
+    EnsurePathLight("placing")
+    Assert(clicks=1,"P was clicked a second time at Placing after the Vote Start click had registered (" clicks " clicks)")
+    ; the glyph back where it started (the toggle was undone by the game): clicked again
+    glyphOn := false
+    EnsurePathLight("placing")
+    Assert(clicks=2,"P was not clicked when the glyph returned to its starting level")
+    stickyOff := false
+
     ; ---- click bound and glyph verification (glyph off) ----
     Fresh(false)
     glyphOn := false,ignoreClicks := 99
@@ -142,14 +163,14 @@ Assert(value,message) {
 ; A fresh match: per-match state, a counted click total, the variant known to
 ; show a lit path (or not) from the ini.
 Fresh(variantLit) {
-    global gMapModel,LEARNING_FILE,clicks,worldReads,crops,ignoreClicks,glyphReadable,litVisible,glyphOn,logs
+    global gMapModel,LEARNING_FILE,clicks,worldReads,crops,ignoreClicks,glyphReadable,litVisible,glyphOn,logs,stickyOff
     ResetPathLight()
     gMapModel := {id:"abc123"}
     if FileExist(LEARNING_FILE)
         FileDelete LEARNING_FILE
     if variantLit
         IniWrite "1",LEARNING_FILE,"minimap.abc123","lit_path"
-    clicks := 0,worldReads := 0,crops := 0,ignoreClicks := 0,glyphReadable := true,litVisible := false,glyphOn := false,logs := []
+    clicks := 0,worldReads := 0,crops := 0,ignoreClicks := 0,glyphReadable := true,litVisible := false,glyphOn := false,logs := [],stickyOff := false
 }
 Log(text) {
     global logs
@@ -169,9 +190,9 @@ ButtonPosition(name,&rx,&ry) {
 }
 VisionOk(reply) => reply && reply["status"]="ok"
 VisionRequest(command) {
-    global glyphOn,glyphReadable,litVisible,worldReads
+    global glyphOn,stickyOff,glyphReadable,litVisible,worldReads
     if InStr(command,"toolbarfixed ")=1
-        return glyphReadable?Map("status","ok","on",glyphOn?"1":"0","levels",glyphOn?"230,85":"80,85"):false
+        return glyphReadable?Map("status","ok","on",(glyphOn && !stickyOff)?"1":"0","levels",glyphOn?"230,85":"80,85"):false
     if InStr(command,"world ")=1 {
         worldReads += 1
         return Map("status","ok","path",litVisible?"20000":"0")

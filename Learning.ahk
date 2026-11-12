@@ -1205,31 +1205,6 @@ RememberPlacement(unit, candidate, success := true) {
     Log("Learned confirmed " unit.name " placement at window " Round(wx) "," Round(wy))
 }
 
-; A spot the build audit proved empty (the purchase was never made there) is
-; penalised like a failed placement: its remembered record, if any, is taken
-; out of use (bad reaches PLACEMENT_BAD_LIMIT) so it is not offered as a good
-; spot again. A later confirmed purchase at the same place resets it.
-RememberGhostPlacement(unit, point) {
-    global gPlacementProfile, REF_W, REF_H, PLACEMENT_BAD_LIMIT
-    if gPlacementProfile = "" || !(geometry := WindowGeometry())
-        return false
-    wx := geometry.cx - geometry.x + point.x * geometry.cw / REF_W
-    wy := geometry.cy - geometry.y + point.y * geometry.ch / REF_H
-    records := ReadPlacementRecords(unit)
-    marked := 0
-    for record in records {
-        if MapDistance(wx,wy,record.x,record.y) < 6 {
-            record.bad := Max(record.bad,PLACEMENT_BAD_LIMIT)
-            marked += 1
-        }
-    }
-    if !marked
-        return false
-    WritePlacementRecords(unit, records)
-    Log("Learning: the ghost " unit.name " spot at window " Round(wx) "," Round(wy) " is marked bad so it is not reused.")
-    return true
-}
-
 ; Hill spot outcomes per map profile (same map, window, camera and pose).
 ; A Hill spot is skipped in later matches only after failed purchases in two
 ; matches in a row; any purchase that succeeds there clears it. One miss can

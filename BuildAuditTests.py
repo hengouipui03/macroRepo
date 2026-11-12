@@ -10,7 +10,7 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 NAMES = ["ResetBuildAudit", "SlotTargetCount", "CapSlot", "SlotCounterFull", "AuditReadCounter", "ReconcileSlot",
          "RemoveNewestSlotEntries", "RenumberPlacements", "AddMissedPurchases", "AuditBuild", "VerifyCompletedBuild",
-         "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
+         "MarkSlotForReconcile", "ReconcilePendingSlots", "ManagerLookupLimit", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
          "ManagerAuditDue", "ManagerCooldownActive", "NoteManagerOpenFailure", "NoteManagerTileFound", "RepairBuildAfterManagerMismatch"]
 logic = "\n".join(function("BuildAudit.ahk", n) for n in NAMES)
 logic += "\n" + function("PlacementArea.ahk", "PlacementAnchorKnown")
@@ -28,7 +28,7 @@ fixture = r'''
 #Warn All, Off
 global gRunning := true,gPlacements := [],gPendingPlacement := 0
 global gPhase := "Upgrading",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"]
-global AUDIT_COUNTER_ATTEMPTS := 3,BUILD_AUDIT_LIMIT := 4,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_LOOKUP_LIMIT := 6,MANAGER_OPEN_FAIL_LIMIT := 30
+global AUDIT_COUNTER_ATTEMPTS := 4,MANAGER_LOOKUP_LIMIT_AFTER_AUDITS := 2,REPAIR_CLOSE_ATTEMPTS := 3,gCardAction := "",cardActionSeen := [],closeResults := [],endScreen := false,endAfterReads := 0,scriptedReads := Map(),gSlotsToReconcile := Map(),BUILD_AUDIT_LIMIT := 4,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_LOOKUP_LIMIT := 6,MANAGER_OPEN_FAIL_LIMIT := 30
 global UNIT_MANAGER_GIVEUP_COOLDOWN_MS := 300,gManagerCooldownUntil := 0,warns := [],ghostMarks := []
 global PURCHASE_SETTLE_MS := 300
 global gLookupMisses := Map(),gOpenFailures := 0,gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false,gSlotCaps := Map(),gLastAudit := 0
@@ -57,7 +57,8 @@ try {
     Assert(gPlacements[1].partner="" && gPlacements[4].anchor=2 && gPlacements[2].partner=4,"anchor/partner links were not renumbered or cleared")
     Assert(!complete && gSlotCaps.Count=0,"slot 1 holds 1 of 3 after the ghosts left: the build must be incomplete")
     Assert(blacklisted.Length=2,"ghost positions were not kept away from placement")
-    Assert(ghostMarks.Length=2 && ghostMarks[1]="1:260" && ghostMarks[2]="1:180","ghosts were not penalised in the learning data: " Join(ghostMarks))
+    ; M3: an audit removal never writes a learned penalty (which entry is the ghost is a guess)
+    Assert(!ghostMarks.Length,"an audit removal wrote a learned penalty")
 
     ; ---- a missed purchase: placed, no anchor, skipped by the anchor code ----
     Reset()
@@ -100,7 +101,97 @@ try {
     gPlacements := [MakeItem(1,1,100,300)]
     counters[1] := C(2,2),flaky[1] := 1
     AuditBuild([MakePlan(1,2)])
-    Assert(counterReads[1]=2 && gPlacements.Length=2 && !gLastAudit.unreadable.Length,"a counter that read on the second try was not used")
+    Assert(counterReads[1]=3 && gPlacements.Length=2 && !gLastAudit.unreadable.Length,"a counter that read on the second try was not used (two agreeing reads: " counterReads[1] " probes)")
+
+    ; ---- M3: the record changes only when TWO probes agree ----
+    Reset()
+    plan := [MakePlan(1,3)]
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300),MakeItem(3,1,180,300)]
+    scriptedReads[1] := [C(1,3),C(2,3),C(0,3),C(3,3)]
+    complete := AuditBuild(plan)
+    Assert(gPlacements.Length=3 && !gLastAudit.removed.Length && gLastAudit.unreadable.Length=1 && complete,"reads that never agreed changed the record")
+    Assert(LogCount("never agreed")=1,"disagreeing reads were not logged")
+    ; any two agreeing reads decide (a misread in between is outvoted)
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300),MakeItem(3,1,180,300)]
+    scriptedReads[1] := [C(1,3),C(2,3),C(0,3),C(1,3)]
+    AuditBuild(plan)
+    Assert(gPlacements.Length=1 && counterReads[1]=4,"two agreeing reads did not decide (" gPlacements.Length " left)")
+    ; a single misread full counter with a smaller max does not cap the slot
+    Reset()
+    plan := [MakePlan(1,5)]
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300),MakeItem(3,1,180,300)]
+    scriptedReads[1] := [C(1,1),C(3,3),C(3,3)]
+    AuditBuild(plan)
+    Assert(gSlotCaps.Has(1) && gSlotCaps[1]=3 && gPlacements.Length=3,"the cap was set from one misread or the agreeing reads were not used")
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300),MakeItem(3,1,180,300)]
+    scriptedReads[1] := [C(3,3),C(1,1),C(2,2),C(3,3)]
+    AuditBuild(plan)
+    Assert(gSlotCaps.Has(1) && gSlotCaps[1]=3,"two agreeing reads (3/3) did not cap")
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300),MakeItem(3,1,180,300)]
+    scriptedReads[1] := [C(1,1),C(2,2),C(4,4),C(5,5)]
+    AuditBuild(plan)
+    Assert(!gSlotCaps.Count,"a slot was capped without two agreeing reads")
+
+    ; ---- M4: the end screen aborts the audit at once; no slot is probed over it ----
+    Reset()
+    plan := [MakePlan(1,1),MakePlan(2,1)]
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300)]
+    counters[1] := C(1,1),counters[2] := C(1,1),endScreen := true
+    Assert(!AuditBuild(plan) && !counterReads.Count && LogCount("end screen")>=1,"the audit probed slots over the end screen")
+    ; the end screen appears mid-audit: the audit stops after the current slot's reads
+    Reset()
+    endAfterReads := 2
+    Assert(!AuditBuild(plan) && !counterReads.Has(2),"the audit went on to the next slot after the end screen appeared")
+    endAfterReads := 0,endScreen := false
+
+    ; ---- M2: a late missed purchase flags the units recorded after it; an immediate one does not ----
+    Reset()
+    plan := [MakePlan(1,2),MakePlan(2,1),MakePlan(3,1)]
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300),MakeItem(3,3,180,300)]
+    ReconcileSlot(plan[1],C(2,3),"slot counter",false)
+    Assert(gPlacements.Length=4 && gPlacements[4].slot=1 && !gPlacements[1].HasProp("orderUncertain") && gPlacements[2].orderUncertain && gPlacements[3].orderUncertain && !gPlacements[4].HasProp("orderUncertain"),"units recorded after a late missed purchase were not flagged")
+    Assert(LogCount("WARNING")=1,"the late missed purchase was not logged as a warning")
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300),MakeItem(3,3,180,300)]
+    ReconcileSlot(plan[1],C(2,3),"after an uncertain purchase",true)
+    Assert(gPlacements.Length=4 && !gPlacements[2].HasProp("orderUncertain") && !gPlacements[3].HasProp("orderUncertain") && !LogCount("WARNING"),"an immediate missed purchase flagged units")
+    ; the newest unit of the slot is also the newest overall: nothing to flag
+    Reset()
+    gPlacements := [MakeItem(1,2,140,300),MakeItem(2,1,100,300)]
+    ReconcileSlot(plan[1],C(2,3),"slot counter",false)
+    Assert(!gPlacements[1].HasProp("orderUncertain") && !LogCount("WARNING"),"a missed purchase after every other unit flagged units")
+
+    ; ---- M1: slots marked after an unknown purchase are settled (two agreeing reads) before the next purchase ----
+    Reset()
+    plan := [MakePlan(1,2),MakePlan(2,2)]
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300)]
+    counters[1] := C(2,3),counters[2] := C(1,3)
+    MarkSlotForReconcile(plan[1])
+    Assert(ReconcilePendingSlots() && CountSlotPlacements(1)=2 && !gSlotsToReconcile.Count && gPlacements[3].slot=1 && gPlacements[3].anchorless,"a marked slot was not reconciled (missed purchase recorded last)")
+    Assert(!gPlacements[2].HasProp("orderUncertain"),"an immediate reconcile flagged order")
+    ; unconfirmable: dropped from the list with a log, the record untouched
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    scriptedReads[1] := [C(2,3),C(0,3),C(1,3)]
+    MarkSlotForReconcile(plan[1])
+    Assert(ReconcilePendingSlots() && gPlacements.Length=1 && !gSlotsToReconcile.Count && LogCount("could not be confirmed")=1,"an unconfirmable slot changed the record or stayed marked")
+    ; the end screen stops it and keeps the mark
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    counters[1] := C(2,3),endScreen := true
+    MarkSlotForReconcile(plan[1])
+    Assert(!ReconcilePendingSlots() && gSlotsToReconcile.Count=1 && !counterReads.Count,"reconciling went on over the end screen")
+    endScreen := false
+
+    ; ---- the manager lookup limit drops once the audits are used up ----
+    Reset()
+    Assert(ManagerLookupLimit()=MANAGER_LOOKUP_LIMIT,"the lookup limit changed before the audits were used")
+    gEscalationAudits := AUDIT_LIMIT_PER_MATCH
+    Assert(ManagerLookupLimit()=MANAGER_LOOKUP_LIMIT_AFTER_AUDITS,"the lookup limit did not drop after the audits")
+    Reset()
 
     ; ---- incomplete per the counters ----
     Reset()
@@ -213,6 +304,23 @@ try {
     gPlacements := [MakeItem(1,1,100,300)]
     counters[1] := C(1,2),steps := [],gAuditDue := true,gPhase := "Upgrading",placeResult := "replay",placeFills := 0
     Assert(RepairBuildAfterManagerMismatch(plan)="replay" && !InStr(StepText(),"begin Upgrading"),"a replay during the repair went back to Upgrading")
+    ; M4: the repair audit runs with card handling on (restored afterwards)
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    counters[1] := C(1,1),steps := [],gAuditDue := true,gCardAction := "",cardActionSeen := []
+    RepairBuildAfterManagerMismatch([MakePlan(1,1)])
+    Assert(cardActionSeen.Length && cardActionSeen[1]="placement" && gCardAction="","the repair audit ran without card handling, or left it on")
+    ; m3: F not confirmed closed: retried within its bound, then NO audit, no slot key, phase stays Upgrading
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    counters[1] := C(0,1),steps := [],gAuditDue := true,gPhase := "Upgrading",closeResults := [false,false,false]
+    Assert(RepairBuildAfterManagerMismatch(plan)="complete" && !counterReads.Count && gPhase="Upgrading" && gPlacements.Length=1 && !ManagerAuditDue(),"an audit ran with F still open")
+    Assert(StepText()="close F|close F|close F" && LogCount("would not close")=1,"the close was not retried within REPAIR_CLOSE_ATTEMPTS: " StepText())
+    ; closed on the second try: the audit goes ahead
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    counters[1] := C(1,1),steps := [],gAuditDue := true,gPhase := "Upgrading",closeResults := [false,true]
+    Assert(RepairBuildAfterManagerMismatch([MakePlan(1,1)])="complete" && InStr(StepText(),"audit read"),"the audit did not run after F closed on a retry")
     ; stopped mid-audit
     Reset()
     gPlacements := [MakeItem(1,1,100,300)]
@@ -220,7 +328,7 @@ try {
     Assert(RepairBuildAfterManagerMismatch(plan)="stopped" && !InStr(StepText(),"begin Upgrading"),"a stop during the audit went back to Upgrading")
     gRunning := true
 
-    FileAppend "PASS: ghosts removed newest first with order kept, renumbered and links fixed; missed purchase anchorless and skipped by anchor code; unreadable counter bounded then trusted; caps; bounded completion audit; escalation request/limit/give-up; repair goes close F, Placing, audit, place, Upgrading.`n","*","UTF-8"
+    FileAppend "PASS: ghosts removed newest first with order kept (no learned penalty); missed purchase anchorless, flagged for the portrait check when found late; changes need two agreeing counter reads; end screen aborts the audit; marked slots reconciled before the next purchase; unreadable counter bounded then trusted; caps; bounded completion audit; escalation and the lower lookup limit; repair goes close F (retried), Placing, audit, place, Upgrading.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message " (line " err.Line ")`n" err.Stack "`n","*","UTF-8"
@@ -257,7 +365,9 @@ Reset() {
     global ghostMarks := []
     global gPlacements,counters,counterReads,blacklisted,logs,gSlotCaps,gLastAudit,gLookupMisses,gEscalationAudits,gCompletionAudits,gAuditDue,gOpenFailures,flaky,gRunning
     ResetBuildAudit()
+    global scriptedReads,closeResults,endScreen,endAfterReads,gSlotsToReconcile
     gPlacements := [],counters := Map(),counterReads := Map(),blacklisted := [],logs := [],flaky := Map(),gRunning := true
+    scriptedReads := Map(),closeResults := [],endScreen := false,endAfterReads := 0,gSlotsToReconcile := Map()
 }
 Log(text) {
     global logs
@@ -265,10 +375,15 @@ Log(text) {
 }
 ; The game's counter for a slot: counters[slot] ({n,max} or false). flaky[slot] = reads that fail first.
 ProbeSlotCounter(unit) {
-    global counters,counterReads,flaky,steps,gPhase
+    global counters,counterReads,flaky,steps,gPhase,scriptedReads,gCardAction,cardActionSeen,endAfterReads,endScreen
     if !steps.Length || steps[steps.Length]!="audit read in " gPhase
         steps.Push("audit read in " gPhase)
+    cardActionSeen.Push(gCardAction)
     counterReads[unit.slot] := (counterReads.Has(unit.slot)?counterReads[unit.slot]:0)+1
+    if endAfterReads && counterReads[unit.slot]>=endAfterReads
+        endScreen := true
+    if scriptedReads.Has(unit.slot)
+        return scriptedReads[unit.slot].Length?scriptedReads[unit.slot].RemoveAt(1):false
     if flaky.Has(unit.slot) && counterReads[unit.slot]<=flaky[unit.slot]
         return false
     return counters.Has(unit.slot)?counters[unit.slot]:false
@@ -289,10 +404,11 @@ RememberFailedPlacementSpot(point) {
     blacklisted.Push(point)
 }
 CloseUnitManagerIfOpen(why) {
-    global steps
+    global steps,closeResults
     steps.Push("close F")
+    return closeResults.Length?closeResults.RemoveAt(1):true
 }
-IsEndGameBlocking(*) => false
+IsEndGameBlocking(*) => endScreen
 BeginUnitManagerPhase(message := "") {
     global steps
     SetPhase("Upgrading")
@@ -312,51 +428,11 @@ PlaceConfiguredBuild(plan) {
 }
 '''
 
-learning_logic = "\n".join(function("Learning.ahk", n) for n in ["RememberGhostPlacement", "RememberPlacement", "ReadPlacementRecords", "WritePlacementRecords", "PlacementSection", "HashText", "MemoryRead", "KnownPlacementCandidates"])
-learning_logic += "\n" + function("AAPathMacro.ahk", "MapDistance")
-learning_fixture = r'''
-#Requires AutoHotkey v2.0
-#SingleInstance Off
-#Warn All, Off
-global LEARNING_FILE := A_ScriptDir "\ghost-learning-test.ini",PLACEMENT_BAD_LIMIT := 3,REF_W := 800,REF_H := 600
-global gPlacementProfile := "profile.ghost-test",logs := [],gPlacements := []
-try {
-    try FileDelete LEARNING_FILE
-    unit := {slot:1,name:"Bulby"}
-    other := {slot:2,name:"Elyssia"}
-    WritePlacementRecords(unit,[{x:200,y:300,good:2,bad:0},{x:500,y:300,good:1,bad:1}])
-    WritePlacementRecords(other,[{x:200,y:300,good:2,bad:0}])
-    ; a ghost at client 200,300 (window 200,300 here): that record is out of use, the other spot and the other unit are not
-    Assert(RememberGhostPlacement(unit,{x:202,y:301}),"a remembered spot was not found")
-    records := ReadPlacementRecords(unit)
-    Assert(records[1].bad>=PLACEMENT_BAD_LIMIT && records[1].good=2,"the ghost spot was not penalised: bad=" records[1].bad)
-    Assert(records[2].bad=1,"another spot was penalised")
-    Assert(ReadPlacementRecords(other)[1].bad=0,"another unit's record was penalised")
-    cands := KnownPlacementCandidates(unit)
-    Assert(cands.Length=1 && cands[1].x=500,"the ghost spot is still offered as a good spot (" cands.Length ")")
-    ; a ghost at a spot with no record changes nothing
-    Assert(!RememberGhostPlacement(unit,{x:700,y:100}),"an unknown spot reported a mark")
-    ; a later confirmed purchase there brings the spot back
-    RememberPlacement(unit,{x:200,y:300},true)
-    Assert(ReadPlacementRecords(unit)[1].bad=0 && ReadPlacementRecords(unit)[1].good=3,"a confirmed purchase did not clear the ghost penalty")
-    try FileDelete LEARNING_FILE
-    FileAppend "PASS: audit ghosts are penalised in the learning data (out of use, other spots/units untouched, cleared by a later purchase).`n","*","UTF-8"
-    ExitApp 0
-} catch as err {
-    FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
-    ExitApp 1
-}
-Assert(value,message) {
-    if !value
-        throw Error(message)
-}
-Log(text) {
-    global logs
-    logs.Push(text)
-}
-WindowGeometry() => {cx:0,x:0,cy:0,y:0,cw:800,ch:600}
-CandidateOccupied(x,y) => false
-'''
+# M3: the audit never writes a learned penalty: the function that did is gone.
+for _source in ROOT.glob("*.ahk"):
+    if "before-learning" in _source.name:
+        continue
+    assert "RememberGhostPlacement" not in _source.read_text(encoding="utf-8-sig"), f"{_source.name} still references RememberGhostPlacement"
 
 # The watch loop must not block during the F cooldown: upgrades are skipped by a
 # timestamp check, and the cooldown check itself never sleeps.
@@ -366,7 +442,7 @@ assert "Sleep" not in function("BuildAudit.ahk", "ManagerCooldownActive") and "A
 
 if __name__ == "__main__":
     status = 0
-    for name, source in [("build-audit", fixture + "\n" + logic), ("ghost-learning", learning_fixture + "\n" + learning_logic)]:
+    for name, source in [("build-audit", fixture + "\n" + logic)]:
         target = ROOT / "cache" / f"{name}-regression.ahk"
         target.parent.mkdir(exist_ok=True)
         target.write_text(source, encoding="utf-8-sig")
