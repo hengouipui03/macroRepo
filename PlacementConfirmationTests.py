@@ -12,7 +12,6 @@ logic = '\n'.join(function(file,name) for file,name in [
     ('Placement.ahk','MissingBuildPlacements'),('Placement.ahk','PlacementShortOfYen'),
     ('PurchaseVerifier.ahk','ProbePurchase'),('PurchaseVerifier.ahk','JudgePurchase'),('PurchaseVerifier.ahk','NewPurchaseEvidence'),
     ('AAPathMacro.ahk','CheckCardInterruption')])
-logic += '\n' + function('PlacedUnits.ahk','OpenRecordedUnit')
 for name in ['SlotTargetCount','SlotCounterFull','CapSlot','ReconcileSlot','RemoveNewestSlotEntries','AddMissedPurchases','RenumberPlacements']:
     logic += '\n' + function('BuildAudit.ahk', name)
 logic += '\n' + function('PlacementArea.ahk','PlacementAnchorKnown')
@@ -126,8 +125,6 @@ try {
     Assert(buys=16 && registrations=16,"six-slot startup stopped at one unit or bought extra copies")
     hidePanels := false
     models["400,330"] := true
-    recorded := {id:1,name:"Unit 1",x:400,y:330,selectX:400,selectY:330}
-    Assert(OpenRecordedUnit(recorded) && panel && buys=16,"side panel did not confirm selection for upgrading without UPG OCR")
 
     gMapModel := {checkpointIndex:3},NewGame(1,0),registrations := 0,buys := 0,models := Map(),panel := false
     unit := {slot:1,name:"Unit 1",count:1,enabled:true},gConsecutivePlacementFailures := 5
@@ -264,12 +261,7 @@ UnitPlacementCost(*) => 1350
 ClickAwayFromUnitPanel(*) => CloseUnitPanel()
 ActionPause(*) => true
 Log(*) => 0
-SavePlacementRun(*) => 0
-SelectManagedUnit(number) {
-    global panel
-    panel := number>=1 && number<=gPlacements.Length
-    return panel
-}
+DiscordWarn(*) => 0
 UpgradeHeaderSignature(*) {
     throw Error("Placement must not read the upgrade heading")
 }

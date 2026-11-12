@@ -10,6 +10,8 @@ global gOcrPid := 0
 global gLastOcrRows := [], gLastOcrRect := "", gLastOcrTime := 0
 global gCardRetryAt := 0, gCardUnread := 0, gCardSelection := 0, gCardModifiersRead := false
 global gCardBoxes := 0
+; A remembered placement with this many failures is no longer reused.
+global PLACEMENT_BAD_LIMIT := 3
 global gCardHandling := false,gCardAction := "",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0
 
 BuildLearningTab(app) {
@@ -245,15 +247,6 @@ ClickLearnedButton(name, delayMs, confirm := 0, forceDetect := false) {
     return true
 }
 
-ConfirmObservedTransition(name) {
-    global gLastButtonClicks
-    if !gLastButtonClicks.Has(name)
-        return
-    last := gLastButtonClicks[name]
-    if last.point.source = "unconfirmed anchor"
-        SaveButtonRecord(name,last.point,last.geometry,"confirmed " name " flow")
-}
-
 SaveFrameBmp(frame, path) {
     if !frame.valid
         return false
@@ -362,10 +355,6 @@ ObserveTextButtons(rows, geometry) {
     }
 }
 
-HasSavedRedControl(name) {
-    return HasSavedColourControl(name,IsUiRed)
-}
-
 HasSavedColourControl(name,predicate) {
     global REF_W, REF_H
     geometry := WindowGeometry()
@@ -377,32 +366,6 @@ HasSavedColourControl(name,predicate) {
     rx := (point.x-(geometry.cx-geometry.x))*REF_W/geometry.cw
     ry := (point.y-(geometry.cy-geometry.y))*REF_H/geometry.ch
     return CountRef(rx-8,ry-8,rx+8,ry+8,2,predicate) >= 4
-}
-
-HasSettingsPanel() {
-    if HasSavedRedControl("SettingsClose")
-        return true
-    ; Only an unfamiliar settings layout needs text recognition.
-    for row in ReadOcrRows(140,60,700,470) {
-        if RegExMatch(NormalizeWords(row.text),"settings|teleport.*spawn|back to spawn") {
-            geometry := WindowGeometry()
-            if geometry
-                DiscoverButton("SettingsClose",geometry)
-            return true
-        }
-    }
-    return false
-}
-
-SettingsPanelClosed() {
-    geometry := WindowGeometry()
-    if !geometry || !ReadButtonRecord("SettingsClose",geometry)
-        return false
-    return !HasSavedRedControl("SettingsClose")
-}
-
-UnitPanelClosed() {
-    return !HasUnitPanel()
 }
 
 ; Current frame colour supplies the default kind. Signed enemy reductions
@@ -1199,7 +1162,7 @@ KnownPlacementCandidates(unit) {
         return candidates
     records := ReadPlacementRecords(unit)
     for index, record in records {
-        if record.good < 1 || record.bad >= 3
+        if record.good < 1 || record.bad >= PLACEMENT_BAD_LIMIT
             continue
         x := (record.x - (geometry.cx - geometry.x)) * REF_W / geometry.cw
         y := (record.y - (geometry.cy - geometry.y)) * REF_H / geometry.ch
@@ -1240,6 +1203,31 @@ RememberPlacement(unit, candidate, success := true) {
     records.Push({x: wx, y: wy, good: 1, bad: 0})
     WritePlacementRecords(unit, records)
     Log("Learned confirmed " unit.name " placement at window " Round(wx) "," Round(wy))
+}
+
+; A spot the build audit proved empty (the purchase was never made there) is
+; penalised like a failed placement: its remembered record, if any, is taken
+; out of use (bad reaches PLACEMENT_BAD_LIMIT) so it is not offered as a good
+; spot again. A later confirmed purchase at the same place resets it.
+RememberGhostPlacement(unit, point) {
+    global gPlacementProfile, REF_W, REF_H, PLACEMENT_BAD_LIMIT
+    if gPlacementProfile = "" || !(geometry := WindowGeometry())
+        return false
+    wx := geometry.cx - geometry.x + point.x * geometry.cw / REF_W
+    wy := geometry.cy - geometry.y + point.y * geometry.ch / REF_H
+    records := ReadPlacementRecords(unit)
+    marked := 0
+    for record in records {
+        if MapDistance(wx,wy,record.x,record.y) < 6 {
+            record.bad := Max(record.bad,PLACEMENT_BAD_LIMIT)
+            marked += 1
+        }
+    }
+    if !marked
+        return false
+    WritePlacementRecords(unit, records)
+    Log("Learning: the ghost " unit.name " spot at window " Round(wx) "," Round(wy) " is marked bad so it is not reused.")
+    return true
 }
 
 ; Hill spot outcomes per map profile (same map, window, camera and pose).

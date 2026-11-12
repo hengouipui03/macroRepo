@@ -160,7 +160,6 @@ PlacementAnchorKnown(*) => true
 MapDistance(x1,y1,x2,y2) => Sqrt((x1-x2)**2+(y1-y2)**2)
 RememberPlacement(*) => 0
 SaveLayoutPoint(*) => 0
-SavePlacementRun(*) => 0
 QueueUnitSettingsSave(*) => 0
 Log(*) => 0
 FindRoblox(*) => 1

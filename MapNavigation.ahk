@@ -1405,33 +1405,6 @@ AimPresses(fallback,longest,fx,fy) {
     return aimed.Length ? aimed : fallback
 }
 
-; Placement points just outside the lit band near the player, in 800x600
-; reference coordinates and inside the same safe area as the ring search.
-BesidePathCandidates() {
-    global REF_W,REF_H
-    points := []
-    reply := WorldRequest("beside 16")
-    if !VisionOk(reply) || reply["points"]="" || !GetClient(&cx,&cy,&cw,&ch)
-        return points
-    ; Lit band magenta, tried placement points circled orange.
-    VisionRequest("worlddebug " A_ScriptDir "\path-debug.png")
-    for text in StrSplit(reply["points"],";") {
-        point := StrSplit(text,","),x := Round(point[1]*REF_W/cw),y := Round(point[2]*REF_H/ch)
-        if x>45 && x<755 && y>100 && y<495
-            points.Push({x:x,y:y})
-    }
-    return points
-}
-
-; Uses the last world capture; without one nothing counts as on the path.
-OnLitPath(rx,ry) {
-    global REF_W,REF_H
-    if !GetClient(&cx,&cy,&cw,&ch)
-        return false
-    reply := VisionRequest("onpath " Round(rx*cw/REF_W) " " Round(ry*ch/REF_H))
-    return VisionOk(reply) && reply["on"]="1"
-}
-
 ; Cells left to walk: route distance from the nearest node plus the gap to it.
 RouteProgress(toTarget,point) {
     global gMapModel,MAP_GRID

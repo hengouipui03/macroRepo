@@ -27,7 +27,6 @@ global UNIT_ACTION_MS := 150
 ; unit manager, right of "Return to lobby", above the cards, outside the unit panel.
 global CLICK_AWAY_X := 497,CLICK_AWAY_Y := 168
 global STATIC_CLICK_MS := 300
-global PREP_CLICK_MS := 300
 global CLICK_HOLD_MS := ACTION_HOLD_MS
 global MOUSE_SETTLE_MS := 0
 global gInputEpoch := 0
@@ -426,11 +425,6 @@ IsUiGreen(color) {
     return g > 150 && r < 150 && b < 155 && (g - r) > 45
 }
 
-IsBubbleBlue(color) {
-    RGB(color, &r, &g, &b)
-    return b > 150 && g > 110 && (b-r)>55 && (g-r)>25
-}
-
 IsBubbleRed(color) {
     RGB(color, &r, &g, &b)
     return r > 160 && g < 175 && b < 150 && (r - g) > 45
@@ -570,18 +564,6 @@ GetMiniMapRoutePoints(frame := 0) {
     return points
 }
 
-FindNearestRoutePoint(points, playerX, playerY, &routeX, &routeY, &distance) {
-    distance := 99999
-    for point in points {
-        d := MapDistance(playerX, playerY, point.x, point.y)
-        if d < distance {
-            distance := d
-            routeX := point.x, routeY := point.y
-        }
-    }
-    return distance < 99999
-}
-
 FindNextRouteWaypoint(points, anchorX, anchorY, directionX, directionY, &targetX, &targetY) {
     ; Walk adjacent green samples. Nearby pixels on another branch are never
     ; considered connected merely because they fall inside a circular radius.
@@ -613,22 +595,6 @@ FindNextRouteWaypoint(points, anchorX, anchorY, directionX, directionY, &targetX
         }
     }
     return found
-}
-
-FindMiniMapPlayer(&playerX, &playerY, &headingX, &headingY, frame := 0) {
-    global MAP_GRID
-    if !frame
-        frame := CaptureMiniMap()
-    if !frame || !frame.valid
-        return false
-    markers := MapMarkers(frame)
-    if !markers.player
-        return false
-    p := markers.player
-    playerX := (frame.left+p.x/(MAP_GRID-1)*(frame.width-1))/frame.scaleX
-    playerY := (frame.top+p.y/(MAP_GRID-1)*(frame.height-1))/frame.scaleY
-    headingX := p.hx,headingY := p.hy
-    return true
 }
 
 ArrowPose(pixels, scaleX, scaleY, &px, &py, &hx, &hy, &confidence) {
@@ -984,55 +950,6 @@ HasCardBorder(frame,edgeX) {
             return true
     }
     return false
-}
-
-IsCardColour(color) {
-    return IsUiRed(color) || IsUiGreen(color)
-}
-
-; Classify the thin frame, excluding wide artwork. A valid non-red frame
-; is a buff even when unreadable; signed enemy effects are parsed afterwards.
-CardBorderKind(rect,frame) {
-    if !frame.valid
-        return ""
-    edges := rect[1]=125?[123,296]:rect[1]=310?[314,488]:[506,680]
-    greenVotes := 0,redVotes := 0
-    for edge in edges {
-        columns := []
-        Loop 31 {
-            x := edge-16+A_Index,green := 0,red := 0
-            Loop 21 {
-                RGB(frame.AtRef(x,195+A_Index*10),&r,&g,&b)
-                green += g>95 && g-r>35 && g-b>20?1:0
-                red += r>100 && r-g>40 && r-b>25?1:0
-            }
-            columns.Push(red>0 && green+red>=15?"debuff":green>=15?"buff":"")
-        }
-        ; A border is a thin persistent band. Wide artwork regions crossing
-        ; the sampled strip's boundary must not count as another border.
-        at := 1,chosen := "",nearest := 999
-        while at<=columns.Length {
-            first := at,kind := columns[at]
-            while at<columns.Length && columns[at+1]=kind
-                at += 1
-            last := at,distance := Abs((first+last)/2-16)
-            if kind!="" && first>1 && last<columns.Length && last-first+1<=8 && distance<nearest
-                chosen := kind,nearest := distance
-            at += 1
-        }
-        greenVotes += chosen="buff"?1:0
-        redVotes += chosen="debuff"?1:0
-    }
-    if greenVotes && !redVotes
-        return "buff"
-    if redVotes
-        return "debuff"
-    return "buff"
-}
-
-CardColourKind(rect) {
-    ; Kept for callers: a card border/artwork no longer establishes kind.
-    return "unknown"
 }
 
 ; A card choice that stays open this long is left to the game's own vote timer
@@ -1596,8 +1513,13 @@ RunMacro() {
         RefreshMatchModifiers()
         RefreshMatchWave()
         if UnitManagerActive() {
-            MaintainUnitManager()
-            UpgradePriorityPass()
+            ; An F that would not open pauses upgrades for a cooldown (a
+            ; timestamp, not a sleep): cards, the end screen and disconnects
+            ; are still handled by this loop meanwhile.
+            if !ManagerCooldownActive() {
+                MaintainUnitManager()
+                UpgradePriorityPass()
+            }
             ; The manager and the record keep disagreeing about a unit: close F,
             ; audit the build in the Placing phase, place what is missing, and
             ; come back to Upgrading (bounded by AUDIT_LIMIT_PER_MATCH).

@@ -245,7 +245,6 @@ TryPartnerPlacement(unit,anchor) {
     if !points.Length {
         anchor.partner := "closed"
         Log(unit.name ": no free spot straight behind #" anchor.id "; that partner spot is closed for this game.")
-        SavePlacementRun()
         return false
     }
     Log(unit.name ": one try straight behind #" anchor.id " " anchor.name ".")
@@ -259,7 +258,6 @@ TryPartnerPlacement(unit,anchor) {
         return false
     anchor.partner := "closed"
     Log(unit.name ": the spot behind #" anchor.id " did not take a unit; closed for this game. Continue along the edge.")
-    SavePlacementRun()
     return false
 }
 

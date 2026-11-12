@@ -26,8 +26,12 @@ global AUDIT_LIMIT_PER_MATCH := 2
 ; per audit cycle, before the audit is requested.
 global MANAGER_LOOKUP_LIMIT := 6
 ; Consecutive lookups that failed only because F would not open (no card,
-; no other reason) before every unfinished unit is given up as unreachable.
+; no other reason) before upgrades pause for the cooldown below. The match is
+; never given up: after the cooldown the same bounded attempts start again,
+; and this repeats for as long as the phase is Upgrading.
 global MANAGER_OPEN_FAIL_LIMIT := 30
+global UNIT_MANAGER_GIVEUP_COOLDOWN_MS := 30000
+global gManagerCooldownUntil := 0
 
 global gLookupMisses := Map(),gOpenFailures := 0
 global gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false
@@ -39,8 +43,8 @@ global gLastAudit := 0
 
 ; Per-match state (called by ResetMatchState).
 ResetBuildAudit() {
-    global gLookupMisses,gOpenFailures,gEscalationAudits,gCompletionAudits,gAuditDue,gSlotCaps,gLastAudit
-    gLookupMisses := Map(),gOpenFailures := 0
+    global gLookupMisses,gOpenFailures,gEscalationAudits,gCompletionAudits,gAuditDue,gSlotCaps,gLastAudit,gManagerCooldownUntil
+    gLookupMisses := Map(),gOpenFailures := 0,gManagerCooldownUntil := 0
     gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false
     gSlotCaps := Map(),gLastAudit := 0
 }
@@ -52,12 +56,17 @@ SlotTargetCount(unit) {
     return gSlotCaps.Has(unit.slot) ? Min(unit.count,gSlotCaps[unit.slot]) : unit.count
 }
 
+; Holds a slot at limit placements: it counts as complete at that many. One
+; clear log line, and a Discord warning, whenever this leaves units unplaced.
 CapSlot(unit,limit,reason) {
     global gSlotCaps
     if gSlotCaps.Has(unit.slot) && gSlotCaps[unit.slot]<=limit
         return
     gSlotCaps[unit.slot] := limit
-    Log(unit.name ": slot " unit.slot " is held at " limit " of " unit.count " placements (" reason "); the build counts it as complete.")
+    text := "Slot " unit.slot " (" unit.name "): giving up after " reason "; continuing with " limit " of " unit.count " units."
+    Log(text)
+    if limit<unit.count
+        DiscordWarn(text)
 }
 
 ; The counter shows the slot full: another click can only be refused.
@@ -111,8 +120,10 @@ RemoveNewestSlotEntries(unit,count) {
             count -= 1
             Log("Build audit: ghost #" item.id " " item.name " removed (" (PlacementAnchorKnown(item)?"was recorded at " item.x "," item.y:"no anchor position") ").")
             ; The spot did not hold a unit of ours: keep placement away from it.
-            if PlacementAnchorKnown(item)
+            if PlacementAnchorKnown(item) {
                 RememberFailedPlacementSpot(item)
+                RememberGhostPlacement(unit,item)
+            }
             if IsObject(gLastAudit)
                 gLastAudit.removed.Push(item.id)
         }
@@ -137,7 +148,6 @@ RenumberPlacements() {
         item.id := index
     }
     ResetUpgradeSelection()
-    SavePlacementRun()
 }
 
 ; Records count purchases the macro missed: placed, no anchor position.
@@ -152,7 +162,6 @@ AddMissedPurchases(unit,count) {
         if IsObject(gLastAudit)
             gLastAudit.added.Push(item.id)
     }
-    SavePlacementRun()
     return count
 }
 
@@ -212,12 +221,6 @@ NoteManagerLookupMiss(purchaseId) {
     return gLookupMisses[purchaseId]
 }
 
-; True once lookups for this purchase have failed MANAGER_LOOKUP_LIMIT times.
-ManagerLookupExhausted(purchaseId) {
-    global gLookupMisses,MANAGER_LOOKUP_LIMIT
-    return gLookupMisses.Has(purchaseId) && gLookupMisses[purchaseId]>=MANAGER_LOOKUP_LIMIT
-}
-
 ; The lookup limit for this purchase ran out. The first AUDIT_LIMIT_PER_MATCH
 ; times the build is audited (RepairBuildAfterManagerMismatch, called by the
 ; run loop); after that the unit is given up as unreachable: skipped by the
@@ -249,18 +252,32 @@ ManagerAuditDue() {
 }
 
 ; The manager would not open at all: counted per failed lookup, reset by a
-; found tile. Returns true when MANAGER_OPEN_FAIL_LIMIT is reached, after
-; which every unfinished unit is given up as unreachable.
+; found tile. Returns true when MANAGER_OPEN_FAIL_LIMIT is reached: upgrades
+; then pause for UNIT_MANAGER_GIVEUP_COOLDOWN_MS (a timestamp, checked by
+; ManagerCooldownActive; the watch loop keeps running meanwhile) and the same
+; bounded attempts start again afterwards. No unit is given up for this.
 NoteManagerOpenFailure() {
-    global gOpenFailures,MANAGER_OPEN_FAIL_LIMIT,gPlacements
+    global gOpenFailures,MANAGER_OPEN_FAIL_LIMIT,UNIT_MANAGER_GIVEUP_COOLDOWN_MS,gManagerCooldownUntil
     gOpenFailures += 1
     if gOpenFailures<MANAGER_OPEN_FAIL_LIMIT
         return false
     gOpenFailures := 0
-    for item in gPlacements
-        if !item.complete && !(item.HasProp("unreachable") && item.unreachable)
-            MarkUnitUnreachable(item,"the unit manager did not open " MANAGER_OPEN_FAIL_LIMIT " times in a row")
+    gManagerCooldownUntil := A_TickCount+UNIT_MANAGER_GIVEUP_COOLDOWN_MS
+    Log("The unit manager did not open " MANAGER_OPEN_FAIL_LIMIT " times in a row; pausing upgrades for " Round(UNIT_MANAGER_GIVEUP_COOLDOWN_MS/1000) " s, then trying again.")
     return true
+}
+
+; True while the cooldown after an F that would not open is running. Logs once
+; when it ends.
+ManagerCooldownActive() {
+    global gManagerCooldownUntil
+    if !gManagerCooldownUntil
+        return false
+    if A_TickCount<gManagerCooldownUntil
+        return true
+    gManagerCooldownUntil := 0
+    Log("Unit manager cooldown over; trying to open it again.")
+    return false
 }
 
 NoteManagerTileFound() {

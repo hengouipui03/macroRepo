@@ -1,7 +1,6 @@
 ﻿; Confirmed units are numbered in purchase order; only these enter upgrades.
-global PLACEMENT_RUN_FILE := A_ScriptDir "\placement_run.ini"
 global PLACEMENT_LAYOUT_FILE := A_ScriptDir "\placement_layouts.ini"
-global gRunRecording := false,gRunMap := "",gLayoutValidation := Map()
+global gLayoutValidation := Map()
 global gUpgradeSelectedId := 0
 ; Deferrals (2 s each) of one unit with no progress before it is given up as
 ; unreachable (the lookup limit in BuildAudit.ahk covers the manager tile).
@@ -16,26 +15,10 @@ ResetPlacedUnits() {
 }
 
 BeginPlacementRun() {
-    global gRunRecording,gRunMap,gMapModel,gLayoutValidation
-    gRunRecording := true,gRunMap := gMapModel ? gMapModel.id : "",gLayoutValidation := Map()
+    global gLayoutValidation
+    gLayoutValidation := Map()
     ResetUpgradeSelection()
     ResetPlacementArea()
-    SavePlacementRun()
-}
-
-SavePlacementRun() {
-    global gRunRecording,gRunMap,gPlacements,PLACEMENT_RUN_FILE,gPlacementProfile
-    if !gRunRecording
-        return
-    text := "[Run]`r`nmap_id=" gRunMap "`r`nprofile=" gPlacementProfile "`r`ncount=" gPlacements.Length "`r`n"
-    for item in gPlacements {
-        text .= "`r`n[Placement" item.id "]`r`n"
-        for key in ["id","slot","name","priority","target","x","y","selectX","selectY","upgrades","complete","hill","row","money","anchor","partner"]
-            text .= key "=" item.%key% "`r`n"
-    }
-    file := FileOpen(PLACEMENT_RUN_FILE ".tmp","w","UTF-16")
-    file.Write(text),file.Close()
-    FileMove PLACEMENT_RUN_FILE ".tmp",PLACEMENT_RUN_FILE,1
 }
 
 PlacementLayoutKey() {
@@ -78,7 +61,6 @@ RegisterPlacedUnit(unit,point,evidence) {
     gPlacements.Push(item)
     RememberPlacement(unit,point,true)
     SaveLayoutPoint(item)
-    SavePlacementRun()
     Log("Placed #" item.id " " item.name " at " item.x "," item.y "; priority " item.priority "; confirmed by " evidence ".")
     return item
 }
@@ -176,7 +158,6 @@ RefreshRecordedUpgradeTarget(item) {
         CloseUnitPanel()
         ResetUpgradeSelection()
     }
-    SavePlacementRun()
     return true
 }
 
@@ -224,10 +205,6 @@ DeferUnitUpgrade(item,message) {
     CloseUnitPanel()
     ResetUpgradeSelection()
     return false
-}
-
-OpenRecordedUnit(item) {
-    return SelectManagedUnit(item.id)
 }
 
 UpgradeOnce(item) {
@@ -422,7 +399,6 @@ UpgradeOnceAction(item) {
             return false
         Log("#" item.id " " item.name ": upgrade " item.upgrades " -> " level (entry.total>0?" of " entry.total:"") " confirmed on the manager tile.")
         item.upgrades := level,item.deferCount := 0,item.lastClickAt := 0
-        SavePlacementRun()
     }
     maxed := false
     if entry.maxed {
@@ -447,7 +423,6 @@ UpgradeOnceAction(item) {
         item.maxBarAt := 0
     if maxed || (finite && level>=item.target) {
         item.complete := true
-        SavePlacementRun()
         Log("#" item.id " target " item.target " reached" (maxed?" (MAX).":" at upgrade " level "."))
         CloseUnitPanel()
         ResetUpgradeSelection()

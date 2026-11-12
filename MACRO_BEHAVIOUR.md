@@ -10,8 +10,10 @@ to the live Roblox client area at run time. Roblox is sized to 1401 x 975 outer 
 
 | File | Role |
 |---|---|
-| `AAPathMacro.ahk` | Entry point, GUI, hotkeys, input primitives, colour helpers, card detection/choice, lobby/vote flow, the match state machine (`RunMacro`), idle keep-alive, self-tests. |
+| `AAPathMacro.ahk` | Entry point, GUI, hotkeys, input primitives, colour helpers, card detection/choice, Vote Start flow, the match state machine (`RunMacro`), session control and disconnect detection (`CheckDisconnect`), idle keep-alive, self-tests. |
 | `MatchState.ahk` | The one owner of the match phase (`gPhase`: Idle, Lobby, Preparing, Placing, Upgrading, Watching, Ended) and of the per-match reset. `SetPhase`, `InPhase`, `ResetMatchState`, `EndRun`. |
+| `LobbyFlow.ahk` | The lobby start and the reconnect loop: `TryStartFromLobby` (staged and bounded), the Play-button readers, `ReconnectAndRestart` and its give-up. All their bounds are constants at the top of the file. |
+| `QueueMatch.ahk` | Queue mode: Find Match, the number prompt, Submit, waiting for the queued match. |
 | `UnitSettings.ahk` | Six unit slots (enabled, name, count, priority, target, Hill only / Hybrid / Money, mutually exclusive) saved to `unit_settings.ini`. |
 | `MapNavigation.ahk` | Minimap reading (Python vision or AHK fallback), route graph, checkpoints, player probing, movement, obstacle escape, lit-path following. |
 | `PathLight.ahk` | The P (path light) button: `EnsurePathLight(context)` at Vote Start and at the start of Placing, glyph-verified clicks, the learned per-variant lit-path flag, the once-per-match off-on cycle, `ResetPathLight`. |
@@ -24,12 +26,46 @@ to the live Roblox client area at run time. Roblox is sized to 1401 x 975 outer 
 | `Learning.ahk` | OCR, learned buttons, card text policy and ranking, placement memory. |
 | `CardContext.ahk` | Card word colour (green/red) reading, pixel green detection, resistance preference tab, right-panel match modifiers. |
 | `Endgame.ahk` | End screen detection, Next/reward dismissal, Replay. |
-| `Discord.ahk` | Optional WIN/LOSS webhook with screenshot. |
+| `Discord.ahk` | Optional WIN/LOSS webhook with screenshot, and `DiscordWarn` for give-ups (a slot given up, a Reconnect that did not reach the lobby). |
 | `MinimapVision.py` | OpenCV service (minimap, lit path, placement lines, Hill spots, unit manager tiles: segments, Max, Upg point, portrait colours). AHK sends all input. |
 | `OCRBridge.ps1` | Windows OCR bridge used by `ReadOcrRows`. |
-| `*.ini` | `unit_settings.ini`, `card_preferences.ini`, `settings.ini` (webhook), `button_positions.ini`, `learning.ini` (learned data), `placement_run.ini`, `placement_layouts.ini`. |
+| `*.ini` | `unit_settings.ini`, `card_preferences.ini`, `settings.ini` (webhook), `button_positions.ini`, `learning.ini` (learned data), `placement_layouts.ini`. (`placement_run.ini`, the numbered purchase record, was only ever written and never read back; it is no longer written. An old copy can be deleted.) |
 
 Hotkeys: **F6** start, **F7** stop (releases every key), **F8** overhead camera reset, **F9** route test (no voting/buying), **F10** teach the button under the cursor.
+
+---
+
+## 1a. Architecture and design rules
+
+Each module owns one thing. A change goes into the module that owns the concern; it does not reach into another module's state.
+
+| Module | Owns |
+|---|---|
+| `MatchState.ahk` | The match phase (`gPhase`) and the one per-match reset. Nothing else decides "where in the match are we". |
+| `LobbyFlow.ahk` | Getting from the lobby into a queued/started match, and getting back to the lobby after a disconnect. |
+| `QueueMatch.ahk` | The Queue-mode dialogs after Play. |
+| `PathLight.ahk` | The P button and the lit-path state. |
+| `PurchaseVerifier.ahk` | The decision "did this click buy a unit?". It never presses F, never changes the phase, never writes placement state. |
+| `Placement.ahk` / `PlacementArea.ahk` | Where units go, the build loop, relocation between checkpoints. |
+| `BuildAudit.ahk` | Reconciling the record with the game's slot counters, the per-slot caps, the unit-manager lookup limits and cooldown. |
+| `PlacedUnits.ahk` | The numbered record of placed units (`gPlacements`) and the upgrades of those units. |
+| `UnitManager.ahk` | The F unit manager: the F gate, finding purchase #N's tile. The only code that sends F. |
+| `CardContext.ahk` / card code in `AAPathMacro.ahk` / `Learning.ahk` | Cards: detection, ranking, choice. Learned data (buttons, card text, placement memory). |
+| `Endgame.ahk` | The end screen and Replay. |
+| `MapNavigation.ahk` | Minimap, route, walking. |
+
+**Phases** (`SetPhase`/`InPhase`; every change logs "Phase: old -> new"): `Idle`, `Lobby`, `Preparing` (vote, walk, P), `Placing`, `Upgrading`, `Watching` (every target reached, F closed), `Ended`. Behaviour that depends on the phase asks `InPhase()` and nothing else.
+
+**Design rules** (each one exists because a bug came back without it):
+1. **One owner for the phase.** No flag implies a phase. Per-match state is cleared only by `ResetMatchState()`, which calls each module's own reset; a new piece of per-match state gets a `Reset...` function that `ResetMatchState` calls.
+2. **No new global flag to change another module's behaviour.** Modules expose functions; a phase is tested only with `InPhase()`.
+3. **Every retry loop has a named bound** (a constant at the top of its module) and a defined escalation when it runs out. No infinite loops; a long wait is a timestamp check inside the watch loop, not a sleep.
+4. **No magic numbers in logic.** Named constants. Pixel regions live where they already are (button records, layout defaults) and are not copied.
+5. **No optional boolean parameters that skip a safety check.** `PressUnitManagerKey` takes `"open"`/`"close"`, not a flag.
+6. **Every exit from the run loop goes through `EndRun(reason)`**, which always logs why. A give-up that continues (a slot capped, F cooldown) logs one clear line and, where it loses units, warns Discord.
+7. **Session vs run:** `gSessionArmed` is F6..F7; `gRunning` is "the run loop is live". `CheckDisconnect` uses the session and never writes `gRunning`.
+8. **F** is opened only in `Upgrading`; closing is allowed in any phase. **P** is toggled only by clicking its toolbar button, never by key.
+9. Tests extract functions from the `.ahk` files by name (`function(file,name)`), so a function must start at column 0 as `Name(params) {` and end with `}` at column 0. A function used only by a test is a test helper and lives in the test.
 
 ---
 
@@ -38,7 +74,7 @@ Hotkeys: **F6** start, **F7** stop (releases every key), **F8** overhead camera 
 ```
 F6 → StartMacro → RunMacro (loops on "replay" and "restart")
   ├─ phase Lobby                    F is forbidden outside the Upgrading phase
-  ├─ Lobby: Play → hold W → Play Here → Open → Start   (TryStartFromLobby)
+  ├─ Lobby: Play → hold W → Play Here → Open → Start   (TryStartFromLobby, staged and bounded, see §7a)
   ├─ Wait for Vote Start (45 s); on timeout → RecoverVoteStart
   ├─ ResetMatchState + phase Preparing   every module's per-match state is cleared here, once
   ├─ EnsureRouteAndSpawn            minimap → P lit (EnsurePathLight "vote") → overhead camera → find player → 3 checkpoints
@@ -92,7 +128,7 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
 6. Scroll up one notch at a time. If a notch moves a full row or more, it stops instead of guessing. If the list cannot move any further, the reason is `missing` (the manager shows fewer units than recorded).
 7. Every failure records a reason in `gUnitManagerFailure`: `card`, `manager`, `mismatch` (the bottom row disagrees with the record), `scroll`, `missing`, `panel` or `blocked`. `mismatch`, `missing` and `scroll` are counted per purchase and audit cycle against `MANAGER_LOOKUP_LIMIT` (§5a).
 
-`SelectManagedUnit` (relocation checks, and upgrades when the game needs the unit selected) closes the previous side panel, finds the tile as above and clicks **only the portrait**, then waits for the side unit panel.
+Upgrades find a tile with `LocateManagedUnit` and click it from `UpgradeOnceAction` (the tile's Upg button, or only the portrait when the game needs the unit selected first). Nothing else selects units through the manager.
 
 Each tile is read by vision (`unitmanager`): bright bar segments are done (green and yellow are the same); a dark body, with or without a white outline, is not done, whether the Upg button is the grey **Max** button, the Upg click point, and the portrait's colours.
 
@@ -106,7 +142,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
   - `card` → choose the card (the manager is closed for it, then reopened), then find **the same** unit again. Nothing is deferred.
   - `manager` → retry the same priority. This is never counted against the unit.
   - `mismatch`, `missing`, `scroll` → the same retries as below, but at most **`MANAGER_LOOKUP_LIMIT` (6)** failed lookups per purchase per audit cycle. Then the build is audited (§5a); once `AUDIT_LIMIT_PER_MATCH` (2) audits are used up the unit is given up as **unreachable** (logged) and the units that are found go on.
-  - `manager` (F will not open) → retry the same priority; `MANAGER_OPEN_FAIL_LIMIT` (30) failures in a row without a found tile give up every unfinished unit as unreachable.
+  - `manager` (F will not open) → retry the same priority. `MANAGER_OPEN_FAIL_LIMIT` (30) failures in a row without a found tile never give the match up: upgrades pause for `UNIT_MANAGER_GIVEUP_COOLDOWN_MS` (30 s; logged, a timestamp check, so the watch loop keeps handling cards, the end screen and disconnects), then the same bounded attempts start again, and this repeats while the phase is Upgrading. No unit is marked unreachable for it.
   - Any other reason → retry the same unit up to **3** times, then pause it 2 s (see Pause).
 - **Level:** the number of lit segments. A new lit segment confirms an upgrade. Fewer lit segments than already confirmed means the tile is doubtful: it is found again, and the lower count is accepted only after three reads in a row.
 - **Not enough Yen:** vision reads the Upg button's brightness (`afford`: lit = can buy, dimmed = cannot). A dimmed button is waited on with no click and no failed read counted, even if the bar is unreadable.
@@ -148,7 +184,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
   - `RefreshPathView` no longer toggles P itself; the old once-per-match re-click there (`gPathRelightTried`) was replaced by the Placing call.
 - **Path source, lit P path first (`RefreshPathView`):** before placing (first unit, after a rescan or relocation) the macro reads the lit path with nothing held (vision `world`, after `pathviewclear` drops any earlier red view), so green Hill highlights never count. It is accepted once it covers at least 1% of the client (`LIT_PATH_MIN_FRACTION`; real lit paths measure 2.4-5%, maps without one 0). It still reads under Sandstorm, where the haze turns the red overlay orange (`path-world-sandstorm-p-on.png`).
 - **Fallback, the red no-place overlay (vision `pathview`):** used only when no lit path shows. The overlay appears only while a unit is held. The macro selects the slot, moves the cursor onto the HUD, reads the overlay and cancels the hold. The road is the long red band of constant width; red that is wider (Hill ground) or thinner/shorter (health bars, unit rings) is not road. Every red area is also stored as no-place: lane spots, partner spots and click re-checks never land on red. Later unselected frames only refresh the baseline image and keep this view; `worldreset` clears it at match start. The first read of each game is saved as `cache\pathview-<date_time>.png` (road magenta, other red blue, player white; newest 10 kept).
-- **Bounds in the build loop** (`PlaceConfiguredBuildAction`): `BUILD_COPY_ATTEMPT_LIMIT` (40) attempts at one copy, then the copy is given up (the slot is held at its count); `BUILD_RELOCATE_WAIT_LIMIT` (20 waits of 3 s) for a relocation that cannot start, then the current position is accepted as the checkpoint (`AcceptCurrentPlacementArea`); `HILL_RETRY_LIMIT` (12 waits of 10 s) for a Hill-only unit, then it is given up; `PATH_VISION_ERROR_LIMIT` (6) vision calls with no answer in a row while reading the path, then the match is sat out like an empty path; `CARD_RESUME_LIMIT` (5) card-interrupted resumptions per placement or upgrade call. Every give-up is logged.
+- **Bounds in the build loop** (`PlaceConfiguredBuildAction`): `BUILD_COPY_ATTEMPT_LIMIT` (40) attempts at one copy, then the copy is given up (the slot is held at its count); `BUILD_RELOCATE_WAIT_LIMIT` (20 waits of 3 s) for a relocation that cannot start, then the current position is accepted as the checkpoint (`AcceptCurrentPlacementArea`); `HILL_RETRY_LIMIT` (12 waits of 10 s) for a Hill-only unit, then it is given up; `PATH_VISION_ERROR_LIMIT` (6) vision calls with no answer in a row while reading the path, then the match is sat out like an empty path; `CARD_RESUME_LIMIT` (5) card-interrupted resumptions per placement or upgrade call. Every give-up is logged. A slot given up (the game's limit below the configured count, 40 attempts at one copy, 12 Hill waits) counts as complete and logs one line, "Slot N (name): giving up after ...; continuing with M of K units.", which is also sent to Discord (`DiscordWarn`) when units are lost.
 - **No path from either source:** after 3 reads in a row with neither a lit path nor a red road (`PATH_READ_ATTEMPTS`), the raw frame of the last red read is saved as `cache\pathfail-<date_time>.png` (newest 10 kept) and the match is sat out until its end screen (Replay follows), instead of retrying the same unit forever.
 - **Hidden base heart** (the player spawns standing on it, e.g. Magic Town): the 25/50/75% points are the same three spots from either end of the route, so they are drawn from the route's two far ends (`MapRouteQuarters`) and the player walks toward the middle one. Each step re-reads the minimap; once the arrow has left the heart it is read whole, the checkpoints are numbered from it and the target switches to checkpoint 1 (`ResolveHiddenBase`). If the heart is still hidden on reaching the middle point, or when the prep timer runs out, the route end nearest where the player started is taken as the base.
 - **Two-path maps:** when the minimap has a second (purple) path, the checkpoints are the points where it meets the green route (`MapCrossingCheckpoints`): the first crossing the enemies reach, then the next meeting points toward the base. Vision reports them (`scan` → `crossings`); they are saved with the learned minimap variant.
@@ -163,10 +199,12 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 ---
 
 ### 5a. Build audit (`BuildAudit.ahk`)
+**Positions after a relocation:** the camera follows the player, so once `RelocatePlacementArea` has started moving, the screen positions of the units placed earlier are stale. Every recorded unit is then marked `viewPending`: it stays in the record and in the upgrade queue (upgrades find it in F by purchase number), but `PlacementAnchorKnown` is false for it, so `CandidateOccupied`, `EdgeAnchors`, the exclusion strings and the lane seeds skip it, and nothing ever shifts the old coordinates. `gPlacementProfile` is blanked at the same time, so learned-placement and Hill-miss writes pause for the rest of the match (the camera pose no longer matches the profile). Both are deliberate protection against using stale coordinates; the one thing still guarding against buying onto an existing unit in the new view is the pre-click counter and the Yen/counter confirmation.
+
 The macro's record (`gPlacements`) can be wrong in both directions, so the game's own slot counters are used to correct it:
 - **When:** when placement believes the build is complete (`VerifyCompletedBuild`, at most `BUILD_AUDIT_LIMIT` = 4 per match, then the record is accepted), and when the unit manager keeps disagreeing with the record (see below). Never before the phase becomes Upgrading.
 - **What:** for each enabled slot with a count (`AuditBuild`): press its key, read the counter (`ProbeSlotCounter`, up to `AUDIT_COUNTER_ATTEMPTS` = 3 reads), cancel with Q, compare with `CountSlotPlacements(slot)`.
-  - recorded > counter: **ghosts**. The slot's NEWEST entries are removed down to the counter, each removal logged ("ghost #N"), the order of the remaining entries kept, purchase numbers renumbered (the manager lists units in purchase order) and anchor/partner links fixed. The ghost's spot is kept off the candidate list for this match.
+  - recorded > counter: **ghosts**. The slot's NEWEST entries are removed down to the counter, each removal logged ("ghost #N"), the order of the remaining entries kept, purchase numbers renumbered (the manager lists units in purchase order) and anchor/partner links fixed. The ghost's spot is kept off the candidate list for this match and is penalised in the learning data like a failed placement (`RememberGhostPlacement`: its remembered record, if any, reaches `PLACEMENT_BAD_LIMIT` so it is not offered as a good spot again; a later confirmed purchase there clears it).
   - recorded < counter: a purchase the macro **missed**. It is recorded as placed (the build does not buy it again) with no position (`anchorless`): `PlacementAnchorKnown` is false for it, so `CandidateOccupied`, `EdgeAnchors`, partner placement, vision exclusions and `MoneySpotScore` skip it. It joins the upgrade queue.
   - counter unreadable after the retries: the recorded count is trusted and logged.
   - Returns whether every slot reaches its target (configured count, or the cap) per the counters. Incomplete: placement stays in the Placing phase and keeps placing.
@@ -217,8 +255,15 @@ The macro's record (`gPlacements`) can be wrong in both directions, so the game'
 ---
 
 ## 7. End of match, idle, reporting
-- **End screen:** the green Next button triggers end handling. The macro clicks Next, clicks game space 5 times to dismiss rewards, then selects **Return to lobby** in Queue mode or **Replay** in Solo mode. After returning to the lobby, it tries to verify Play on screen for 60 seconds before clicking its saved position for the current window size and display scaling. It then follows the usual walking flow. If Find Match does not appear within 7 seconds of walking, it releases W, checks for another 3 seconds, and retries from Play. Replay waits up to 3 minutes for the next Vote Start. Placement, upgrades and idle clicks pause during these transitions.
-- **Disconnects:** `gSessionArmed` is true from F6 until F7 (also if the run loop has ended by itself); `gRunning` only says the run loop is live. Every 3 s, while the session is armed, `CheckDisconnect` looks for a centered dark panel and uses OCR to confirm the Disconnected title and locate the Reconnect button. It never writes `gRunning`: the OCR read takes a keep-reading predicate (`ReadOcrRows`/`FindReconnectButton`, default `gRunning`) and `CheckDisconnect` passes `() => gSessionArmed`, so F7 still cuts the read short. It abandons the current action (`AbandonCurrentAction`, phase back to Idle) and clicks Reconnect once a second while the button is visible (`ReconnectAndRestart`). During loading it keeps watching for Reconnect or the lobby Play button. When Play is confirmed, the restart takes the same steps as F6 (`PrepareRunStart`: Roblox sized, attached and focused, mode read) and then restarts from the lobby (`ResetMatchState`, phase Lobby). F7 cancels recovery.
+- **End screen:** the green Next button triggers end handling. The macro clicks Next, clicks game space 5 times to dismiss rewards, then selects **Return to lobby** in Queue mode or **Replay** in Solo mode. After returning to the lobby, it tries to verify Play on screen for 60 seconds before clicking its saved position for the current window size and display scaling (`LOBBY_SAVED_PLAY_FALLBACK`). It then follows the usual walking flow (§7a). Replay waits up to 3 minutes for the next Vote Start. Placement, upgrades and idle clicks pause during these transitions.
+- **Disconnects:** `gSessionArmed` is true from F6 until F7 (also if the run loop has ended by itself); `gRunning` only says the run loop is live. Every 3 s, while the session is armed, `CheckDisconnect` looks for a centered dark panel and uses OCR to confirm the Disconnected title and locate the Reconnect button. It never writes `gRunning`: the OCR read takes a keep-reading predicate (`ReadOcrRows`/`FindReconnectButton`, default `gRunning`) and `CheckDisconnect` passes `() => gSessionArmed`, so F7 still cuts the read short. It abandons the current action (`AbandonCurrentAction`, phase back to Idle) and clicks Reconnect (verified) at `RECONNECT_CLICK_CADENCE_MS` (1 s) while the button is visible (`ReconnectAndRestart`). During loading it keeps watching for Reconnect or the lobby Play button. When Play is confirmed, the restart takes the same steps as F6 (`PrepareRunStart`: Roblox sized, attached and focused, mode read) and then restarts from the lobby (`ResetMatchState`, phase Lobby). F7 cancels recovery. One call is capped at `RECONNECT_GIVE_UP_MS` (30 min): it then logs, warns Discord and returns with the session still armed (`gSessionArmed` untouched, `gReconnecting` cleared), so `CheckDisconnect` starts a new attempt on its next tick if the dialog is still there. The "always reconnect" rule holds without a tight endless loop inside one call.
+### 7a. Lobby start (`TryStartFromLobby`, `LobbyFlow.ahk`)
+One loop with explicit stages and the same game steps as before: **play** (read the labelled Play button, click it with a verification that Play is still under the cursor) → **walk** (hold W until the matchmaking panel shows) → **panel** → **queue** (Find Match, number prompt, Submit; `StartQueueMatch`) or **portal** (Solo: Play Here, Open, Start).
+- A Play click is verified before it is sent; a click whose effect is visible (the panel is open afterwards) is not repeated. Otherwise Play is read and clicked again, up to `LOBBY_PLAY_CLICK_LIMIT` (2) per round (the usual log shows "1/2" then "2/2" before the walk).
+- Bounds, each with a log line naming the stage when it gives up: **find Play** one wait of `LOBBY_PLAY_WAIT_MS` (30 s; `LOBBY_PLAY_WAIT_AFTER_RETURN_MS` 60 s after a return to the lobby); **click Play** `LOBBY_PLAY_CLICK_FAIL_LIMIT` (3) clicks that could not be sent; **walk** `LOBBY_WALK_ROUND_LIMIT` (3) rounds of `LOBBY_WALK_MS` (7 s) + `LOBBY_WALK_GRACE_MS` (3 s); **queue** `LOBBY_QUEUE_RETRY_LIMIT` (4) Find Match/prompt attempts; **portal** `LOBBY_PORTAL_ATTEMPT_LIMIT` (3).
+- A stage that gives up makes **one restart from the play stage** (counters reset, logged "Lobby: restarting from the Play stage (n/3)"), at most `LOBBY_RESTART_LIMIT` (3) times; after that `EndRun("lobby: <stage> gave up after 3 restart(s) from the Play stage.")` ends the run (the session stays armed). F7 returns false at once without a restart.
+- The saved-LobbyPlay blind click (the label OCR sometimes fails) is kept behind `LOBBY_SAVED_PLAY_FALLBACK`: after a return to the lobby, when Play was not read in time, the saved point is clicked once per round and "Lobby: Play was not read within N s; using the saved Play position (fallback)." is logged.
+
 - **Session logs:** every Activity line is also appended at once to `logs\session-<date>_<time>.log` (git-ignored), so nothing is lost if the macro is closed or killed without F7. Each F6 starts a new file (the file opened with the macro is reused for the first run); `=====` markers show F6, F7 and the macro closing, so a file without a final marker was cut short. Files not written to for 30 days are deleted when the macro opens (`SESSION_LOG_DAYS`, `PruneSessionLogs`; `SessionLogLine`, `SessionLogMarker`, `BeginSessionLog`, `EndSessionLog`).
 - **Discord:** once per match, WIN/LOSS plus a screenshot: on the Next screen when its result is read, otherwise just before Replay is clicked (Next seen = defeat, Replay without Next = win, unless OCR reads the result there). The webhook is in `settings.ini`, which is not synced by git: save it on each device.
 - **Idle keep-alive:** when every target is complete, the macro clicks the manager-safe click-away point every 5 minutes. It skips the click while cards, a unit panel or an end screen are up.
@@ -236,13 +281,12 @@ The macro's record (`gPlacements`) can be wrong in both directions, so the game'
 | `ClickRef`, `ButtonPosition`, `ClickButton` | Click a reference point (with optional re-check after moving), or a learned/static named button. |
 | `BeginInputAction`, `EndInputAction`, `ActionPause` | Input pacing (300 ms general, 150 ms unit actions), interruptible pauses that also poll for cards. |
 | `ResizeRoblox`, `AttachRoblox`, `OnMacroWindowMove`, `RefreshStatus` | Window size and docking. |
-| `RGB`, `IsUiGreen`, `IsUiRed`, `IsUiYellow`, `IsBubbleBlue/Red`, `IsMiniMapRouteGreen`, `IsMiniMapPlayerWhite`, `CountRef`, `FindUiGreenCentre` | Colour predicates and counting. |
-| `GetMiniMapRoutePoints`, `FindNearestRoutePoint`, `FindNextRouteWaypoint`, `FindMiniMapPlayer`, `ArrowPose`, `MapDistance`, `HoldArrow`, `NavigateAlongRoute` | AHK fallback minimap reading and route following. |
+| `RGB`, `IsUiGreen`, `IsUiRed`, `IsUiYellow`, `IsBubbleRed`, `IsMiniMapRouteGreen`, `IsMiniMapPlayerWhite`, `CountRef`, `FindUiGreenCentre` | Colour predicates and counting. |
+| `GetMiniMapRoutePoints`, `FindNextRouteWaypoint`, `ArrowPose`, `MapDistance`, `HoldArrow`, `NavigateAlongRoute` | AHK fallback minimap reading and route following. |
 | `CameraReset`, `InputPause`, `HoldCameraKey` | Overhead camera (hold I, tilt, hold O). |
 | `EnsureRouteAndSpawn` | Match preparation. Never presses F (the manager state was cleared by `ResetMatchState`), then minimap, P, camera, player and checkpoints. |
-| `HasVoteStart`, `HasLobbyPlay`, `IsLobbyCyan`, `HasMatchmakingPanel`, `HasOpenPortal`, `TryStartPortal`, `TryStartFromLobby`, `TryVoteStart`, `VoteStartClosed`, `RecoverVoteStart` | Lobby and vote flow; recovery when Vote Start times out. |
+| `HasVoteStart`, `HasLobbyPlay`, `IsLobbyCyan`, `HasMatchmakingPanel`, `HasOpenPortal`, `TryStartPortal`, `TryVoteStart`, `VoteStartClosed`, `RecoverVoteStart` | Lobby and vote flow; recovery when Vote Start times out. |
 | `HasCardChoice`, `HasCardBorder` | Card screen detection. |
-| `IsCardColour`, `CardBorderKind`, `CardColourKind` | Legacy border classification (not used to decide). |
 | `CheckCardInterruption` | Polled during waits. Pauses the current action, chooses the card, resumes the same unit/purchase. |
 | `ClearCardChoice`, `ClearCardChoiceAction` | Card handling entry. Q if a preview is active, close the manager for the card, one click on the open spot (no panel detection), reopen the manager and reset the unit selection afterwards. |
 | `ResetCardSelection`, `WaitForCardChoiceClosed` | Card lock reset and a 350 ms stable-closed check. |
@@ -255,8 +299,16 @@ The macro's record (`gPlacements`) can be wrong in both directions, so the game'
 | `RunMacro` | The match state machine (§2). Sets the phases Lobby, Preparing, Placing and Upgrading; calls `ResetMatchState` at Vote Start. Every exit goes through `EndRun(reason)` (logs the reason, phase Idle) or returns "replay"/"restart". |
 | `PrepareRunStart` | The start steps F6 and the post-reconnect restart share: Roblox found, sized, attached, focused, mode read, `gRunning` on. |
 | `StartMacro`, `StopMacro`, `RunMacroSafely`, `TestRoutePreparation`, `ReleaseMovementKeys` | Run control. `StartMacro` arms the session (`gSessionArmed`), `StopMacro` disarms it; stop and a run that ends by itself set the phase to Idle. |
-| `CheckDisconnect`, `FindReconnectButton`, `ReconnectAndRestart` | Disconnect recovery, gated on `gSessionArmed` (see §7). |
+| `CheckDisconnect`, `FindReconnectButton`, `ReconnectButtonVisible` | Disconnect detection, gated on `gSessionArmed` (see §7); the reconnect loop is in `LobbyFlow.ahk`. |
 | `WaitFor`, `Notify`, `Log`, `RunSelfTests` | Utilities and the built-in tests. |
+
+### LobbyFlow.ahk
+| Function | What it does |
+|---|---|
+| `ReadVisibleLobbyPlay`, `LobbyPlayAt` | Read the labelled lobby Play button (OCR plus colour) and re-check it under the cursor. |
+| `TryStartFromLobby` | The staged, bounded lobby start (§7a). Returns the submit time (Queue), true (Solo) or false. |
+| `ClickSavedLobbyPlay` | The blind saved-position click behind `LOBBY_SAVED_PLAY_FALLBACK`. |
+| `ReconnectAndRestart`, `ReconnectGiveUp` | Click Reconnect until lobby Play shows, then `PrepareRunStart`, `ResetMatchState`, phase Lobby, `RunMacroSafely`; the 30-minute cap per call (§7). |
 
 ### UnitManager.ahk
 | Function | What it does |
@@ -275,20 +327,18 @@ The macro's record (`gPlacements`) can be wrong in both directions, so the game'
 | `ScrollUnitManager`, `ResetUnitManagerBottom`, `ParseUnitManagerEntry`, `UnitManagerEntry` | Wheel scrolling over the list (drops the remembered tile), bottom anchoring, entry lookup. |
 | `ManagedUnitCell` | Row and column of purchase #N for an even or odd unit count. |
 | `LocateManagedUnit`, `ForgetManagerTile`, `ResetManagerTileMemory` | Find a purchase's tile (reusing the last position while the list is still), and reset that memory. |
-| `ClickManagerPoint`, `SelectManagedUnit` | Click a manager point; portrait selection with side-panel confirmation. |
-| `SelectManagedUnit` | Select purchase #N (§3). |
+| `ClickManagerPoint` | Click a manager point. |
 
 ### PlacedUnits.ahk
 | Function | What it does |
 |---|---|
-| `BeginPlacementRun`, `SavePlacementRun` | Start and save the numbered purchase record (`placement_run.ini`). |
+| `BeginPlacementRun` | Start of the placement phase: validation cache and selection reset. |
 | `PlacementLayoutKey`, `SaveLayoutPoint`, `CachedPlacementCandidates` | Per-map saved positions, reused only when the local path view validates. |
 | `RegisterPlacedUnit` | Record purchase #N (slot, priority, target, position) and log what confirmed it. |
 | `UpgradeQueue`, `UpgradePriorityPass` | Priority order and one pass on the head. |
 | `ResetUpgradeSelection`, `ResetUpgradeTracking`, `RefreshRecordedUpgradeTarget` | Selection and remembered tile, per-unit click tracking, live target edits. |
 | `SaveUpgradeDiagnostic` | Saves the client area to `cache\upg-tile-<id>.bmp`, once per unit per match. |
 | `DeferUnitUpgrade` | 2 s pause of a stuck unit, which stays at the head of the queue (strict priority). |
-| `OpenRecordedUnit` | Portrait selection through the manager (relocation checks). |
 | `PortraitDistance`, `SlotDisplayName`, `TileIdentityMismatch` | Portrait-colour identity guard. |
 | `ClickTileUpgrade` | Upg click on the tile. |
 | `StableTileRead` | Same reading twice, 0.25 s apart, before an unexplained level jump or a MAX is believed. |
@@ -321,7 +371,7 @@ The macro's record (`gPlacements`) can be wrong in both directions, so the game'
 | `AuditBuild`, `AuditReadCounter`, `ReconcileSlot`, `RemoveNewestSlotEntries`, `RenumberPlacements`, `AddMissedPurchases` | The audit and its repairs (§5a). |
 | `VerifyCompletedBuild` | The bounded audit run at build completion. |
 | `SlotTargetCount`, `CapSlot`, `SlotCounterFull` | A slot's target (configured count or cap); the full-slot test used before a click. |
-| `NoteManagerLookupMiss`, `ManagerLookupExhausted`, `EscalateManagerLookup`, `MarkUnitUnreachable`, `ManagerAuditDue`, `NoteManagerOpenFailure`, `NoteManagerTileFound` | Lookup limits and the request/give-up decision. |
+| `NoteManagerLookupMiss`, `EscalateManagerLookup`, `MarkUnitUnreachable`, `ManagerAuditDue`, `NoteManagerOpenFailure`, `ManagerCooldownActive`, `NoteManagerTileFound` | Lookup limits and the request/give-up decision. |
 | `RepairBuildAfterManagerMismatch` | Close F, Placing, audit, place, back to Upgrading. |
 | `ResetBuildAudit` | Per-match reset (called by `ResetMatchState`). |
 
@@ -329,17 +379,16 @@ The macro's record (`gPlacements`) can be wrong in both directions, so the game'
 | Function | What it does |
 |---|---|
 | `ResetPlacementArea`, `PlacementFailureLimitReached`, `ResetPlacementFailureStreak`, `RecordFailedPlacement`, `PlacementCopyFailures` | Six-consecutive-failure streak. |
-| `PlacementAnchorKnown`, `PlacementViewCanShift`, `ShiftRecordedPlacements`, `ContinuePlacementInCurrentView`, `RecoverPlacementView` | Keep recorded coordinates valid when the view moves. |
-| `PlacementRelocationDirection`, `PlacementFarthestUnit`, `PlacementRelocationRoom`, `CheckRelocationUnit`, `RelocatePlacementArea`, `RetryFinalCheckpointPlacement` | Move to the next checkpoint (20 s walking rule, then teleport and resume). Keep trying locally at checkpoint 3. |
+| `PlacementAnchorKnown`, `ContinuePlacementInCurrentView` | Whether a recorded unit has a usable screen position (false after a view move or for an anchorless audit copy); continue placing when relocation cannot start. |
+| `RelocatePlacementArea`, `AcceptCurrentPlacementArea`, `RetryFinalCheckpointPlacement` | Move to the next checkpoint (20 s walking rule, then teleport and resume). Keep trying locally at checkpoint 3. |
 | `TeleportBackToSpawn`, `CloseSettingsAfterTeleport` | Settings gear → OCR-confirmed "Teleport back to Spawn" arrow → close Settings with its red X. |
 
 ### Learning.ahk
 | Function | What it does |
 |---|---|
 | `BuildLearningTab`, `MemoryRead`, `MemoryKey`, `WindowGeometry` | Learned-data storage per window size and DPI. |
-| `ButtonSection`, `SaveButtonRecord`, `ReadButtonRecord`, `ForgetButton`, `LearnHoveredButton`, `ButtonLabels`, `ButtonRegion`, `DiscoverButton`, `FindCompactRedControl`, `ClickWindowOnce`, `ClickLearnedButton`, `ConfirmObservedTransition`, `ObserveTextButtons`, `HasSavedRedControl`, `HasSavedColourControl` | Learn and click named buttons (OCR plus F10 teaching). |
+| `ButtonSection`, `SaveButtonRecord`, `ReadButtonRecord`, `ForgetButton`, `LearnHoveredButton`, `ButtonLabels`, `ButtonRegion`, `DiscoverButton`, `FindCompactRedControl`, `ClickWindowOnce`, `ClickLearnedButton`, `ObserveTextButtons`, `HasSavedColourControl` | Learn and click named buttons (OCR plus F10 teaching). |
 | `SaveFrameBmp`, `ReadOcrRows`, `ParseOcrRows`, `NormalizeWords` | OCR plumbing. |
-| `HasSettingsPanel`, `SettingsPanelClosed`, `UnitPanelClosed` | Panel checks. |
 | `HasSecretPortalReward`, `StripSecretPortalReward`, `BuffTitleStat`, `BuffTitleTier`, `EnemyStatReduction` | Card text parsing. |
 | `ReadResistanceAmounts`, `ParseResistanceEffects`, `CombineResistanceLines`, `CardIsResistance` | Physical/magic amounts. |
 | `ResistanceIsShared` | **New:** a card adds both physical and magic resist. |
@@ -348,7 +397,7 @@ The macro's record (`gPlacements`) can be wrong in both directions, so the game'
 | `CardIsRegen`, `DebuffOutlook`, `DebuffBetter`, `CardBetter` | Red-card ranking on projected totals against the Health 300% / resist 150 / regen 2% caps (§6). |
 | `CardHasGreenEffect`, `CardSelectionView`, `CardIsSpeed`, `CardPreferenceScore`, `ChooseBestCard`, `PreferVerifiedGreenChoice`, `FallbackCardChoice` | Ranking and safety (§6). |
 | `WhiteBits`, `HashText`, `CardRectangle`, `CardVisual`, `ReadCardMemory`, `RememberCard`, `TeachCurrentCard`, `BitOverlap` | Visual card memory (fallback only). |
-| `PlacementContextMatches`, `PreparePlacementMemory`, `PlacementSection`, `ReadPlacementRecords`, `WritePlacementRecords`, `CandidateOccupied`, `KnownPlacementCandidates`, `RememberPlacement` | Placement memory per map/camera profile. |
+| `PlacementContextMatches`, `PreparePlacementMemory`, `PlacementSection`, `ReadPlacementRecords`, `WritePlacementRecords`, `CandidateOccupied`, `KnownPlacementCandidates`, `RememberPlacement`, `RememberGhostPlacement` | Placement memory per map/camera profile; a ghost spot from the build audit is marked bad. |
 
 ### CardContext.ahk
 | Function | What it does |
@@ -377,7 +426,7 @@ Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `
 `ResetEndGameFlow`, `EndEmptyScreen`, `EndScreenColours`, `ParseEndScreenRows`, `ReadEndScreen` (300 ms cache), `IsEndGameBlocking`, `HasDefeatNext`, `HasReplayButton`, `EndGameButtonStillVisible`, `ClickEndGameButton`, `ReadEndOutcome`, `EndRewardClickAllowed`, `DismissEndRewards`, `TryEndState`, `WaitForReplayVoteStart`.
 
 ### Discord.ahk / UnitSettings.ahk
-`BuildDiscordTab`, `IsWebhookUrl`, `SaveWebhook`, `TestWebhook`, `PostToWebhook`, `ReportMatchResult` · `SavedUnitNumber`, `LoadUnitSettings`, `QueueUnitSettingsSave`, `SaveUnitSettings`, `FlushUnitSettings`, `UnitPlacementModeChanged`.
+`BuildDiscordTab`, `IsWebhookUrl`, `SaveWebhook`, `TestWebhook`, `PostToWebhook`, `ReportMatchResult`, `DiscordWarn` · `SavedUnitNumber`, `LoadUnitSettings`, `QueueUnitSettingsSave`, `SaveUnitSettings`, `FlushUnitSettings`, `UnitPlacementModeChanged`.
 
 ### MinimapVision.py (commands)
 `scan/locate/track/moved` (minimap and player), `toolbar/toolbarfixed` (P state), `world/follow/beside/onpath` (lit path), `placementline/placementneighbours/placementvalid/validateplacements` (placement geometry), `hillspots`, `relocation`, `rememberview/viewshift`, **`cardboxes`** (card interiors from the dark card panels), **`unitmanager`** (heading "Unit Overview", Sell-X anchored rows, portrait click points), `debug/worlddebug`, `discord`.
@@ -385,7 +434,7 @@ Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `
 ---
 
 ## 9. Tests
-- `CheckpointManagerTests.py`: manager selection through 20/19/1-unit layouts. Exactly **one F for the whole match**, **no F before placement**, one F to reopen a closed manager, and the misread guard (2 presses at most).
+- `CheckpointManagerTests.py`: manager selection (test-local `SelectManagedUnit` driver over `LocateManagedUnit`) through 20/19/1-unit layouts. Exactly **one F for the whole match**, **no F before placement**, one F to reopen a closed manager, and the misread guard (2 presses at most).
 - `UpgradeRegressionTests.py`: finite targets and input guards. A missed selection is retried at the same priority before deferral, and no upgrades/F happen before the build is complete.
 - `LearningTests.ahk` (`--self-test`): card policy. Shared resist beats sole 100/75/25, the reported screenshot picks green Range, pixel-only green is found in each position, the reported loss (230% Health, Health +200 offered) now takes resist, the 300/150/2% caps, and Level Modifiers parsing that ignores card wording.
 - `CardPhaseTests.py`: F opens only in Upgrading and closes in any phase; cards per phase (Placing: no F, leftover manager only closed; Upgrading: close then reopen, unit reselected; Watching: no F); the card timeout logs and returns without ending the run; `RunMacro` has no bare `return` and no `if !ClearCardChoice() return`.
@@ -394,6 +443,8 @@ Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `
 - `PathLightTests.py`: the P decision matrix (glyph on/off/unreadable x variant known lit yes/no x lit path seen yes/no, both contexts) as a pure table and end to end, the learned `lit_path` flag, the once-per-match off-on cycle, click bounds, and a check that no `.ahk` file sends the P key. `UpgradeRegressionTests.py` also keeps the P click tests (toolbar mock with glyph levels and ignored clicks).
 - `PlacementConfirmationTests.py`: purchases confirmed by the slot counter alone (also with the hold dropped, or no side panel), old models and card overlays never count, Yen checked before the click.
 - `MatchStateTests.py`: `SetPhase`/`InPhase` transitions (including Watching) and invalid-phase rejection, `EndRun` logs its reason and goes Idle, `ResetMatchState` calls every module reset once; `CheckDisconnect` with `gRunning` false and `gSessionArmed` true reads the dialog and never sets `gRunning`, and does nothing after F7.
+- `LobbyFlowTests.py`: every lobby stage's bound leads to a restart and then `EndRun` (find Play, click Play, walk, queue, portal), a Play click whose effect is visible is not repeated, the saved-Play fallback only behind its constant, F7 never restarts; Reconnect: bounded click cadence, the 30-minute cap returns with `gSessionArmed` still true and a Discord warning, the restart goes `PrepareRunStart` then `ResetMatchState` then phase Lobby.
+- `BuildAuditTests.py` also covers the F cooldown (limit starts it, no unit given up, it repeats, the check never blocks), the slot give-up log line and Discord warning, and the ghost penalty in the learning data.
 - `CardPriorityTests.py`, `UnitManagerVisionTests.py`, and the existing placement/vision tests.
 - The AHK tests need `C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe`.
 

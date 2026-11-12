@@ -26,6 +26,16 @@ same setup from unit_settings.ini. Keep that file when updating the macro.
 Play -> hold W until Play Here appears -> release W -> Play Here -> Open ->
 Start -> wait for Vote Start. There is no other lobby-menu handling.
 
+The lobby start (LobbyFlow.ahk, TryStartFromLobby) is one loop with named stages
+(find Play, click Play, walk to the panel, queue prompt or portal). Each stage has
+a bound; a stage that gives up logs its name and restarts once from the Play stage,
+at most LOBBY_RESTART_LIMIT (3) times, then the run ends with a "lobby: ..." reason.
+A Play click that already opened the panel is not repeated. After a disconnect the
+macro clicks Reconnect (verified, once a second) until lobby Play shows, then
+restarts through the same start steps as F6; one attempt gives up after 30 minutes
+(logged and sent to Discord) and the session stays armed, so the next disconnect
+check tries again. LobbyFlowTests.py covers the bounds.
+
 ## Minimap vision (Python) and repositioning
 
 MinimapVision.py reads the minimap with OpenCV; AHK still sends every key and
@@ -290,8 +300,8 @@ Target edits in the UI update already-recorded units immediately; only target 99
 requests MAX.
 
 Every confirmed purchase receives a number (#1, #2, ...), its exact position,
-slot, priority and upgrade target. The current numbered build is written to
-placement_run.ini. Upgrades find each recorded purchase number's tile in the F unit manager
+slot, priority and upgrade target (kept in memory for the match; placement_run.ini,
+which was only ever written, is no longer produced). Upgrades find each recorded purchase number's tile in the F unit manager
 and process the lowest unfinished
 priority first; equal priorities follow placement number. Cards are the only
 time the F manager is closed (one F, only when it is confirmed open). After the
@@ -463,10 +473,10 @@ capture to MSS, and recreates MSS once before reporting a capture failure.
 Capture failures never count as failed purchases or authorize movement.
 
 
-Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model and no panel has ever been seen. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
+Purchase confirmation recovery keeps unresolved purchases across path rescans. The slot counter, then the Yen drop, then a side panel with no recorded unit nearby confirm the pending purchase; the panel alone never does, and a purchase that stays unknown after a few probes counts as a failed attempt without blacklisting its spot. A pending purchase is resolved from that evidence without clicking the field again (a click can select an existing unit). The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py and PurchaseVerifierTests.py.
 
 
-Build audit: when placement believes the build is complete (and when the F unit manager keeps disagreeing with the record) the macro reads every enabled slot's `n/max` counter and corrects its record: ghost entries are removed newest first, a purchase it missed is recorded with no position, and a slot that is already full is never clicked. See MACRO_BEHAVIOUR.md section 5a. BuildAuditTests.py covers it.
+Build audit: when placement believes the build is complete (and when the F unit manager keeps disagreeing with the record) the macro reads every enabled slot's `n/max` counter and corrects its record: ghost entries are removed newest first, a purchase it missed is recorded with no position, and a slot that is already full is never clicked. See MACRO_BEHAVIOUR.md section 5a. Ghost spots are also marked bad in the learning data. A slot given up (the game's limit, 40 attempts, 12 Hill waits) logs "Slot N: giving up after ...; continuing with M of K units." and sends it to Discord. If the F manager will not open 30 times in a row, upgrades pause for 30 seconds and then try again, repeatedly; the match is never given up for it. BuildAuditTests.py covers it.
 
 ## Unit manager selection
 

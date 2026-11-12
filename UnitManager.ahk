@@ -418,21 +418,3 @@ ClickManagerPoint(x,y) {
     return PlacementClickRef(x*REF_W/cw,y*REF_H/ch,true,0,true)
 }
 
-; Portrait click: opens purchase #N's side panel (relocation checks, and
-; upgrades when the Upg button needs the unit selected first).
-SelectManagedUnit(purchaseId) {
-    global gUnitManagerFailure,gRunning,gPendingPlacement,gPlacements
-    gUnitManagerFailure := ""
-    ; Checked before any click-away, so a pending purchase's panel is kept.
-    if !gRunning || gPendingPlacement || purchaseId<1 || purchaseId>gPlacements.Length
-        return UnitManagerFail("blocked")
-    if HasCardChoice()
-        return UnitManagerFail("card")
-    if !CloseUnitPanel() || !CancelUnitPreview()
-        return UnitManagerFail(HasCardChoice()?"card":"panel")
-    if !(found := LocateManagedUnit(purchaseId))
-        return false
-    if ClickManagerPoint(found.entry.x,found.entry.y) && WaitForUnitPanel(600,true)
-        return true
-    return UnitManagerFail(HasCardChoice()?"card":"panel")
-}

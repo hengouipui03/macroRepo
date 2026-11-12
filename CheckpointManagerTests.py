@@ -75,6 +75,26 @@ Assert(value,message) {
 
 manager_logic=(ROOT/'UnitManager.ahk').read_text(encoding='utf-8-sig')
 manager_logic += '\n'+function('MatchState.ahk','SetPhase')+'\n'+function('MatchState.ahk','InPhase')+'\n'+function('AAPathMacro.ahk','BeginInputAction')+'\n'+function('AAPathMacro.ahk','EndInputAction')
+# Test driver, not production code: the macro locates a tile (LocateManagedUnit) and
+# clicks it inside UpgradeOnceAction. This helper does the same in one call so the
+# F gate, scrolling and reopen rules can be exercised from here.
+manager_logic += r'''
+SelectManagedUnit(purchaseId) {
+    global gUnitManagerFailure,gRunning,gPendingPlacement,gPlacements
+    gUnitManagerFailure := ""
+    if !gRunning || gPendingPlacement || purchaseId<1 || purchaseId>gPlacements.Length
+        return UnitManagerFail("blocked")
+    if HasCardChoice()
+        return UnitManagerFail("card")
+    if !CloseUnitPanel() || !CancelUnitPreview()
+        return UnitManagerFail(HasCardChoice()?"card":"panel")
+    if !(found := LocateManagedUnit(purchaseId))
+        return false
+    if ClickManagerPoint(found.entry.x,found.entry.y) && WaitForUnitPanel(600,true)
+        return true
+    return UnitManagerFail(HasCardChoice()?"card":"panel")
+}
+'''
 manager_logic=manager_logic.replace('A_TickCount','testNow')
 manager_fixture=r'''
 #Requires AutoHotkey v2.0

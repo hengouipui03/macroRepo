@@ -33,14 +33,13 @@ logic += "\n" + function("Placement.ahk", "PlacementStillBesidePath")
 logic += "\n" + function("Placement.ahk", "TryPlacementCandidateAction")
 logic += "\n" + function("Placement.ahk", "TrySelectUnitAt")
 logic += "\n" + function("Placement.ahk", "PlacementPurchaseReady")
-logic += "\n" + function("PlacementArea.ahk", "PlacementRelocationDirection").replace('PlacementRelocationDirection(', 'ActualRelocationDirection(', 1)
-for name in ["PlacementFailureLimitReached", "ResetPlacementFailureStreak", "RecordFailedPlacement", "RetryFinalCheckpointPlacement", "PlacementCopyFailures", "PlacementAnchorKnown", "ContinuePlacementInCurrentView", "RecoverPlacementView", "PlacementViewCanShift", "ShiftRecordedPlacements", "PlacementFarthestUnit", "PlacementRelocationRoom", "CheckRelocationUnit", "RelocatePlacementArea"]:
+for name in ["PlacementFailureLimitReached", "ResetPlacementFailureStreak", "RecordFailedPlacement", "RetryFinalCheckpointPlacement", "PlacementCopyFailures", "PlacementAnchorKnown", "ContinuePlacementInCurrentView", "RelocatePlacementArea"]:
     logic += "\n" + function("PlacementArea.ahk", name)
 logic += "\n" + function("Placement.ahk", "TryPlacementPoints")
 logic += "\n" + function("Placement.ahk", "PlaceConfiguredBuildAction")
 logic += "\n" + function("Placement.ahk", "MissingBuildPlacements")
 for name in ["SlotTargetCount", "SlotCounterFull", "CapSlot", "ReconcileSlot", "RemoveNewestSlotEntries", "AddMissedPurchases",
-             "RenumberPlacements", "NoteManagerLookupMiss", "ManagerLookupExhausted", "EscalateManagerLookup", "MarkUnitUnreachable",
+             "RenumberPlacements", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
              "NoteManagerOpenFailure", "NoteManagerTileFound", "ManagerAuditDue"]:
     logic += "\n" + function("BuildAudit.ahk", name)
 logic += "\n" + function("PlacementArea.ahk", "AcceptCurrentPlacementArea")
@@ -67,7 +66,7 @@ global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSp
 global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
 global verifyCalls := 0,blockReason := "scroll"
 global moveCalls := 0,shiftReads := 0,trackingOkay := true,cameraShifts := [{dx:0,dy:30},{dx:0,dy:0}]
-global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
+global gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global relocationSceneOkay := true,rememberOkay := true,scaleMovement := false,lastDuration := 120,lastMovementKey := ""
 global gMapModel := 0,gMoveKeys := 0,MAP_GRID := 96,baseRoute := [101,102,103,104]
 global navWalkMs := 0,RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0,gMovementCardTotalMs := 0,teleports := 0
@@ -299,14 +298,7 @@ try {
     ResetPlacementFailureStreak()
     gPlacementRelocateRetryAt := 0
 
-    a.x := 400,a.y := 320,a.selectX := 400,a.selectY := 300
-    b.x := 480,b.y := 340,b.selectX := 480,b.selectY := 320
     gPlacements := [a,b],gFailedPlacementSpots := [{x:510,y:350}]
-    Assert(PlacementViewCanShift(-40,25) && !PlacementViewCanShift(400,0),"relocation visibility bound failed")
-    ShiftRecordedPlacements(-40,25)
-    Assert(a.x=360 && a.selectY=325 && b.x=440 && gFailedPlacementSpots[1].x=470,"camera shift did not update recorded/select/rejected coordinates")
-    Assert(gRunViewMoved && PlacementCopyFailures(a)=0,"new area did not reset per-copy failures")
-
     ; Five misses advance only to the next quarter-path checkpoint.
     gMapModel := {checkpoints:[1010,1020,1030],checkpointIndex:1,target:1010},moveCalls := 0
     ResetPlacementFailureStreak()
@@ -440,9 +432,9 @@ Assert(condition,message) {
     if !condition
         throw Error(message)
 }
-SavePlacementRun(*) => 0
 BeginInputAction(*) => true
 EndInputAction(*) => 0
+DiscordWarn(*) => 0
 Log(message,*) {
     global warnings
     if InStr(message,"Upg click") || InStr(message,"Retry in")
@@ -461,13 +453,6 @@ TeleportBackToSpawn(*) {
 ProbePlayer(*) => true
 HasCardChoice(*) => false
 HasUnitPanel(*) => panel
-OpenRecordedUnit(item) {
-    global panel,selected,opened
-    if blockedUnit=item.id
-        return false
-    panel := true,selected := item.id,opened.Push(item.id)
-    return true
-}
 ClickAwayFromUnitPanel(*) {
     global panel
     panel := false
@@ -634,7 +619,6 @@ NavigateDrawing(*) {
 RefreshPlacementSearch(*) => 0
 ResetPlacementArea(*) => 0
 TryEndState(*) => endState
-PlacementRelocationDirection(*) => {x:0,y:1}
 VisionRefreshPlayer(*) => true
 MapNearest(nodes,x,y) => Round(x)
 MapShortestPath(nodes,start,target) {

@@ -1,16 +1,16 @@
 ﻿; Quarter-path checkpoints and consecutive placement failures.
 global gPlacementAreaFailures := Map(),gRunViewMoved := false
-global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
+global gPlacementRelocateRetryAt := 0
 global PLACEMENT_FAILURE_LIMIT := 6,gConsecutivePlacementFailures := 0
 ; Relocation walking (card time excluded) past 20 s without reaching the
 ; checkpoint teleports back to spawn via Settings, then walks again from there.
 global RELOCATION_TELEPORT_MS := 20000,gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0
 
 ResetPlacementArea() {
-    global gPlacementAreaFailures,gRunViewMoved,gPlacementViewRecovery,gPlacementRelocateRetryAt
+    global gPlacementAreaFailures,gRunViewMoved,gPlacementRelocateRetryAt
     global gRelocationWalkMs,gRelocationWalkTarget,gRelocationTeleports
     gPlacementAreaFailures := Map(),gRunViewMoved := false
-    gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0
+    gPlacementRelocateRetryAt := 0
     gRelocationWalkMs := 0,gRelocationWalkTarget := 0,gRelocationTeleports := 0
     ResetPlacementFailureStreak()
 }
@@ -42,8 +42,9 @@ RecordFailedPlacement(unit,point) {
     return true
 }
 
-; False while a recorded unit has no usable position: its coordinates await
-; view recovery (viewPending), or the build audit recorded it without any
+; False while a recorded unit has no usable position on screen: the view moved
+; since it was placed (viewPending, set by RelocatePlacementArea; nothing
+; shifts the old coordinates), or the build audit recorded it without any
 ; (anchorless: a purchase the macro missed). Position-based code skips those.
 PlacementAnchorKnown(item) {
     if item.HasProp("anchorless") && item.anchorless
@@ -58,32 +59,6 @@ ContinuePlacementInCurrentView(unit,reason) {
     RefreshPlacementSearch()
     Log(reason (PlacementFailureLimitReached()?" Checkpoint travel remains pending before another purchase; existing upgrades continue.":" Placement can continue here."))
     return false
-}
-
-RecoverPlacementView() {
-    global gPlacementViewRecovery,gRunning
-    recovery := gPlacementViewRecovery
-    if !recovery || !gRunning || A_TickCount<recovery.retryAt
-        return !recovery
-    recovery.retryAt := A_TickCount+3000
-    if HasCardChoice() || IsEndGameBlocking() || !GetClient(&cx,&cy,&cw,&ch)
-        return false
-    if cw!=recovery.cw || ch!=recovery.ch
-        return false
-    shift := VisionRequest("viewshift " cx " " cy " " cw " " ch)
-    if !VisionOk(shift)
-        return false
-    dx := Number(shift["dx"]),dy := Number(shift["dy"])
-    for item in recovery.items {
-        item.x := Round(item.x+dx),item.y := Round(item.y+dy)
-        item.selectX := Round(item.selectX+dx),item.selectY := Round(item.selectY+dy)
-        item.viewPending := false
-    }
-    gPlacementViewRecovery := 0
-    ResetUpgradeSelection()
-    SavePlacementRun()
-    Log("Recovered earlier unit positions after relocation; their upgrades can resume.")
-    return true
 }
 
 PlacementCopyFailures(unit,add := false) {
@@ -102,59 +77,6 @@ PlacementCopyFailures(unit,add := false) {
             Log("Final checkpoint: keep retrying placement until the build is complete or the match ends.")
     }
     return state.misses
-}
-
-PlacementViewCanShift(dx,dy) {
-    global gPlacements
-    for item in gPlacements {
-        if !PlacementAnchorKnown(item)
-            continue
-        for point in [{x:item.x,y:item.y},{x:item.selectX,y:item.selectY}] {
-            if point.x+dx<50 || point.x+dx>745 || point.y+dy<140 || point.y+dy>475
-                return false
-        }
-    }
-    return true
-}
-
-ShiftRecordedPlacements(dx,dy,newArea := true) {
-    global gPlacements,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
-    global gPlacementAreaFailures,gRunViewMoved,gPlacementProfile
-    for item in gPlacements {
-        item.x := Round(item.x+dx),item.y := Round(item.y+dy)
-        item.selectX := Round(item.selectX+dx),item.selectY := Round(item.selectY+dy)
-    }
-    for point in gFailedPlacementSpots
-        point.x := Round(point.x+dx),point.y := Round(point.y+dy)
-    gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
-    if newArea
-        gPlacementAreaFailures := Map()
-    gRunViewMoved := true,gPlacementProfile := ""
-    RefreshPlacementSearch()
-    ResetUpgradeSelection()
-    SavePlacementRun()
-}
-
-PlacementRelocationDirection() {
-    global gMapModel,gMoveKeys,MAP_GRID
-    if gMapModel && gMapModel.baseMarker && gMoveKeys && VisionRefreshPlayer(gMapModel.player,8) {
-        p := gMapModel.player,base := gMapModel.baseMarker
-        route := MapShortestPath(gMapModel.nodes,MapNearest(gMapModel.nodes,p.x,p.y),MapNearest(gMapModel.nodes,base.x,base.y))
-        if route.Length<2
-            return {x:0,y:0}
-        if route.Length>=2 {
-            node := route[Min(4,route.Length)]
-            presses := MoveDurations(Mod(node,MAP_GRID)-p.x,node//MAP_GRID-p.y,gMoveKeys,120)
-            dx := 0,dy := 0
-            for press in presses {
-                dx += press.key="d"?press.ms:press.key="a"?-press.ms:0
-                dy += press.key="s"?press.ms:press.key="w"?-press.ms:0
-            }
-            if dx*dx+dy*dy>0
-                return {x:dx,y:dy}
-        }
-    }
-    return {x:0,y:1}
 }
 
 ; Screen direction (x right, y down) leading up the route toward where the
@@ -179,38 +101,6 @@ PlacementUpstreamDirection() {
     if !length
         return {x:0,y:0}
     return {x:b/length,y:-a/length}
-}
-
-PlacementFarthestUnit() {
-    global gPlacements
-    farthest := 0,distance := -1
-    for item in gPlacements {
-        if !PlacementAnchorKnown(item)
-            continue
-        d := (item.x-400)**2+(item.y-300)**2
-        if d>distance
-            farthest := item,distance := d
-    }
-    return farthest
-}
-
-PlacementRelocationRoom(dx,dy) {
-    global gPlacements
-    for item in gPlacements {
-        if !PlacementAnchorKnown(item)
-            return false
-        for point in [{x:item.x,y:item.y},{x:item.selectX,y:item.selectY}]
-            if point.x+dx<80 || point.x+dx>720 || point.y+dy<165 || point.y+dy>445
-                return false
-    }
-    return true
-}
-
-CheckRelocationUnit(item) {
-    if !item
-        return true
-    ; Selection only. Confirm a usable model click, then close the panel.
-    return OpenRecordedUnit(item) && CloseUnitPanel()
 }
 
 RetryFinalCheckpointPlacement() {
@@ -241,7 +131,7 @@ AcceptCurrentPlacementArea(unit) {
 
 RelocatePlacementArea(unit) {
     global gRunning,gPlacements,gPendingPlacement,gCardAction,gMapModel
-    global gPrepDeadline,gNavigationTimedOut,gPlacementViewRecovery,gRunViewMoved,gPlacementProfile
+    global gPrepDeadline,gNavigationTimedOut,gRunViewMoved,gPlacementProfile
     global gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
     global RELOCATION_TELEPORT_MS,gRelocationWalkMs,gRelocationWalkTarget,gRelocationTeleports,gMovementCardTotalMs
     if !gRunning || IsEndGameBlocking() || !ClearCardChoice()
@@ -260,10 +150,13 @@ RelocatePlacementArea(unit) {
     gMapModel.target := gMapModel.checkpoints[next]
     if !RefreshMapPlayer()
         return ContinuePlacementInCurrentView(unit,"Player marker unavailable; retain checkpoint " next " as the destination.")
-    ; Upgrade selection now uses purchase order in F, not old world coordinates.
+    ; The camera follows the player, so the screen positions of earlier units are
+    ; stale from here on. They stay in the record (upgrades find them in F by
+    ; purchase number) but position code skips them (PlacementAnchorKnown), and
+    ; learned-placement writes pause (gPlacementProfile is blanked).
     for item in gPlacements
         item.viewPending := true
-    gPlacementViewRecovery := 0,gRunViewMoved := true,gPlacementProfile := ""
+    gRunViewMoved := true,gPlacementProfile := ""
     previous := gCardAction,gCardAction := "relocating"
     if gRelocationWalkTarget!=next
         gRelocationWalkTarget := next,gRelocationWalkMs := 0,gRelocationTeleports := 0
@@ -299,7 +192,6 @@ RelocatePlacementArea(unit) {
         ResetPlacementFailureStreak()
         RefreshPlacementSearch()
         ResetUpgradeSelection()
-        SavePlacementRun()
         if gaveUp
             Log("Checkpoint " next "/3 not reached after 2 teleports and another 20 s of walking; treat the current position as that checkpoint and resume placement here.")
         else

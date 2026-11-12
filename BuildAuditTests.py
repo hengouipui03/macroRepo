@@ -10,8 +10,8 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 NAMES = ["ResetBuildAudit", "SlotTargetCount", "CapSlot", "SlotCounterFull", "AuditReadCounter", "ReconcileSlot",
          "RemoveNewestSlotEntries", "RenumberPlacements", "AddMissedPurchases", "AuditBuild", "VerifyCompletedBuild",
-         "NoteManagerLookupMiss", "ManagerLookupExhausted", "EscalateManagerLookup", "MarkUnitUnreachable",
-         "ManagerAuditDue", "NoteManagerOpenFailure", "NoteManagerTileFound", "RepairBuildAfterManagerMismatch"]
+         "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
+         "ManagerAuditDue", "ManagerCooldownActive", "NoteManagerOpenFailure", "NoteManagerTileFound", "RepairBuildAfterManagerMismatch"]
 logic = "\n".join(function("BuildAudit.ahk", n) for n in NAMES)
 logic += "\n" + function("PlacementArea.ahk", "PlacementAnchorKnown")
 logic += "\n" + function("Placement.ahk", "CountSlotPlacements")
@@ -29,6 +29,7 @@ fixture = r'''
 global gRunning := true,gPlacements := [],gPendingPlacement := 0
 global gPhase := "Upgrading",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"]
 global AUDIT_COUNTER_ATTEMPTS := 3,BUILD_AUDIT_LIMIT := 4,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_LOOKUP_LIMIT := 6,MANAGER_OPEN_FAIL_LIMIT := 30
+global UNIT_MANAGER_GIVEUP_COOLDOWN_MS := 300,gManagerCooldownUntil := 0,warns := [],ghostMarks := []
 global PURCHASE_SETTLE_MS := 300
 global gLookupMisses := Map(),gOpenFailures := 0,gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false,gSlotCaps := Map(),gLastAudit := 0
 global logs := [],counters := Map(),counterReads := Map(),blacklisted := [],steps := [],placeResult := "complete",placeFills := 0,wholePlan := 0
@@ -56,6 +57,7 @@ try {
     Assert(gPlacements[1].partner="" && gPlacements[4].anchor=2 && gPlacements[2].partner=4,"anchor/partner links were not renumbered or cleared")
     Assert(!complete && gSlotCaps.Count=0,"slot 1 holds 1 of 3 after the ghosts left: the build must be incomplete")
     Assert(blacklisted.Length=2,"ghost positions were not kept away from placement")
+    Assert(ghostMarks.Length=2 && ghostMarks[1]="1:260" && ghostMarks[2]="1:180","ghosts were not penalised in the learning data: " Join(ghostMarks))
 
     ; ---- a missed purchase: placed, no anchor, skipped by the anchor code ----
     Reset()
@@ -139,8 +141,8 @@ try {
     Reset()
     unit := {id:3,name:"Unit 3",complete:false}
     Loop MANAGER_LOOKUP_LIMIT-1
-        Assert(NoteManagerLookupMiss(3)<MANAGER_LOOKUP_LIMIT && !ManagerLookupExhausted(3),"lookup limit hit early")
-    Assert(NoteManagerLookupMiss(3)=MANAGER_LOOKUP_LIMIT && ManagerLookupExhausted(3) && !ManagerLookupExhausted(4),"the lookup limit is per purchase")
+        Assert(NoteManagerLookupMiss(3)<MANAGER_LOOKUP_LIMIT,"lookup limit hit early")
+    Assert(NoteManagerLookupMiss(3)=MANAGER_LOOKUP_LIMIT && NoteManagerLookupMiss(4)=1,"the lookup limit is per purchase")
     Assert(EscalateManagerLookup(unit,"mismatch") && ManagerAuditDue() && gEscalationAudits=1,"the first escalation did not request an audit")
     Assert(EscalateManagerLookup(unit,"mismatch") && gEscalationAudits=1,"a pending audit request was counted twice")
     gAuditDue := false
@@ -151,16 +153,46 @@ try {
     ; ResetBuildAudit clears all of it for the next match
     ResetBuildAudit()
     Assert(!gLookupMisses.Count && gEscalationAudits=0 && gCompletionAudits=0 && !gAuditDue && !gSlotCaps.Count && !gLastAudit,"ResetBuildAudit left state behind")
-    ; F that never opens is bounded: all unfinished units are given up
+    ; F that never opens: each round of attempts is bounded, then a cooldown (a
+    ; timestamp), then the same attempts again. No unit is given up for it.
     Reset()
     gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300)]
     gPlacements[1].complete := true
     Loop MANAGER_OPEN_FAIL_LIMIT-1
-        Assert(!NoteManagerOpenFailure(),"F failures hit the limit early")
+        Assert(!NoteManagerOpenFailure() && !ManagerCooldownActive(),"F failures hit the limit early")
     NoteManagerTileFound()
     Loop MANAGER_OPEN_FAIL_LIMIT-1
         Assert(!NoteManagerOpenFailure(),"a found tile did not reset the F failure count")
-    Assert(NoteManagerOpenFailure() && gPlacements[2].unreachable && !gPlacements[1].HasProp("unreachable"),"an F that never opens did not give up the unfinished units only")
+    started := A_TickCount
+    Assert(NoteManagerOpenFailure() && ManagerCooldownActive(),"the limit did not start the cooldown")
+    Assert(!gPlacements[2].HasProp("unreachable") && !gPlacements[1].HasProp("unreachable") && UpgradeQueue().Length=1,"an F that never opens gave a unit up")
+    Assert(LogCount("pausing upgrades for 0 s, then trying again")=1 || LogCount("pausing upgrades for")=1,"the cooldown was not logged once")
+    Assert(ManagerCooldownActive() && A_TickCount-started<UNIT_MANAGER_GIVEUP_COOLDOWN_MS,"the cooldown ended at once")
+    ; the check is a timestamp: it returns at once (no sleep), then reports the end once
+    t := A_TickCount
+    Loop 50
+        ManagerCooldownActive()
+    Assert(A_TickCount-t<UNIT_MANAGER_GIVEUP_COOLDOWN_MS,"the cooldown check blocked")
+    Sleep UNIT_MANAGER_GIVEUP_COOLDOWN_MS+60
+    Assert(!ManagerCooldownActive() && !ManagerCooldownActive() && LogCount("cooldown over")=1,"the cooldown did not end once")
+    ; the cooldown repeats: another full round of failures starts another one
+    Loop MANAGER_OPEN_FAIL_LIMIT-1
+        Assert(!NoteManagerOpenFailure(),"the failure count was not reset after the cooldown")
+    Assert(NoteManagerOpenFailure() && ManagerCooldownActive() && LogCount("pausing upgrades for")=2,"the cooldown did not repeat")
+    ; a new match clears it
+    ResetBuildAudit()
+    Assert(!ManagerCooldownActive(),"ResetBuildAudit left the cooldown running")
+
+    ; ---- a slot given up: one clear line and a Discord warning ----
+    Reset()
+    warns := []
+    CapSlot(MakePlan(2,5),3,"40 attempts at copy 4")
+    Assert(LogCount("Slot 2 (Unit 2): giving up after 40 attempts at copy 4; continuing with 3 of 5 units.")=1,"the give-up line is wrong: " (logs.Length?logs[1]:"none"))
+    Assert(warns.Length=1 && warns[1]=logs[1],"the give-up was not sent to Discord")
+    CapSlot(MakePlan(2,5),3,"again")
+    Assert(logs.Length=1 && warns.Length=1,"the same cap was logged twice")
+    CapSlot(MakePlan(3,2),2,"the game's limit")
+    Assert(warns.Length=1,"a cap that loses no units warned")
 
     ; ---- back through Placing: close F, audit, place what is missing, Upgrading again ----
     Reset()
@@ -222,6 +254,7 @@ LogCount(part) {
     return found
 }
 Reset() {
+    global ghostMarks := []
     global gPlacements,counters,counterReads,blacklisted,logs,gSlotCaps,gLastAudit,gLookupMisses,gEscalationAudits,gCompletionAudits,gAuditDue,gOpenFailures,flaky,gRunning
     ResetBuildAudit()
     gPlacements := [],counters := Map(),counterReads := Map(),blacklisted := [],logs := [],flaky := Map(),gRunning := true
@@ -240,10 +273,17 @@ ProbeSlotCounter(unit) {
         return false
     return counters.Has(unit.slot)?counters[unit.slot]:false
 }
+RememberGhostPlacement(unit,point) {
+    global ghostMarks
+    ghostMarks.Push(unit.slot ":" point.x)
+}
+DiscordWarn(text) {
+    global warns
+    warns.Push(text)
+}
 HasCardChoice(*) => false
 ClearCardChoice(*) => true
 ResetUpgradeSelection(*) => 0
-SavePlacementRun(*) => 0
 RememberFailedPlacementSpot(point) {
     global blacklisted
     blacklisted.Push(point)
@@ -272,12 +312,67 @@ PlaceConfiguredBuild(plan) {
 }
 '''
 
+learning_logic = "\n".join(function("Learning.ahk", n) for n in ["RememberGhostPlacement", "RememberPlacement", "ReadPlacementRecords", "WritePlacementRecords", "PlacementSection", "HashText", "MemoryRead", "KnownPlacementCandidates"])
+learning_logic += "\n" + function("AAPathMacro.ahk", "MapDistance")
+learning_fixture = r'''
+#Requires AutoHotkey v2.0
+#SingleInstance Off
+#Warn All, Off
+global LEARNING_FILE := A_ScriptDir "\ghost-learning-test.ini",PLACEMENT_BAD_LIMIT := 3,REF_W := 800,REF_H := 600
+global gPlacementProfile := "profile.ghost-test",logs := [],gPlacements := []
+try {
+    try FileDelete LEARNING_FILE
+    unit := {slot:1,name:"Bulby"}
+    other := {slot:2,name:"Elyssia"}
+    WritePlacementRecords(unit,[{x:200,y:300,good:2,bad:0},{x:500,y:300,good:1,bad:1}])
+    WritePlacementRecords(other,[{x:200,y:300,good:2,bad:0}])
+    ; a ghost at client 200,300 (window 200,300 here): that record is out of use, the other spot and the other unit are not
+    Assert(RememberGhostPlacement(unit,{x:202,y:301}),"a remembered spot was not found")
+    records := ReadPlacementRecords(unit)
+    Assert(records[1].bad>=PLACEMENT_BAD_LIMIT && records[1].good=2,"the ghost spot was not penalised: bad=" records[1].bad)
+    Assert(records[2].bad=1,"another spot was penalised")
+    Assert(ReadPlacementRecords(other)[1].bad=0,"another unit's record was penalised")
+    cands := KnownPlacementCandidates(unit)
+    Assert(cands.Length=1 && cands[1].x=500,"the ghost spot is still offered as a good spot (" cands.Length ")")
+    ; a ghost at a spot with no record changes nothing
+    Assert(!RememberGhostPlacement(unit,{x:700,y:100}),"an unknown spot reported a mark")
+    ; a later confirmed purchase there brings the spot back
+    RememberPlacement(unit,{x:200,y:300},true)
+    Assert(ReadPlacementRecords(unit)[1].bad=0 && ReadPlacementRecords(unit)[1].good=3,"a confirmed purchase did not clear the ghost penalty")
+    try FileDelete LEARNING_FILE
+    FileAppend "PASS: audit ghosts are penalised in the learning data (out of use, other spots/units untouched, cleared by a later purchase).`n","*","UTF-8"
+    ExitApp 0
+} catch as err {
+    FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
+    ExitApp 1
+}
+Assert(value,message) {
+    if !value
+        throw Error(message)
+}
+Log(text) {
+    global logs
+    logs.Push(text)
+}
+WindowGeometry() => {cx:0,x:0,cy:0,y:0,cw:800,ch:600}
+CandidateOccupied(x,y) => false
+'''
+
+# The watch loop must not block during the F cooldown: upgrades are skipped by a
+# timestamp check, and the cooldown check itself never sleeps.
+_main = (ROOT / "AAPathMacro.ahk").read_text(encoding="utf-8-sig")
+assert "if !ManagerCooldownActive() {\n                MaintainUnitManager()\n                UpgradePriorityPass()" in _main, "the watch loop does not skip upgrades during the cooldown"
+assert "Sleep" not in function("BuildAudit.ahk", "ManagerCooldownActive") and "ActionPause" not in function("BuildAudit.ahk", "ManagerCooldownActive")
+
 if __name__ == "__main__":
-    target = ROOT / "cache" / "build-audit-regression.ahk"
-    target.parent.mkdir(exist_ok=True)
-    target.write_text(fixture + "\n" + logic, encoding="utf-8-sig")
-    result = subprocess.run([str(RUNTIME), "/ErrorStdOut=UTF-8", str(target)], cwd=ROOT,
-                            capture_output=True, timeout=60)
-    print(result.stdout.decode("utf-8-sig"), end="")
-    print(result.stderr.decode("utf-8-sig"), end="")
-    raise SystemExit(result.returncode)
+    status = 0
+    for name, source in [("build-audit", fixture + "\n" + logic), ("ghost-learning", learning_fixture + "\n" + learning_logic)]:
+        target = ROOT / "cache" / f"{name}-regression.ahk"
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(source, encoding="utf-8-sig")
+        result = subprocess.run([str(RUNTIME), "/ErrorStdOut=UTF-8", str(target)], cwd=ROOT,
+                                capture_output=True, timeout=60)
+        print(result.stdout.decode("utf-8-sig"), end="")
+        print(result.stderr.decode("utf-8-sig"), end="")
+        status = status or result.returncode
+    raise SystemExit(status)
