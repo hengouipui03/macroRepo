@@ -52,7 +52,8 @@ RegisterPlacedUnit(unit,point,evidence) {
     }
     item := {id:gPlacements.Length+1,slot:unit.slot,name:unit.name,priority:unit.priority,
         target:unit.target,hill:point.HasProp("hill") && point.hill,row:point.HasProp("hill") && point.hill?0:point.HasProp("row")?point.row:1,upgrades:0,x:point.x,y:point.y,selectX:point.x,selectY:point.y,complete:unit.target=0,
-        money:unit.HasProp("money") && unit.money,anchor:point.HasProp("anchor")?point.anchor:0,partner:"",unreachable:false}
+        money:unit.HasProp("money") && unit.money,anchor:point.HasProp("anchor")?point.anchor:0,partner:"",unreachable:false,
+        counterConfirmed:InStr(evidence,"slot counter")>0}
     ; A row-2 unit fills its edge unit's single partner spot.
     if item.anchor
         for other in gPlacements

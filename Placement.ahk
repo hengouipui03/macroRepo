@@ -853,20 +853,32 @@ TryPlacementCandidateAction(unit,candidate) {
     ; needs two agreeing reads, the lower one is used). Short of Yen: no
     ; click, wait for Yen instead.
     start := ReadPurchaseState(unit)
+    ; A counter with an impossible or different max (not this slot's limit) is a
+    ; misread: it is not evidence either way.
+    start.counter := ValidSlotCounter(unit,start.counter)
     if IsObject(start.counter) && (start.counter.n!=before || SlotCounterFull(start.counter)) {
         ; The counter disagrees with the record (more or fewer units on the
         ; field than recorded) or shows the slot full. No click until the record
         ; matches the game, or the click could buy an extra unit / only be
-        ; refused. The record changes only on a second agreeing read. Not a
-        ; failure and no spot is blacklisted.
+        ; refused. The record changes only on a second agreeing read AND only
+        ; when ReconcileSlot finds the gap plausible. Not a failure and no spot
+        ; is blacklisted.
         agreed := ConfirmHeldCounter(unit,start.counter)
-        CancelUnitPreview()
         if !agreed {
+            CancelUnitPreview()
             Log(unit.name ": slot " unit.slot " counter " start.counter.n "/" start.counter.max " differs from the " before " recorded, but a second read did not agree; no click.")
             return false
         }
-        ReconcileSlot(unit,agreed,"counter before the click",false)
-        return CountSlotPlacements(unit.slot)>before
+        reconciled := ReconcileSlot(unit,agreed,"counter before the click",false)
+        if !reconciled.rejected || SlotCounterFull(agreed) {
+            CancelUnitPreview()
+            return CountSlotPlacements(unit.slot)>before
+        }
+        ; The gap is unexplained and the slot is not full: the record stays, and
+        ; the purchase goes on (the unit is still held) without the counter as
+        ; evidence (Yen decides), as before the counter check existed. A
+        ; misread must not stall the slot.
+        start.counter := false
     }
     if PlacementShortOfYen(unit,start) {
         CancelUnitPreview()

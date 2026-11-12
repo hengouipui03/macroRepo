@@ -12,7 +12,7 @@ logic = '\n'.join(function(file,name) for file,name in [
     ('Placement.ahk','MissingBuildPlacements'),('Placement.ahk','PlacementShortOfYen'),
     ('PurchaseVerifier.ahk','ProbePurchase'),('PurchaseVerifier.ahk','ConfirmHeldCounter'),('PurchaseVerifier.ahk','YenReadsAgree'),('PurchaseVerifier.ahk','JudgePurchase'),('PurchaseVerifier.ahk','NewPurchaseEvidence'),
     ('AAPathMacro.ahk','CheckCardInterruption')])
-for name in ['SlotTargetCount','SlotCounterFull','CapSlot','ReconcileSlot','RemoveNewestSlotEntries','AddMissedPurchases','RenumberPlacements','MarkSlotForReconcile','ReconcilePendingSlots','AuditReadCounter']:
+for name in ['SlotTargetCount','SlotCounterFull','CapSlot','ReconcileSlot','RemoveNewestSlotEntries','AddMissedPurchases','RenumberPlacements','MarkSlotForReconcile','ReconcilePendingSlots','AuditReadCounter','ValidSlotCounter','LearnSlotLimit','UncertainPurchases','NewestEntryCounterConfirmed']:
     logic += '\n' + function('BuildAudit.ahk', name)
 logic += '\n' + function('PlacementArea.ahk','PlacementAnchorKnown')
 for name in ['PlacementFailureLimitReached','ResetPlacementFailureStreak','RecordFailedPlacement','PlacementCopyFailures']:
@@ -30,7 +30,7 @@ global gLastPlacedIndex := 0,gPlacementPreferredSide := 0,gPlacementEdgeMisses :
 global gCardHandling := false,gCardAction := "placement",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0,testNow := 10000
 global panel := false,preview := false,existingModel := false,purchased := false,cards := false,buys := 0,slots := 0,registrations := 0
 global gPlacementLine := [],gLayoutValidation := Map(),gPlacementAreaFailures := Map(),PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
-global gSlotCaps := Map(),gLastAudit := 0,gSlotsToReconcile := Map(),AUDIT_COUNTER_ATTEMPTS := 4,COUNTER_AGREE_ATTEMPTS := 4,YEN_READ_TOLERANCE_ABS := 300,YEN_READ_TOLERANCE_FRACTION := 0.05
+global gSlotCaps := Map(),gLastAudit := 0,gSlotsToReconcile := Map(),gSlotLimits := Map(),gUncertainPurchases := Map(),SLOT_COUNTER_MAX_DROP := 1,AUDIT_COUNTER_ATTEMPTS := 4,COUNTER_AGREE_ATTEMPTS := 4,YEN_READ_TOLERANCE_ABS := 300,YEN_READ_TOLERANCE_FRACTION := 0.05
 global occupiedSpot := false,secondReadOff := false,cardBaseline := 0
 global modelMode := false,models := Map(),hidePanels := false,delayPanel := false,rejectPurchase := false,cardDuringPurchase := false
 global gameCount := Map(),held := false,yen := 90000,UNIT_COST := 1350,GAME_MAX := 9,lastEvidence := "",dropHoldOnBuy := false,probes := 0,unreadableCounter := false,unreadableYen := false
@@ -159,11 +159,15 @@ try {
     unit := {slot:1,name:"Unit 1",count:3,enabled:true,priority:1,target:0}
     NewGame(1,3),gPlacements := [FullItem(1,1,300,330),FullItem(2,1,340,330)],registrations := 0,buys := 0,models := Map(),slots := 0
     ResetPlacementFailureStreak(),gFailedPlacementSpots := [],gPlacementYenWait := 0
+    gUncertainPurchases[1] := 1   ; an earlier purchase of this slot ended unknown: this is the gap's explanation
     Assert(TryPlacementCandidateAction(unit,{x:400,y:330}),"a full slot did not report the reconciled copy")
     Assert(buys=0 && !preview && !held,"a click was sent (or the hold kept) for a slot the counter shows full")
     Assert(gConsecutivePlacementFailures=0 && !gPendingPlacement && !FailedPlacementSpot({x:400,y:330}),"a full slot counted a failure or blacklisted the spot")
     Assert(gPlacements.Length=3 && CountSlotPlacements(1)=3 && gPlacements[3].anchorless && gPlacements[3].id=3,"the missed purchase was not recorded as a new anchorless copy")
     Assert(!PlacementAnchorKnown(gPlacements[3]) && PlacementAnchorKnown(gPlacements[1]),"an anchorless copy counted as having an anchor")
+    ; N1: the same full counter with NOTHING uncertain is an unexplained gap: the record stays, no click.
+    NewGame(1,3),gPlacements := [FullItem(1,1,300,330),FullItem(2,1,340,330)],registrations := 0,buys := 0,models := Map(),slots := 0
+    Assert(!TryPlacementCandidateAction(unit,{x:400,y:330}) && buys=0 && !held && CountSlotPlacements(1)=2,"an unexplained full counter changed the record or allowed a click")
     ; The game's own limit (3) is below the configured count (5): the slot is held at 3, never clicked.
     unit.count := 5
     NewGame(1,3),gPlacements := [FullItem(1,1,300,330),FullItem(2,1,340,330),FullItem(3,1,380,330)],buys := 0,gSlotCaps := Map()
@@ -176,10 +180,20 @@ try {
     unit := {slot:1,name:"Unit 1",count:2,enabled:true,priority:1,target:0}
     NewGame(1,0),gameCount[1] := 1,buys := 0,gFailedPlacementSpots := [],gSlotsToReconcile := Map()
     ResetPlacementFailureStreak(),gPlacementYenWait := 0,gSlotCaps := Map()
+    gUncertainPurchases[1] := 1
     Assert(TryPlacementCandidateAction(unit,point) && buys=0 && CountSlotPlacements(1)=1 && gPlacements[1].anchorless && !held && !preview,"a unit on the field that was never recorded was not recorded before the click (or a click bought an extra unit)")
     Assert(gConsecutivePlacementFailures=0 && !FailedPlacementSpot(point),"reconciling a missed unit counted a failure or blacklisted the spot")
     ; the next click then goes ahead, counter 1/9 matching the record
     Assert(TryPlacementCandidateAction(unit,{x:450,y:330}) && buys=1 && CountSlotPlacements(1)=2,"the copy after the reconcile was not bought")
+    ; N1: a counter far above the record with nothing uncertain (a consistent misread)
+    ; adds no phantom units and does not stall the slot: the purchase goes on without the counter
+    unit.count := 5
+    NewGame(1,1),gameCount[1] := 4,buys := 0,gFailedPlacementSpots := [],models := Map(),panel := false
+    ResetPlacementFailureStreak(),gPlacementYenWait := 0,gSlotCaps := Map()
+    TryPlacementCandidateAction(unit,{x:470,y:330})
+    Assert(buys=1 && !gPlacements[gPlacements.Length].HasProp("anchorless") && gPlacements.Length<=2,"a misread counter added phantom units or stalled the purchase (records " gPlacements.Length ", buys " buys ")")
+    unit.count := 2
+    models := Map()
     ; fewer units on the field than recorded (a ghost): removed before the click
     unit.count := 2
     NewGame(1,0),gPlacements := [FullItem(1,1,300,330)],buys := 0,gFailedPlacementSpots := []
@@ -223,8 +237,9 @@ RaiseCards() {
 Pending(slot,copy) => {x:400,y:330,pendingSlot:slot,pendingCopy:copy,counterBefore:{n:copy-1,max:GAME_MAX},yenBefore:90000,cost:UNIT_COST}
 ; The game: gameCount[slot] units placed; a held unit shows its counter.
 NewGame(slot,count) {
-    global gPlacements,gameCount,held,preview
+    global gPlacements,gameCount,held,preview,gSlotLimits,gUncertainPurchases
     gPlacements := [],gameCount := Map(),held := false,preview := false
+    gSlotLimits := Map(),gUncertainPurchases := Map()
     Loop count
         gPlacements.Push({slot:slot})
     gameCount[slot] := count

@@ -17,6 +17,12 @@
 ; one read: two agreeing counter reads are required, and a removal only
 ; blacklists the spot for the current game (no learning.ini write: which
 ; entry is the ghost is a guess).
+; Two agreeing reads can still be the SAME misread (a "1" read as "4"), so every
+; counter-driven change to the record goes through ONE plausibility gate,
+; ReconcileSlot: the counter's max must equal the slot's learned limit; the
+; record may rise only by the purchases that are still uncertain; it may fall
+; by at most SLOT_COUNTER_MAX_DROP, and only when the newest entry was not
+; confirmed by the counter itself. Anything else is logged and left alone.
 ; The audit runs when placement believes the build is complete, and again
 ; when the unit manager keeps disagreeing with the record (see
 ; RepairBuildAfterManagerMismatch). Every retry here has a named bound.
@@ -24,6 +30,9 @@
 ; Probes of one slot's counter per audit. The record (or a cap) changes only
 ; when TWO of them agree; otherwise the slot is left as recorded.
 global AUDIT_COUNTER_ATTEMPTS := 4
+; The most entries one reconcile may remove from a slot, and only when the
+; slot's newest entry was not itself confirmed by the counter.
+global SLOT_COUNTER_MAX_DROP := 1
 ; Audits at build completion per match. An audit that finds the build
 ; incomplete sends placement back to work, so this stops a loop of
 ; place, audit, place when the two keep disagreeing.
@@ -52,6 +61,13 @@ global gManagerCooldownUntil := 0
 ; Slot -> unit whose last purchase ended "unknown" (the click may have bought):
 ; reconciled with its counter before the NEXT purchase of any slot.
 global gSlotsToReconcile := Map()
+; Slot -> purchases of that slot whose outcome is uncertain (ended "unknown")
+; and not yet settled by a plausible counter: the only thing that explains a
+; counter above the record.
+global gUncertainPurchases := Map()
+; Slot -> the max its counter showed when two agreeing reads first gave it
+; (the game's limit for that unit). Per match, kept here, not in learning.ini.
+global gSlotLimits := Map()
 global gLookupMisses := Map(),gOpenFailures := 0
 global gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false
 ; Slot -> the most units the game lets this slot hold, or that placement gave
@@ -62,8 +78,9 @@ global gLastAudit := 0
 
 ; Per-match state (called by ResetMatchState).
 ResetBuildAudit() {
-    global gLookupMisses,gOpenFailures,gEscalationAudits,gCompletionAudits,gAuditDue,gSlotCaps,gLastAudit,gManagerCooldownUntil,gSlotsToReconcile
+    global gLookupMisses,gOpenFailures,gEscalationAudits,gCompletionAudits,gAuditDue,gSlotCaps,gLastAudit,gManagerCooldownUntil,gSlotsToReconcile,gUncertainPurchases,gSlotLimits
     gSlotsToReconcile := Map()
+    gUncertainPurchases := Map(),gSlotLimits := Map()
     gLookupMisses := Map(),gOpenFailures := 0,gManagerCooldownUntil := 0
     gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false
     gSlotCaps := Map(),gLastAudit := 0
@@ -94,9 +111,35 @@ SlotCounterFull(counter) {
     return IsObject(counter) && counter.n>=counter.max
 }
 
+; A counter read that can be believed for this slot: n <= max, and max is the
+; slot's learned limit once there is one (a different max is a misread). Returns
+; the counter, or false (unreadable).
+ValidSlotCounter(unit,counter) {
+    global gSlotLimits
+    if !IsObject(counter) || counter.n>counter.max
+        return false
+    if gSlotLimits.Has(unit.slot) && gSlotLimits[unit.slot]!=counter.max
+        return false
+    return counter
+}
+
+; The limit is learned the first time two agreeing reads give it (the counter
+; passed in is one two reads agreed on). Returns false when it contradicts the
+; limit already learned.
+LearnSlotLimit(unit,counter) {
+    global gSlotLimits
+    if !gSlotLimits.Has(unit.slot) {
+        gSlotLimits[unit.slot] := counter.max
+        Log("Slot " unit.slot " (" unit.name "): counter limit " counter.max " learned from two agreeing reads.")
+        return true
+    }
+    return gSlotLimits[unit.slot]=counter.max
+}
+
 ; One slot's counter from up to AUDIT_COUNTER_ATTEMPTS separate probes (slot
-; key, read, Q). Returns it once two probes agree; false when none agree, the
-; run stopped, the end screen shows or a card could not be cleared.
+; key, read, Q; counter only, one OCR pass each). Returns it once two probes
+; agree; false when none agree, the run stopped, the end screen shows or a card
+; could not be cleared. A read with an impossible or different max is unreadable.
 AuditReadCounter(unit) {
     global gRunning,AUDIT_COUNTER_ATTEMPTS
     seen := []
@@ -105,11 +148,13 @@ AuditReadCounter(unit) {
             return false
         if HasCardChoice() && !ClearCardChoice()
             return false
-        counter := ProbeSlotCounter(unit)
+        counter := ValidSlotCounter(unit,ProbeSlotCounter(unit))
         if counter {
             for earlier in seen
-                if earlier.n=counter.n && earlier.max=counter.max
+                if earlier.n=counter.n && earlier.max=counter.max {
+                    LearnSlotLimit(unit,counter)
                     return counter
+                }
             seen.Push(counter)
         } else
             Log("Build audit: slot " unit.slot " counter unreadable (" A_Index "/" AUDIT_COUNTER_ATTEMPTS ").")
@@ -122,8 +167,15 @@ AuditReadCounter(unit) {
 ; A purchase that ended "unknown": remember the slot so that it is checked
 ; before the next purchase of any slot.
 MarkSlotForReconcile(unit) {
-    global gSlotsToReconcile
+    global gSlotsToReconcile,gUncertainPurchases
     gSlotsToReconcile[unit.slot] := unit
+    gUncertainPurchases[unit.slot] := (gUncertainPurchases.Has(unit.slot)?gUncertainPurchases[unit.slot]:0)+1
+}
+
+; Purchases of the slot whose outcome is still uncertain.
+UncertainPurchases(slot) {
+    global gUncertainPurchases
+    return gUncertainPurchases.Has(slot)?gUncertainPurchases[slot]:0
 }
 
 ; Reconciles every slot marked by MarkSlotForReconcile (two agreeing reads,
@@ -150,21 +202,63 @@ ReconcilePendingSlots() {
     return true
 }
 
+; True when the newest recorded entry of the slot was confirmed by the slot
+; counter itself (so a lower counter would contradict a counter-proven unit).
+NewestEntryCounterConfirmed(slot) {
+    global gPlacements
+    index := gPlacements.Length
+    while index>=1 {
+        item := gPlacements[index]
+        if item.slot=slot
+            return item.HasProp("counterConfirmed") && item.counterConfirmed
+        index -= 1
+    }
+    return false
+}
+
 ; Brings one slot's records in line with its counter. The counter MUST be one
-; that two reads agreed on (AuditReadCounter / ConfirmHeldCounter): this is
-; where records are removed, purchases added and a slot capped. source says
-; what triggered it (for the log). immediate: see AddMissedPurchases.
-; Returns {removed,added} (counts).
+; that two reads agreed on (AuditReadCounter / ConfirmHeldCounter). This is the
+; ONE gate for every counter-driven change (the check before a click, the
+; reconcile after an uncertain purchase, the audit): records are removed,
+; purchases added and a slot capped only here, and only when plausible:
+;  - max must equal the slot's limit (learned from the first two agreeing
+;    reads) or the read is treated as unreadable;
+;  - counter above the record: at most UncertainPurchases(slot) may be added;
+;  - counter below the record: at most SLOT_COUNTER_MAX_DROP removed, and only
+;    when the newest entry of the slot was not confirmed by the counter.
+; Anything else is logged and the record stays. source says what triggered it
+; (for the log). immediate: see AddMissedPurchases.
+; Returns {removed,added,rejected} (counts; rejected true when left alone).
 ReconcileSlot(unit,counter,source,immediate) {
+    global SLOT_COUNTER_MAX_DROP,gUncertainPurchases
     recorded := CountSlotPlacements(unit.slot)
-    result := {removed:0,added:0}
+    result := {removed:0,added:0,rejected:false}
+    if !ValidSlotCounter(unit,counter) || !LearnSlotLimit(unit,counter) {
+        Log("Build audit (" source "): slot " unit.slot " counter " counter.n "/" counter.max " is not plausible for this slot; treated as unreadable, record left unchanged.")
+        result.rejected := true
+        return result
+    }
     if counter.n<recorded {
         Log("Build audit (" source "): slot " unit.slot " shows " counter.n "/" counter.max " but " recorded " are recorded.")
-        result.removed := RemoveNewestSlotEntries(unit,recorded-counter.n)
+        if recorded-counter.n>SLOT_COUNTER_MAX_DROP || NewestEntryCounterConfirmed(unit.slot) {
+            Log("Slot " unit.slot " counter reads " counter.n " but " recorded " are recorded and " (recorded-counter.n>SLOT_COUNTER_MAX_DROP?"that is more than " SLOT_COUNTER_MAX_DROP " apart":"the newest entry was confirmed by the counter") "; record left unchanged.")
+            result.rejected := true
+        } else
+            result.removed := RemoveNewestSlotEntries(unit,recorded-counter.n)
     } else if counter.n>recorded {
         Log("Build audit (" source "): slot " unit.slot " shows " counter.n "/" counter.max " but only " recorded " are recorded; a purchase the macro missed.")
-        result.added := AddMissedPurchases(unit,counter.n-recorded,immediate)
+        uncertain := UncertainPurchases(unit.slot)
+        if counter.n-recorded>uncertain {
+            Log("Slot " unit.slot " counter reads " counter.n " but only " uncertain " purchase(s) are uncertain; record left unchanged.")
+            result.rejected := true
+        } else
+            result.added := AddMissedPurchases(unit,counter.n-recorded,immediate)
     }
+    if result.rejected
+        return result
+    ; Settled: whatever was uncertain about this slot is now accounted for.
+    if gUncertainPurchases.Has(unit.slot)
+        gUncertainPurchases.Delete(unit.slot)
     if SlotCounterFull(counter) && counter.max<unit.count
         CapSlot(unit,counter.max,"the game's limit for this unit is " counter.max)
     return result
@@ -221,14 +315,14 @@ AddMissedPurchases(unit,count,immediate) {
     ; The missed copy was really bought before every purchase made after this
     ; slot's last recorded entry, but where among them is unknown. Those units
     ; may sit one tile off in the manager: flag them for the portrait check.
-    last := 0
+    lastOfSlot := 0
     for index,item in gPlacements
         if item.slot=unit.slot
-            last := index
-    if !immediate && last<gPlacements.Length {
-        Log("Build audit: WARNING: the missed " unit.name " purchase is recorded last, but it was bought earlier; the " (gPlacements.Length-last) " unit(s) recorded after slot " unit.slot "'s last entry are only upgraded when the unit manager portrait matches.")
-        Loop gPlacements.Length-last
-            gPlacements[last+A_Index].orderUncertain := true
+            lastOfSlot := index
+    if !immediate && lastOfSlot<gPlacements.Length {
+        Log("Build audit: WARNING: the missed " unit.name " purchase is recorded last, but it was bought earlier; the " (gPlacements.Length-lastOfSlot) " unit(s) recorded after slot " unit.slot "'s last entry are only upgraded when the unit manager portrait matches.")
+        Loop gPlacements.Length-lastOfSlot
+            gPlacements[lastOfSlot+A_Index].orderUncertain := true
     }
     Loop count {
         item := {id:gPlacements.Length+1,slot:unit.slot,name:unit.name,priority:unit.priority,

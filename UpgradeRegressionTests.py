@@ -39,7 +39,7 @@ logic += "\n" + function("Placement.ahk", "TryPlacementPoints")
 logic += "\n" + function("Placement.ahk", "PlaceConfiguredBuildAction")
 logic += "\n" + function("Placement.ahk", "MissingBuildPlacements")
 for name in ["SlotTargetCount", "SlotCounterFull", "CapSlot", "ReconcileSlot", "RemoveNewestSlotEntries", "AddMissedPurchases",
-             "RenumberPlacements", "ManagerLookupLimit", "MarkSlotForReconcile", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
+             "RenumberPlacements", "ManagerLookupLimit", "MarkSlotForReconcile", "ValidSlotCounter", "LearnSlotLimit", "UncertainPurchases", "NewestEntryCounterConfirmed", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
              "NoteManagerOpenFailure", "NoteManagerTileFound", "ManagerAuditDue"]:
     logic += "\n" + function("BuildAudit.ahk", name)
 logic += "\n" + function("PlacementArea.ahk", "AcceptCurrentPlacementArea")
@@ -59,7 +59,7 @@ global savedP := false,pHalf := false,pHalfState := false,findCalls := 0,fixedCa
 global PATH_CLICK_LIMIT := 3,PATH_TOGGLE_CHANGE := 25,PATH_GLYPH_POLLS := 4,PATH_GLYPH_POLL_MS := 700,LIT_PATH_MIN_FRACTION := 0.01
 global gPathGlyphOn := false,gPathCycleDone := false,gLitPathRecorded := false,gPathToggle := 0,PATH_LIT_SETTLE_MS := 400,LEARNING_FILE := A_ScriptDir "\\path-light-regression.ini"
 global gSlotCaps := Map(),gLookupMisses := Map(),gOpenFailures := 0,gEscalationAudits := 0,gAuditDue := false,gLastAudit := 0
-global MANAGER_LOOKUP_LIMIT := 6,MANAGER_LOOKUP_LIMIT_AFTER_AUDITS := 2,YEN_WAIT_ROUND_LIMIT := 30,gSlotsToReconcile := Map(),AUDIT_LIMIT_PER_MATCH := 2,MANAGER_OPEN_FAIL_LIMIT := 30,UPGRADE_DEFER_LIMIT := 40
+global MANAGER_LOOKUP_LIMIT := 6,MANAGER_LOOKUP_LIMIT_AFTER_AUDITS := 2,YEN_WAIT_ROUND_LIMIT := 30,gSlotsToReconcile := Map(),gSlotLimits := Map(),gUncertainPurchases := Map(),SLOT_COUNTER_MAX_DROP := 1,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_OPEN_FAIL_LIMIT := 30,UPGRADE_DEFER_LIMIT := 40
 global BUILD_COPY_ATTEMPT_LIMIT := 40,BUILD_RELOCATE_WAIT_LIMIT := 20,HILL_RETRY_LIMIT := 12,CARD_RESUME_LIMIT := 5,gPathVisionErrors := 0,PATH_VISION_ERROR_LIMIT := 6
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""

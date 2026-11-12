@@ -258,10 +258,12 @@ ConfirmHeldCounter(unit,first) {
 }
 
 ; The slot counter right now, read the way the audit needs it: select the
-; unit, read the hotbar, drop the hold with Q. {n,max}, or false when the
-; counter cannot be read (or the run stopped, a card is up that could not be
-; cleared, or the end screen shows: the hotbar is hidden then and no key may be
-; pressed over it). One attempt; callers bound their own retries.
+; unit, read the hotbar ONCE, drop the hold with Q. Only the counter matters
+; here, so there is no Yen agreement wait: one OCR pass per probe (ReadHotbarPass
+; is one OCR call). {n,max}, or false when the counter cannot be read (or the
+; run stopped, a card is up that could not be cleared, or the end screen shows:
+; the hotbar is hidden then and no key may be pressed over it). One attempt;
+; callers bound their own retries.
 ProbeSlotCounter(unit) {
     global gRunning,PURCHASE_SETTLE_MS
     if !gRunning || IsEndGameBlocking()
@@ -272,7 +274,7 @@ ProbeSlotCounter(unit) {
         return false
     counter := false
     if ActionPause(PURCHASE_SETTLE_MS)
-        counter := ReadPurchaseState(unit).counter
+        counter := ReadHotbarPass(unit).counter
     CancelUnitPreview()
     return counter
 }

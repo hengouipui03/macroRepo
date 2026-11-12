@@ -20,6 +20,7 @@ global testNow := 10000,gRunning := true,gPlacements := [],gPendingPlacement := 
 global HOTBAR_SLOT_X := [251,315,379,443,508,571]
 global PURCHASE_YEN_DROP_FRACTION := 0.5,PURCHASE_REPROBE_LIMIT := 3,PURCHASE_SETTLE_MS := 300
 global YEN_READ_TOLERANCE_ABS := 300,YEN_READ_TOLERANCE_FRACTION := 0.05,COUNTER_AGREE_ATTEMPTS := 4
+global hotbarPasses := 0,stateReads := 0
 global events := [],endScreen := false,cardUp := false,cardClears := true,marked := 0,missed := 0,finishFails := false,hotbarCounters := []
 global COUNTER_WORD_GAP := 10,COUNTER_SLOT_GAP := 30,COUNTER_MAX_PLAUSIBLE := 99
 global panelClosed := 0,scripted := [],slotKeys := 0,drops := 0,failures := 0,blacklisted := 0,registered := [],panel := false,occupied := false,panelChecks := 0,logs := []
@@ -157,23 +158,27 @@ try {
     Assert(!RecoverPendingPlacement(unit) && gPendingPlacement && failures=0 && blacklisted=0,"a stopped run turned the pending purchase into a failure")
     gRunning := true
     ; ---- ProbeSlotCounter (used by the build audit): select, read, Q ----
-    slotKeys := 0,drops := 0
-    Script([{yen:-1,cost:1350,counter:C(2,3)}])
+    slotKeys := 0,drops := 0,hotbarPasses := 0,stateReads := 0
+    hotbarCounters := [C(2,3)]
     got := ProbeSlotCounter(unit)
     Assert(got && got.n=2 && got.max=3 && slotKeys=1 && drops=1,"the slot counter probe did not select, read and drop the hold once")
-    slotKeys := 0,drops := 0
-    Script([{yen:-1,cost:1350,counter:false}])
-    Assert(!ProbeSlotCounter(unit) && slotKeys=1 && drops=1,"an unreadable counter was invented or the hold kept")
+    ; N2/N3: one OCR pass per probe, counter only (no Yen agreement wait)
+    Assert(hotbarPasses=1 && stateReads=0,"the counter probe used " hotbarPasses " OCR passes and " stateReads " Yen-agreement reads instead of one pass")
+    slotKeys := 0,drops := 0,hotbarPasses := 0
+    hotbarCounters := []
+    Assert(!ProbeSlotCounter(unit) && slotKeys=1 && drops=1 && hotbarPasses=1,"an unreadable counter was invented, the hold kept, or more than one pass was spent")
     gRunning := false,slotKeys := 0
     Assert(!ProbeSlotCounter(unit) && slotKeys=0,"the counter probe pressed a key after a stop")
     gRunning := true
     ; M4: the end screen hides the hotbar: no key is pressed over it
     endScreen := true,slotKeys := 0
-    Script([{yen:-1,cost:1350,counter:C(2,3)}])
+    hotbarCounters := [C(2,3)]
     Assert(!ProbeSlotCounter(unit) && slotKeys=0,"the counter probe pressed a key over the end screen")
+    hotbarCounters := []
     endScreen := false
     ; M4: a card is chosen first; a card that cannot be cleared stops the probe
     cardUp := true,cardClears := true,slotKeys := 0
+    hotbarCounters := [C(2,3)]
     Assert(ProbeSlotCounter(unit) && slotKeys=1 && !cardUp,"a card was not cleared before the counter probe")
     cardUp := true,cardClears := false,slotKeys := 0
     Assert(!ProbeSlotCounter(unit) && slotKeys=0,"the counter probe pressed a key over a card it could not clear")
@@ -269,12 +274,14 @@ ResetFlow() {
 }
 ; Each read takes the next scripted state; the last one repeats.
 ReadPurchaseState(unit) {
-    global scripted
+    global scripted,stateReads
+    stateReads += 1
     state := scripted.Length>1?scripted.RemoveAt(1):scripted[1]
     return {yen:state.yen,yenMax:state.yen,cost:state.cost,counter:state.counter}
 }
 ReadHotbarPass(unit) {
-    global hotbarCounters
+    global hotbarCounters,hotbarPasses
+    hotbarPasses += 1
     counter := hotbarCounters.Length?hotbarCounters.RemoveAt(1):false
     return {yen:-1,cost:0,counter:counter}
 }

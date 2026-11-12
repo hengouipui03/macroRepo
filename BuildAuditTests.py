@@ -10,7 +10,7 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 NAMES = ["ResetBuildAudit", "SlotTargetCount", "CapSlot", "SlotCounterFull", "AuditReadCounter", "ReconcileSlot",
          "RemoveNewestSlotEntries", "RenumberPlacements", "AddMissedPurchases", "AuditBuild", "VerifyCompletedBuild",
-         "MarkSlotForReconcile", "ReconcilePendingSlots", "ManagerLookupLimit", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
+         "MarkSlotForReconcile", "ReconcilePendingSlots", "ValidSlotCounter", "LearnSlotLimit", "UncertainPurchases", "NewestEntryCounterConfirmed", "ManagerLookupLimit", "NoteManagerLookupMiss", "EscalateManagerLookup", "MarkUnitUnreachable",
          "ManagerAuditDue", "ManagerCooldownActive", "NoteManagerOpenFailure", "NoteManagerTileFound", "RepairBuildAfterManagerMismatch"]
 logic = "\n".join(function("BuildAudit.ahk", n) for n in NAMES)
 logic += "\n" + function("PlacementArea.ahk", "PlacementAnchorKnown")
@@ -28,7 +28,7 @@ fixture = r'''
 #Warn All, Off
 global gRunning := true,gPlacements := [],gPendingPlacement := 0
 global gPhase := "Upgrading",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"]
-global AUDIT_COUNTER_ATTEMPTS := 4,MANAGER_LOOKUP_LIMIT_AFTER_AUDITS := 2,REPAIR_CLOSE_ATTEMPTS := 3,gCardAction := "",cardActionSeen := [],closeResults := [],endScreen := false,endAfterReads := 0,scriptedReads := Map(),gSlotsToReconcile := Map(),BUILD_AUDIT_LIMIT := 4,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_LOOKUP_LIMIT := 6,MANAGER_OPEN_FAIL_LIMIT := 30
+global AUDIT_COUNTER_ATTEMPTS := 4,MANAGER_LOOKUP_LIMIT_AFTER_AUDITS := 2,REPAIR_CLOSE_ATTEMPTS := 3,gCardAction := "",cardActionSeen := [],closeResults := [],endScreen := false,endAfterReads := 0,scriptedReads := Map(),gSlotsToReconcile := Map(),gSlotLimits := Map(),gUncertainPurchases := Map(),SLOT_COUNTER_MAX_DROP := 1,BUILD_AUDIT_LIMIT := 4,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_LOOKUP_LIMIT := 6,MANAGER_OPEN_FAIL_LIMIT := 30
 global UNIT_MANAGER_GIVEUP_COOLDOWN_MS := 300,gManagerCooldownUntil := 0,warns := [],ghostMarks := []
 global PURCHASE_SETTLE_MS := 300
 global gLookupMisses := Map(),gOpenFailures := 0,gEscalationAudits := 0,gCompletionAudits := 0,gAuditDue := false,gSlotCaps := Map(),gLastAudit := 0
@@ -41,22 +41,22 @@ try {
     gPlacements[3].anchor := 1,gPlacements[1].partner := 3
     gPlacements[5].anchor := 3,gPlacements[3].partner := 5
     gPlacements[6].anchor := 2,gPlacements[2].partner := 6
-    counters[1] := C(1,3),counters[2] := C(2,2),counters[3] := C(1,1)
+    counters[1] := C(2,3),counters[2] := C(2,2),counters[3] := C(1,1)
     complete := AuditBuild(plan)
-    ; slot 1 had 3 recorded (#1,#3,#5), the counter says 1: #5 then #3 are ghosts, #1 stays
-    Assert(CountSlotPlacements(1)=1 && gPlacements.Length=4,"ghosts were not removed down to the counter (" gPlacements.Length " left)")
+    ; slot 1 had 3 recorded (#1,#3,#5), the counter says 2 (N1: at most 1 apart): #5 is the ghost, #1 and #3 stay
+    Assert(CountSlotPlacements(1)=2 && gPlacements.Length=5,"the ghost was not removed down to the counter (" gPlacements.Length " left)")
     ids := ""
     for item in gPlacements
         ids .= item.slot ","
-    Assert(ids="1,2,3,2,","the remaining entries lost their order: " ids)
+    Assert(ids="1,2,1,3,2,","the remaining entries lost their order: " ids)
     for index,item in gPlacements
         Assert(item.id=index,"entry " index " was not renumbered (id " item.id ")")
-    Assert(gLastAudit.removed.Length=2 && gLastAudit.removed[1]=5 && gLastAudit.removed[2]=3,"ghosts were not removed newest first: " Join(gLastAudit.removed))
-    Assert(LogCount("ghost #5")=1 && LogCount("ghost #3")=1,"each removal was not logged")
-    ; links: #1's partner (#3) is gone; the old #6 (now #4) still points at the old #2 (still #2)
-    Assert(gPlacements[1].partner="" && gPlacements[4].anchor=2 && gPlacements[2].partner=4,"anchor/partner links were not renumbered or cleared")
-    Assert(!complete && gSlotCaps.Count=0,"slot 1 holds 1 of 3 after the ghosts left: the build must be incomplete")
-    Assert(blacklisted.Length=2,"ghost positions were not kept away from placement")
+    Assert(gLastAudit.removed.Length=1 && gLastAudit.removed[1]=5,"the ghost was not removed newest first: " Join(gLastAudit.removed))
+    Assert(LogCount("ghost #5")=1,"the removal was not logged")
+    ; links: #3's partner (#5) is gone; the old #6 (now #5) still points at the old #2 (still #2)
+    Assert(gPlacements[3].partner="" && gPlacements[5].anchor=2 && gPlacements[2].partner=5,"anchor/partner links were not renumbered or cleared")
+    Assert(!complete && gSlotCaps.Count=0,"slot 1 holds 2 of 3 after the ghost left: the build must be incomplete")
+    Assert(blacklisted.Length=1,"the ghost position was not kept away from placement")
     ; M3: an audit removal never writes a learned penalty (which entry is the ghost is a guess)
     Assert(!ghostMarks.Length,"an audit removal wrote a learned penalty")
 
@@ -64,7 +64,7 @@ try {
     Reset()
     plan := [MakePlan(1,2)]
     gPlacements := [MakeItem(1,1,100,300)]
-    counters[1] := C(2,2)
+    counters[1] := C(2,2),gUncertainPurchases[1] := 1
     Assert(AuditBuild(plan) && gPlacements.Length=2 && CountSlotPlacements(1)=2,"a missed purchase was not recorded")
     missed := gPlacements[2]
     Assert(missed.anchorless && !PlacementAnchorKnown(missed) && missed.id=2 && missed.anchor=0 && missed.partner="","the missed purchase was not marked anchorless")
@@ -82,7 +82,7 @@ try {
     Reset()
     plan := [MakePlan(1,1)]
     gPlacements := []
-    counters[1] := C(3,3)
+    counters[1] := C(3,3),gUncertainPurchases[1] := 3
     AuditBuild(plan)
     Assert(gPlacements.Length=3 && gPlacements[3].id=3,"extra units on the field were not recorded")
 
@@ -99,7 +99,7 @@ try {
     ; a read that works on the second attempt
     Reset()
     gPlacements := [MakeItem(1,1,100,300)]
-    counters[1] := C(2,2),flaky[1] := 1
+    counters[1] := C(2,2),flaky[1] := 1,gUncertainPurchases[1] := 1
     AuditBuild([MakePlan(1,2)])
     Assert(counterReads[1]=3 && gPlacements.Length=2 && !gLastAudit.unreadable.Length,"a counter that read on the second try was not used (two agreeing reads: " counterReads[1] " probes)")
 
@@ -114,9 +114,9 @@ try {
     ; any two agreeing reads decide (a misread in between is outvoted)
     Reset()
     gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300),MakeItem(3,1,180,300)]
-    scriptedReads[1] := [C(1,3),C(2,3),C(0,3),C(1,3)]
+    scriptedReads[1] := [C(1,3),C(2,3),C(0,3),C(2,3)]
     AuditBuild(plan)
-    Assert(gPlacements.Length=1 && counterReads[1]=4,"two agreeing reads did not decide (" gPlacements.Length " left)")
+    Assert(gPlacements.Length=2 && counterReads[1]=4,"two agreeing reads did not decide (" gPlacements.Length " left)")
     ; a single misread full counter with a smaller max does not cap the slot
     Reset()
     plan := [MakePlan(1,5)]
@@ -135,6 +135,72 @@ try {
     AuditBuild(plan)
     Assert(!gSlotCaps.Count,"a slot was capped without two agreeing reads")
 
+    ; ---- N1: the plausibility gate (ReconcileSlot): max, uncertain purchases, drop of 1 ----
+    ; an implausible upward jump (a consistent misread "1" -> "4") is rejected
+    Reset()
+    plan := [MakePlan(1,5)]
+    gPlacements := [MakeItem(1,1,100,300)]
+    Assert(ReconcileSlot(plan[1],C(4,9),"slot counter",false).rejected && gPlacements.Length=1 && LogCount("Slot 1 counter reads 4 but only 0 purchase(s) are uncertain; record left unchanged")=1,"an implausible upward jump changed the record or was not logged")
+    ; ... and through the audit itself (two agreeing probes of the same misread)
+    scriptedReads[1] := [C(4,9),C(4,9)]
+    AuditBuild(plan)
+    Assert(gPlacements.Length=1 && !gLastAudit.added.Length,"two agreeing misreads added phantom units in the audit")
+    ; an explained gap is accepted: two purchases ended unknown, counter 3 vs 1 recorded
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    MarkSlotForReconcile(plan[1]),MarkSlotForReconcile(plan[1])
+    Assert(UncertainPurchases(1)=2,"uncertain purchases were not counted per slot")
+    r := ReconcileSlot(plan[1],C(3,9),"slot counter",false)
+    Assert(!r.rejected && r.added=2 && gPlacements.Length=3 && UncertainPurchases(1)=0,"an explained upward gap was not accepted and settled")
+    ; a gap larger than the uncertain purchases is rejected as a whole
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    MarkSlotForReconcile(plan[1])
+    Assert(ReconcileSlot(plan[1],C(3,9),"slot counter",false).rejected && gPlacements.Length=1 && UncertainPurchases(1)=1,"a gap larger than the uncertain purchases was partly accepted")
+    ; a counter equal to the record settles the uncertainty (the click did not buy)
+    Assert(!ReconcileSlot(plan[1],C(1,9),"slot counter",false).rejected && UncertainPurchases(1)=0,"an agreeing counter did not settle the uncertain purchase")
+    ; downward: 1 is accepted only for an entry the counter did not confirm
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300)]
+    Assert(ReconcileSlot(plan[1],C(1,9),"slot counter",false).removed=1 && gPlacements.Length=1,"a drop of 1 for an entry not confirmed by the counter was refused")
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300)]
+    gPlacements[2].counterConfirmed := true
+    Assert(ReconcileSlot(plan[1],C(1,9),"slot counter",false).rejected && gPlacements.Length=2 && LogCount("record left unchanged")=1,"an entry confirmed by the counter was removed")
+    gPlacements[2].counterConfirmed := false
+    Assert(!ReconcileSlot(plan[1],C(1,9),"slot counter",false).rejected && gPlacements.Length=1,"an entry confirmed by Yen or the weak panel could not be removed")
+    ; an anchorless newest entry counts as not counter-confirmed
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300)]
+    gPlacements[1].counterConfirmed := true
+    gPlacements[2].anchorless := true
+    Assert(ReconcileSlot(plan[1],C(1,9),"slot counter",false).removed=1,"an anchorless newest entry was protected")
+    ; a drop of more than 1 is never accepted
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,1,140,300),MakeItem(3,1,180,300)]
+    Assert(ReconcileSlot(plan[1],C(1,9),"slot counter",false).rejected && gPlacements.Length=3,"a drop of 2 changed the record")
+    ; a different max is unreadable: n > max too; the limit is learned ONCE from two agreeing reads
+    Reset()
+    gPlacements := [MakeItem(1,1,100,300)]
+    scriptedReads[1] := [C(1,9),C(1,9)]
+    Assert(AuditReadCounter(plan[1]) && gSlotLimits[1]=9 && LogCount("limit 9 learned")=1,"the limit was not learned from two agreeing reads")
+    scriptedReads[1] := [C(1,5),C(1,5),C(1,5),C(1,5)]
+    Assert(!AuditReadCounter(plan[1]) && counterReads[1]=2+AUDIT_COUNTER_ATTEMPTS && gSlotLimits[1]=9,"reads with a different max were believed or changed the limit")
+    scriptedReads[1] := [C(2,9),C(2,9)]
+    Assert(AuditReadCounter(plan[1]) && LogCount("limit 9 learned")=1,"the limit was learned twice")
+    Assert(ReconcileSlot(plan[1],C(1,5),"slot counter",false).rejected && LogCount("not plausible")=1,"a counter with a different max reached the record")
+    Assert(!ValidSlotCounter(plan[1],C(10,9)),"n > max was accepted")
+    ResetBuildAudit()
+    Assert(!gSlotLimits.Count && !gUncertainPurchases.Count,"the limit or the uncertain purchases survived ResetMatchState's audit reset")
+
+    ; ---- N2/N3: a normal audit costs 2 probes (one OCR pass each) per enabled slot ----
+    Reset()
+    plan := [MakePlan(1,1),MakePlan(2,1),MakePlan(3,1)]
+    gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300),MakeItem(3,3,180,300)]
+    counters[1] := C(1,3),counters[2] := C(1,3),counters[3] := C(1,3)
+    AuditBuild(plan)
+    Assert(counterReads[1]=2 && counterReads[2]=2 && counterReads[3]=2,"a normal audit did not need exactly 2 probes per slot")
+
     ; ---- M4: the end screen aborts the audit at once; no slot is probed over it ----
     Reset()
     plan := [MakePlan(1,1),MakePlan(2,1)]
@@ -151,16 +217,19 @@ try {
     Reset()
     plan := [MakePlan(1,2),MakePlan(2,1),MakePlan(3,1)]
     gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300),MakeItem(3,3,180,300)]
+    gUncertainPurchases[1] := 1
     ReconcileSlot(plan[1],C(2,3),"slot counter",false)
     Assert(gPlacements.Length=4 && gPlacements[4].slot=1 && !gPlacements[1].HasProp("orderUncertain") && gPlacements[2].orderUncertain && gPlacements[3].orderUncertain && !gPlacements[4].HasProp("orderUncertain"),"units recorded after a late missed purchase were not flagged")
     Assert(LogCount("WARNING")=1,"the late missed purchase was not logged as a warning")
     Reset()
     gPlacements := [MakeItem(1,1,100,300),MakeItem(2,2,140,300),MakeItem(3,3,180,300)]
+    gUncertainPurchases[1] := 1
     ReconcileSlot(plan[1],C(2,3),"after an uncertain purchase",true)
     Assert(gPlacements.Length=4 && !gPlacements[2].HasProp("orderUncertain") && !gPlacements[3].HasProp("orderUncertain") && !LogCount("WARNING"),"an immediate missed purchase flagged units")
     ; the newest unit of the slot is also the newest overall: nothing to flag
     Reset()
     gPlacements := [MakeItem(1,2,140,300),MakeItem(2,1,100,300)]
+    gUncertainPurchases[1] := 1
     ReconcileSlot(plan[1],C(2,3),"slot counter",false)
     Assert(!gPlacements[1].HasProp("orderUncertain") && !LogCount("WARNING"),"a missed purchase after every other unit flagged units")
 
