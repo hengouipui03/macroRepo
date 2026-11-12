@@ -63,6 +63,6 @@ ResetMatchState() {
     ResetMatchCardContext()
     ResetEndGameFlow()
     ResetUnitManagerState()
-    ResetBuildAudit()
+    ResetBuildLimits()
     ResetPathLight()
 }

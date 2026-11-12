@@ -36,19 +36,19 @@ RecordFailedPlacement(unit,point) {
         || (point.HasProp("failureCounted") && point.failureCounted)
         return false
     point.failureCounted := true
-    ; Yen was checked before the click (PlacementShortOfYen), so a purchase that
-    ; did not go through is a real failure.
+    ; Not enough Yen is not a bad spot: do not count it.
+    if PlacementShortOfYen(unit) {
+        point.yenShort := true
+        return false
+    }
     PlacementCopyFailures(unit,true)
     return true
 }
 
 ; False while a recorded unit has no usable position on screen: the view moved
 ; since it was placed (viewPending, set by RelocatePlacementArea; nothing
-; shifts the old coordinates), or the build audit recorded it without any
-; (anchorless: a purchase the macro missed). Position-based code skips those.
+; shifts the old coordinates). Position-based code skips those.
 PlacementAnchorKnown(item) {
-    if item.HasProp("anchorless") && item.anchorless
-        return false
     return !item.HasProp("viewPending") || !item.viewPending
 }
 

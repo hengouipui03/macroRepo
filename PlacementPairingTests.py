@@ -23,7 +23,7 @@ logic += "\n" + arrow("Placement.ahk", "PartnerOpen") + "\n" + arrow("Placement.
 logic += "\n" + function("PlacedUnits.ahk", "RegisterPlacedUnit")
 logic += "\n" + function("Learning.ahk", "CandidateOccupied")
 logic += "\n" + function("UnitSettings.ahk", "UnitPlacementModeChanged")
-logic += "\n" + function("BuildAudit.ahk", "SlotTargetCount")
+logic += "\n" + function("BuildLimits.ahk", "SlotTargetCount")
 
 fixture = r'''
 #Requires AutoHotkey v2.0

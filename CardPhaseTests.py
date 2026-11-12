@@ -11,7 +11,7 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 logic = "\n".join(function("MatchState.ahk", n) for n in ["SetPhase", "InPhase"])
 logic += "\n" + "\n".join(function("UnitManager.ahk", n) for n in [
     "PressUnitManagerKey", "EnsureUnitManagerOpen", "CloseUnitManagerForCards",
-    "ReopenUnitManagerAfterCards", "CloseUnitManagerIfOpen", "UnitManagerBlocked"])
+    "ReopenUnitManagerAfterCards", "CloseUnitManagerIfOpen", "UnitManagerBlocked", "ManagerMayOpen"])
 logic += "\n" + function("AAPathMacro.ahk", "ClearCardChoiceAction")
 logic = logic.replace("A_TickCount", "testNow")
 
@@ -20,7 +20,7 @@ fixture = r'''
 #SingleInstance Off
 #Warn All, Off
 global gPhase := "Idle",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"]
-global gRunning := true,testNow := 10000,UNIT_ACTION_MS := 200,CARD_CHOICE_TIMEOUT_MS := 20000
+global gRunning := true,testNow := 10000,UNIT_ACTION_MS := 200,CARD_CHOICE_TIMEOUT_MS := 20000,gManagerPurchaseCheck := false
 global gUnitManagerLastF := 0,gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerUnconfirmedF := 0
 global gUnitManagerLockUntil := 0,UNIT_MANAGER_F_COOLDOWN_MS := 2500,gUnitManagerClosedForCards := false,gCardSelection := 0
 global managerOpen := false,fPresses := 0,fOpens := 0,fCloses := 0,cards := false,logs := [],chooseCalls := 0,waitClosed := true,reselects := 0,stubborn := false,unreadable := false
@@ -41,6 +41,14 @@ try {
     Assert(PressUnitManagerKey("open") && fPresses=1 && managerOpen,"F did not open the manager in Upgrading")
     managerOpen := false,fPresses := 0,gUnitManagerLastF := 0,gUnitManagerUnconfirmedF := 0
     Assert(EnsureUnitManagerOpen() && managerOpen && fPresses=1,"EnsureUnitManagerOpen did not open with one F in Upgrading")
+    ; The purchase check (a unit panel that never showed) may open F during
+    ; placement, and only while that check runs.
+    lastF := gUnitManagerLastF,openState := managerOpen
+    SetPhase("Placing"),managerOpen := false,fPresses := 0,gManagerPurchaseCheck := true
+    Assert(PressUnitManagerKey("open") && fPresses=1 && managerOpen,"the purchase check could not open F in Placing")
+    gManagerPurchaseCheck := false,managerOpen := false,fPresses := 0
+    Assert(!PressUnitManagerKey("open") && fPresses=0,"F still opened in Placing after the purchase check")
+    SetPhase("Upgrading"),gUnitManagerLastF := lastF,managerOpen := openState
 
     ; --- cards per phase ---
     ; Placing, manager closed: no F before the cards, none after; no reselect.
@@ -170,7 +178,7 @@ if __name__ == "__main__":
     bare = [line for line in body.splitlines() if re.fullmatch(r"\s*return\s*", line)]
     assert not bare, "RunMacro still has a bare return: %r" % bare
     assert not re.search(r"if !ClearCardChoice\(\)\s*\n\s*return", body), "RunMacro ends the run when ClearCardChoice fails"
-    assert "gUnitManagerFinished" not in source and "ManagerHoldsUnrecordedUnit" not in source
+    assert "gUnitManagerFinished" not in source
     target = ROOT / "cache" / "card-phase-regression.ahk"
     target.parent.mkdir(exist_ok=True)
     target.write_text(fixture + "\n" + logic, encoding="utf-8-sig")

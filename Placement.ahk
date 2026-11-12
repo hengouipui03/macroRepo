@@ -32,28 +32,22 @@ global gUnitPanelLayout := 0
 global gUnitPanelSeen := false
 global gUnitPreviewActive := true
 ; Set when a purchase failed only because Yen was short: {slot,cost,since}.
-global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map()
+global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gLastYenRead := 0
 ; WaitForPlacementYen: the longest one wait lasts, and the unreadable Yen
 ; reads that end it. YEN_WAIT_ROUND_LIMIT waits for one unit in a row (about
 ; ten minutes) that never made it affordable: the unit is given up (CapSlot,
 ; logged and sent to Discord) instead of waiting for ever.
 global YEN_WAIT_MS := 20000,YEN_WAIT_UNREADABLE_LIMIT := 3,YEN_WAIT_ROUND_LIMIT := 30
-; Hotbar geometry (800x600 reference). Slot i's cost label, and the "n/max"
-; counter the game shows above the HELD unit's card, are centred on
-; HOTBAR_SLOT_X[i]. The counter sits in the narrow band between the Yen text
-; (centre y about 500) and the cost labels (centre y 543-559).
-global HOTBAR_SLOT_X := [251,315,379,443,508,571]
-global HOTBAR_COUNTER_Y_MIN := 510,HOTBAR_COUNTER_Y_MAX := 535
 
 ResetPlacementSearch() {
-    global gPlacementYenWait,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
+    global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
     global gPathReadFailures,gPathReadGaveUp,gPathVisionErrors
     gPathViewReady := false,gPathViewSavedThisGame := false
     gPathVisionErrors := 0
     gPathReadFailures := 0,gPathReadGaveUp := false
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
-    gPlacementYenWait := 0
+    gPlacementYenWait := 0,gLastYenRead := 0
 }
 
 RefreshPlacementSearch() {
@@ -256,8 +250,8 @@ TryPartnerPlacement(unit,anchor) {
     before := CountSlotPlacements(unit.slot),epoch := gCardInterruptEpoch
     if TryPlacementPoints(unit,points)
         return true
-    if gPendingPlacement
-        return RecoverPendingPlacement(unit)
+    if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
+        return FinishPlacement(unit,gPendingPlacement)
     ; Unresolved purchases, card interruptions and a lack of Yen keep the spot open.
     if gPendingPlacement || CountSlotPlacements(unit.slot)>before || epoch!=gCardInterruptEpoch || (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
         return false
@@ -304,8 +298,8 @@ PlaceMoneyUnit(unit) {
     Log(unit.name ": Money unit; path-edge spot farthest from the other units first.")
     if TryPlacementPoints(unit,ordered)
         return true
-    if gPendingPlacement
-        return RecoverPendingPlacement(unit)
+    if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
+        return FinishPlacement(unit,gPendingPlacement)
     if gRunning
         CancelUnitPreview()
     return false
@@ -314,30 +308,24 @@ PlaceMoneyUnit(unit) {
 PlacementTerrain(point) => point.HasProp("hill") && point.hill?"hill":"ground"
 
 ; -----------------------------------------------------------------------------
-; Yen and the hotbar. One OCR call covers the Yen counter above the toolbar,
-; the "n/max" counter above the held unit's card and the cost under each of the
-; six slot portraits (800x600 reference layout). The purchase flow reads it
-; before and after every purchase click (PurchaseVerifier.ahk).
+; Yen. Read only after a purchase failed, so successful placements cost no
+; time. One OCR call covers the Yen counter above the toolbar and the cost
+; under each of the six slot portraits (800x600 reference layout).
 ; -----------------------------------------------------------------------------
 ReadPlacementMoney() {
-    global REF_W,REF_H,HOTBAR_SLOT_X,HOTBAR_COUNTER_Y_MIN,HOTBAR_COUNTER_Y_MAX
-    result := {yen:-1,costs:Map(),counterWords:[]}
+    global REF_W,REF_H
+    result := {yen:-1,costs:Map()}
     geometry := WindowGeometry()
     if !geometry
         return result
     rows := ReadOcrRows(205,484,595,562,true,4)
     yenWords := [],slotWords := Map()
     ; Cost text sits in the lower right of each portrait.
-    costX := HOTBAR_SLOT_X
+    costX := [251,315,379,443,508,571]
     for word in rows {
         x := (word.x+word.w/2)*REF_W/geometry.cw,y := (word.y+word.h/2)*REF_H/geometry.ch
-        if y>=484 && y<HOTBAR_COUNTER_Y_MIN && x>=340 && x<=470 {
+        if y>=484 && y<=515 && x>=340 && x<=470 {
             yenWords.Push({x:x,text:word.text})
-            continue
-        }
-        ; The held unit's counter: left/right edges kept so split words can be rejoined.
-        if y>=HOTBAR_COUNTER_Y_MIN && y<=HOTBAR_COUNTER_Y_MAX {
-            result.counterWords.Push({l:word.x*REF_W/geometry.cw,r:(word.x+word.w)*REF_W/geometry.cw,text:word.text})
             continue
         }
         if y<543 || y>559
@@ -410,27 +398,44 @@ UnitPlacementCost(unit,read) {
     return known
 }
 
-; Called BEFORE a purchase click, while the unit is held, with the hotbar state
-; ReadPurchaseState read (Yen needs two agreeing reads). True when Yen is below
-; the unit's cost: no click is sent, no failure is counted, the spot stays
-; usable and the build loop waits for Yen (WaitForPlacementYen). An unreadable
-; Yen or an unknown cost does not block the click: the slot counter after the
-; click decides.
-PlacementShortOfYen(unit,state) {
-    global gPlacementYenWait
-    if state.cost<=0 || state.yen<0 || state.yen>=state.cost
+; Called once per failed purchase. True when Yen was below the unit's cost:
+; then the failure is not counted, the spot stays usable, and the build loop
+; waits for Yen. Anything unreadable counts as an ordinary failure.
+PlacementShortOfYen(unit) {
+    global gPlacementYenWait,gLastYenRead,gPlacements,gLastOcrRect
+    ; Yen only rises between purchases (no upgrades during placement): once it
+    ; was seen to cover this cost, later misses need no new read.
+    known := UnitPlacementCost(unit,{yen:-1,costs:Map()})
+    if known && IsSet(gLastYenRead) && gLastYenRead && gLastYenRead.placements=gPlacements.Length && gLastYenRead.yen>=known
         return false
-    gPlacementYenWait := {slot:unit.slot,cost:state.cost,since:A_TickCount}
-    Log(unit.name ": " state.yen " of " state.cost " Yen; no purchase click. Wait for Yen, then place this unit.")
+    read := ReadPlacementMoney()
+    cost := UnitPlacementCost(unit,read)
+    if !cost && read.costs.Has(unit.slot) {
+        ; First sighting of this cost: confirm it with a second read now.
+        gLastOcrRect := ""
+        read := ReadPlacementMoney()
+        cost := UnitPlacementCost(unit,read)
+    }
+    ; One OCR misread (e.g. "5" for 9,401) must not excuse a bad spot: a fresh
+    ; read (cache bypassed) has to agree that Yen is short.
+    if cost>0 && read.yen>=0 && read.yen<cost {
+        gLastOcrRect := ""
+        read.yen := ReadPlacementMoney().yen
+    }
+    if read.yen>=0
+        gLastYenRead := {yen:read.yen,placements:gPlacements.Length}
+    if cost<=0 || read.yen<0 || read.yen>=cost
+        return false
+    gPlacementYenWait := {slot:unit.slot,cost:cost,since:A_TickCount}
+    Log(unit.name ": " read.yen " of " cost " Yen; not a failed spot. Wait for Yen, then place this unit.")
     return true
 }
 
-; After a Yen-short check: re-read the counter about once a second until the
-; unit is affordable (at most YEN_WAIT_MS, or YEN_WAIT_UNREADABLE_LIMIT
-; unreadable reads), then retry. The
-; retry checks Yen again (two agreeing reads) before it clicks.
+; After a Yen-short purchase: re-read the counter about once a second until
+; the unit is affordable (at most YEN_WAIT_MS, or YEN_WAIT_UNREADABLE_LIMIT
+; unreadable reads), then retry.
 WaitForPlacementYen(unit) {
-    global gPlacementYenWait,gRunning,YEN_WAIT_MS,YEN_WAIT_UNREADABLE_LIMIT
+    global gPlacementYenWait,gRunning,gLastYenRead,gPlacements,YEN_WAIT_MS,YEN_WAIT_UNREADABLE_LIMIT
     if !IsSet(gPlacementYenWait) || !gPlacementYenWait || gPlacementYenWait.slot!=unit.slot
         return false
     wait := gPlacementYenWait,unread := 0
@@ -444,6 +449,7 @@ WaitForPlacementYen(unit) {
             break
         yen := ReadPlacementMoney().yen
         if yen>=wait.cost {
+            gLastYenRead := {yen:yen,placements:gPlacements.Length}
             Log(unit.name ": " yen " Yen; affordable now.")
             break
         }
@@ -738,26 +744,33 @@ CountSlotPlacements(slot) {
     return count
 }
 
-; Records a purchase the PurchaseVerifier confirmed. evidence says what proved
-; it (slot counter, Yen drop or unit panel) and goes into the PlacedUnits log.
-FinishPlacement(unit,point,evidence) {
-    global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses,gPlacements
+; Records a purchase proven by the unit panel (or, when the panel never
+; showed, by the F unit manager: managerConfirmed).
+FinishPlacement(unit,point,managerConfirmed := false) {
+    global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses,gLastYenRead,gPlacements
     if !point || CandidateOccupied(point.x,point.y)
         return false
-    if HasCardChoice()
+    if HasCardChoice() || (!managerConfirmed && !HasUnitPanel())
         return false
+    point.panelSeen := true
     if !point.HasProp("pendingSlot") || point.pendingSlot!=unit.slot
         || point.pendingCopy!=CountSlotPlacements(unit.slot)+1 {
-        Log("Ignored purchase evidence without the matching pending slot/copy purchase.")
+        Log("Ignored unit panel without the matching pending slot/copy purchase.")
         return false
     }
     ; The purchase is confirmed: drop the hovering ghost before bookkeeping.
     if !CancelUnitPreview() || gPendingPlacement!=point || HasCardChoice()
         return false
-    if !RegisterPlacedUnit(unit,point,evidence)
+    if !RegisterPlacedUnit(unit,point,managerConfirmed?"the F unit manager":"the unit panel")
         return false
     if PlacementTerrain(point)="hill"
         RememberHillOutcome(point,true)
+    ; Yen seen before this purchase minus its cost still bounds Yen from below
+    ; (income only adds), so the next miss needs no Yen OCR.
+    if gLastYenRead && gLastYenRead.placements=gPlacements.Length-1 {
+        cost := UnitPlacementCost(unit,{yen:-1,costs:Map()})
+        gLastYenRead := cost?{yen:gLastYenRead.yen-cost,placements:gPlacements.Length}:0
+    }
     gPlacementYenWait := 0
     ResetPlacementFailureStreak()
     terrain := PlacementTerrain(point)
@@ -840,61 +853,17 @@ TryPlacementCandidateAction(unit,candidate) {
     }
     if !gRunning || HasCardChoice()
         return false
-    ; A purchase that ended "unknown" may have bought: every such slot is
-    ; settled against its counter before ANY new purchase, so a missed unit is
-    ; recorded in purchase order.
-    if !ReconcilePendingSlots()
-        return false
     if CountSlotPlacements(unit.slot)!=before
         return CountSlotPlacements(unit.slot)>before
     if !SelectPlacementUnit(unit)
         return false
-    ; Holding the unit: read its slot counter and Yen BEFORE the click (Yen
-    ; needs two agreeing reads, the lower one is used). Short of Yen: no
-    ; click, wait for Yen instead.
-    start := ReadPurchaseState(unit)
-    ; A counter with an impossible or different max (not this slot's limit) is a
-    ; misread: it is not evidence either way.
-    start.counter := ValidSlotCounter(unit,start.counter)
-    if IsObject(start.counter) && (start.counter.n!=before || SlotCounterFull(start.counter)) {
-        ; The counter disagrees with the record (more or fewer units on the
-        ; field than recorded) or shows the slot full. No click until the record
-        ; matches the game, or the click could buy an extra unit / only be
-        ; refused. The record changes only on a second agreeing read AND only
-        ; when ReconcileSlot finds the gap plausible. Not a failure and no spot
-        ; is blacklisted.
-        agreed := ConfirmHeldCounter(unit,start.counter)
-        if !agreed {
-            CancelUnitPreview()
-            Log(unit.name ": slot " unit.slot " counter " start.counter.n "/" start.counter.max " differs from the " before " recorded, but a second read did not agree; no click.")
-            return false
-        }
-        reconciled := ReconcileSlot(unit,agreed,"counter before the click",false)
-        if !reconciled.rejected || SlotCounterFull(agreed) {
-            CancelUnitPreview()
-            return CountSlotPlacements(unit.slot)>before
-        }
-        ; The gap is unexplained and the slot is not full: the record stays, and
-        ; the purchase goes on (the unit is still held) without the counter as
-        ; evidence (Yen decides), as before the counter check existed. A
-        ; misread must not stall the slot.
-        start.counter := false
-    }
-    if PlacementShortOfYen(unit,start) {
-        CancelUnitPreview()
-        return false
-    }
-    if !gRunning || HasCardChoice()
-        return false
     purchase := candidate.Clone()
     purchase.pendingSlot := unit.slot,purchase.pendingCopy := before+1,purchase.pendingTarget := unit.count
-    purchase.counterBefore := start.counter,purchase.yenBefore := start.yen,purchase.yenBeforeMax := start.yenMax,purchase.cost := start.cost,purchase.probes := 0
-    if !PlacementClickRef(candidate.x,candidate.y,true,purchase) && !gPendingPlacement {
-        ; Nothing was clicked: only the held unit is left to drop.
-        CancelUnitPreview()
+    if PlacementClickRef(candidate.x,candidate.y,true,purchase) && WaitForUnitPanel(300,false) && FinishPlacement(unit,gPendingPlacement)
+        return true
+    ; Drop the preview before any selection probes or Yen OCR.
+    if !CancelUnitPreview()
         return false
-    }
-    ; The click is sent. Evidence (counter, Yen, weak panel) decides what it did.
     return RecoverPendingPlacement(unit)
 }
 
@@ -903,68 +872,57 @@ TrySelectUnitAt(point,timeout := 450,learn := false) {
     return gRunning && !HasCardChoice() && PlacementClickRef(point.x,point.y,true) && WaitForUnitPanel(timeout,learn)
 }
 
-; Resolves an unresolved purchase from evidence (PurchaseVerifier.ahk). Never
-; clicks the field: clicking the spot again could select an existing unit.
-;  confirmed -> RegisterPlacedUnit through FinishPlacement
-;  denied    -> failed purchase, the spot is blacklisted
-;  unknown   -> probed again, at most PURCHASE_REPROBE_LIMIT more times, then a
-;               failed attempt that does NOT blacklist the spot
-; A card, F7 or the end screen mid-probe leaves the purchase pending.
+; Settles a purchase click whose panel did not show at once. Never buys again:
+; the spot is only re-selected (preview dropped first) to look for its panel;
+; when the panel never shows, the F unit manager decides
+; (ManagerHoldsUnrecordedUnit). Otherwise it is a failed purchase.
 RecoverPendingPlacement(unit) {
-    global gRunning,gPendingPlacement,gCardInterruptEpoch,PURCHASE_REPROBE_LIMIT
+    global gRunning,gPendingPlacement,gCardInterruptEpoch
     point := gPendingPlacement
     if !gRunning || !point || !point.HasProp("pendingSlot") || point.pendingSlot!=unit.slot
-        || point.pendingCopy!=CountSlotPlacements(unit.slot)+1 || HasCardChoice()
+        || point.pendingCopy!=CountSlotPlacements(unit.slot)+1 || HasCardChoice() || CandidateOccupied(point.x,point.y)
         return false
     before := CountSlotPlacements(unit.slot),epoch := gCardInterruptEpoch
-    loop {
-        point.probes := (point.HasProp("probes")?point.probes:0)+1
-        judged := ProbePurchase(unit,point)
-        ; A card handler inside the probe may already have recorded the unit.
+    if HasUnitPanel() {
+        point.panelSeen := true
+        if FinishPlacement(unit,point)
+            return true
+    }
+    ; Reselect only: an unreadable purchase must not be replaced by another buy.
+    Loop 2 {
+        if !CloseUnitPanel() || !CancelUnitPreview()
+            return false
+        if CountSlotPlacements(unit.slot)>before
+            return true
+        if gPendingPlacement!=point || !PlacementClickRef(point.x,point.y,true)
+            return false
+        if WaitForUnitPanel(300,A_Index=2) {
+            point.panelSeen := true
+            return FinishPlacement(unit,point)
+        }
         if CountSlotPlacements(unit.slot)>before
             return true
         if !gRunning || HasCardChoice() || IsEndGameBlocking() || epoch!=gCardInterruptEpoch || gPendingPlacement!=point
             return false
-        if judged.verdict="confirmed" {
-            Log(unit.name ": purchase confirmed by " judged.by ".")
-            if FinishPlacement(unit,point,judged.by)
-                return true
-            if !gRunning || HasCardChoice() || IsEndGameBlocking()
-                return false
-            ; Confirmed but not recordable normally (a recorded unit already stands
-            ; here): the game HAS the unit, so it is recorded at once as a unit
-            ; with no anchor position (in purchase order), and the panel and
-            ; preview are closed like in the other branches.
-            Log(unit.name ": the purchase was confirmed but could not be recorded at " point.x "," point.y "; recorded as a unit with no anchor position.")
-            gPendingPlacement := 0
-            CloseUnitPanel()
-            CancelUnitPreview()
-            if CountSlotPlacements(unit.slot)=before
-                AddMissedPurchases(unit,1,true)
-            ResetPlacementFailureStreak()
-            return true
-        }
-        if judged.verdict="denied" {
-            Log(unit.name ": no unit bought at " point.x "," point.y " (" judged.by "); spot rejected.")
-            gPendingPlacement := 0
-            CloseUnitPanel()
-            CancelUnitPreview()
-            RecordFailedPlacement(unit,point)
-            RememberFailedPlacementSpot(point)
-            if PlacementTerrain(point)="hill"
-                RememberHillOutcome(point,false)
-            return false
-        }
-        if point.probes>PURCHASE_REPROBE_LIMIT
-            break
-        Log(unit.name ": purchase at " point.x "," point.y " still unknown (probe " point.probes "); reading again.")
     }
-    Log(unit.name ": purchase at " point.x "," point.y " stayed unknown after " point.probes " probes; counted as a failed attempt, the spot is not blacklisted. Slot " unit.slot " is checked against its counter before the next purchase.")
-    MarkSlotForReconcile(unit)
+    if point.HasProp("panelSeen") && point.panelSeen {
+        Log(unit.name ": purchase panel was seen; reselect this unit to confirm it without another purchase.")
+        return false
+    }
+    ; Two completed selection-only probes found no model after the purchase wait.
+    ; The unit panel never showed, so the F manager decides before this is a miss.
+    if ManagerHoldsUnrecordedUnit() {
+        Log(unit.name ": no unit panel was seen, but the F manager lists the new unit; recording it.")
+        return FinishPlacement(unit,point,true)
+    }
     gPendingPlacement := 0
-    CloseUnitPanel()
-    CancelUnitPreview()
     RecordFailedPlacement(unit,point)
+    ; Short of Yen: the spot itself was never tested, so it stays usable.
+    if !point.HasProp("yenShort") || !point.yenShort {
+        RememberFailedPlacementSpot(point)
+        if PlacementTerrain(point)="hill"
+            RememberHillOutcome(point,false)
+    }
     return false
 }
 
@@ -1378,8 +1336,8 @@ PlaceUnitAction(unit) {
             Log(unit.name ": prefer green Hill surfaces, nearest the illuminated path first.")
             if TryPlacementPoints(unit,hillPoints)
                 return true
-            if gPendingPlacement
-                return RecoverPendingPlacement(unit)
+            if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
+                return FinishPlacement(unit,gPendingPlacement)
             if (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
                 return false
         }
@@ -1422,8 +1380,8 @@ PlaceUnitAction(unit) {
     points := MatchSavedPlacementsToPath(unit,points)
     if TryPlacementPoints(unit,points,true)
         return true
-    if gPendingPlacement
-        return RecoverPendingPlacement(unit)
+    if gPendingPlacement && WaitFor(HasUnitPanel,250,40)
+        return FinishPlacement(unit,gPendingPlacement)
     if (IsSet(gPlacementYenWait) && gPlacementYenWait && gPlacementYenWait.slot=unit.slot)
         return false
     if gRunning
@@ -1452,8 +1410,6 @@ PlaceConfiguredBuild(plan) {
 ;  BUILD_RELOCATE_WAIT_LIMIT relocation could not start -> accept the current position as the
 ;                                                         checkpoint (AcceptCurrentPlacementArea)
 ;  HILL_RETRY_LIMIT          Hill-only waits            -> give up the Hill unit (CapSlot)
-; When every slot reaches its target the build is audited (VerifyCompletedBuild)
-; before it counts as complete; an incomplete audit sends placement back to work.
 PlaceConfiguredBuildAction(plan) {
     global gRunning,gHillPlacementUnavailable,gPathReadGaveUp
     global BUILD_COPY_ATTEMPT_LIMIT,BUILD_RELOCATE_WAIT_LIMIT,HILL_RETRY_LIMIT,YEN_WAIT_ROUND_LIMIT
@@ -1491,12 +1447,6 @@ PlaceConfiguredBuildAction(plan) {
                 if placed && after=before+1 {
                     Log("Confirmed slot " unit.slot ": " after "/" unit.count " placements.")
                     attempts[unit.slot] := 0,yenWaits[unit.slot] := 0
-                    continue
-                }
-                if after>before {
-                    ; The slot counter showed more units than were recorded.
-                    Log("Slot " unit.slot " now has " after "/" unit.count " placements recorded (reconciled with its counter).")
-                    attempts[unit.slot] := 0
                     continue
                 }
                 if !gRunning
@@ -1548,17 +1498,8 @@ PlaceConfiguredBuildAction(plan) {
         if !gRunning
             return "stopped"
         missing := MissingBuildPlacements(plan)
-        if missing="" {
-            ; Placement believes the build is complete: the game's own slot
-            ; counters decide. Incomplete means more placing in this phase.
-            if VerifyCompletedBuild(plan)
-                return "complete"
-            ; An audit stopped by the end screen is incomplete: hand over to
-            ; the end-screen handling at once.
-            if TryEndState()
-                return "replay"
-            continue
-        }
+        if missing=""
+            return "complete"
         if !pendingLogAt || A_TickCount>=pendingLogAt {
             Notify("Placement pending: " missing ". Upgrades (F manager) start once every unit is placed.")
             pendingLogAt := A_TickCount+10000

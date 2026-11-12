@@ -1,6 +1,8 @@
 ﻿; Select recorded purchase #N from the F manager's two-column row order.
 ; F is pressed to OPEN the manager only after every configured unit has been
-; placed. It then stays open while upgrades remain. It is closed while a card
+; placed (the one exception: the short purchase check in
+; ManagerHoldsUnrecordedUnit, during placement). It then stays open while
+; upgrades remain. It is closed while a card
 ; is chosen (reopened right after, top-priority unit reselected) and once
 ; every upgrade target is reached. A manager left open from the last match is
 ; closed before placement. Unit switches and click-aways never close it.
@@ -14,6 +16,9 @@ global UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
 global gUnitManagerClosedForCards := false
 ; The last tile found for a purchase, valid only while the list has not moved.
 global gManagerTile := 0,gSlotPortraits := Map()
+; True only while ManagerHoldsUnrecordedUnit looks for a purchase whose unit
+; panel never showed: F may open the manager in the Placing phase then.
+global gManagerPurchaseCheck := false
 
 ; All of this module's per-match state. Called by ResetMatchState, and by
 ; the phase transitions below.
@@ -44,6 +49,12 @@ EndUnitManagerPhase() {
 ; True while the F manager is wanted: only in the Upgrading phase.
 UnitManagerActive() => InPhase("Upgrading")
 
+; F may open the manager: in the Upgrading phase, or for the purchase check.
+ManagerMayOpen() {
+    global gManagerPurchaseCheck
+    return InPhase("Upgrading") || gManagerPurchaseCheck
+}
+
 ResetManagerTileMemory() {
     global gManagerTile,gSlotPortraits
     gManagerTile := 0,gSlotPortraits := Map()
@@ -69,8 +80,8 @@ FocusUnitManagerGame() {
 }
 
 ; The one place F is pressed. action is "open" or "close".
-; Hard rule: opening is allowed only in the Upgrading phase (never before the
-; whole build is placed, never once every target is reached). Closing is
+; Hard rule: opening is allowed only when ManagerMayOpen (the Upgrading phase,
+; or the purchase check during placement). Closing is
 ; allowed in any phase (a manager left over from the last match, or the
 ; manager the cards cover), but callers send it only after two readings
 ; confirm the manager is open.
@@ -78,7 +89,7 @@ PressUnitManagerKey(action) {
     global UNIT_ACTION_MS,gRunning,gUnitManagerLastF
     if action!="open" && action!="close"
         return false
-    if !gRunning || (action="open" && !InPhase("Upgrading")) || !FocusUnitManagerGame() || !BeginInputAction(true,UNIT_ACTION_MS)
+    if !gRunning || (action="open" && !ManagerMayOpen()) || !FocusUnitManagerGame() || !BeginInputAction(true,UNIT_ACTION_MS)
         return false
     gUnitManagerLastF := A_TickCount
     ForgetManagerTile()
@@ -103,7 +114,7 @@ UnitManagerBlocked(fresh := false) {
 EnsureUnitManagerOpen() {
     global gUnitManagerOpen,gUnitManagerConfirmed,gUnitManagerLastF,gRunning
     global gUnitManagerUnconfirmedF,gUnitManagerLockUntil,UNIT_MANAGER_F_COOLDOWN_MS
-    if !gRunning || !UnitManagerActive()
+    if !gRunning || !ManagerMayOpen()
         return false
     closedReads := 0
     Loop 14 {
@@ -409,6 +420,29 @@ LocateManagedUnit(purchaseId) {
         offset += delta,state := next
     }
     return UnitManagerFail("scroll")
+}
+
+; The unit panel is the primary proof of a purchase. When it never showed, the
+; F manager is the fallback: one more unit than recorded flips the parity of
+; its bottom row. F is opened for this check only and closed again.
+ManagerHoldsUnrecordedUnit() {
+    global gPlacements,gRunning,gManagerPurchaseCheck
+    if !gRunning || !InPhase("Placing") || HasCardChoice() || IsEndGameBlocking()
+        return false
+    Log("The unit panel was not seen after the purchase; checking the F manager for the unit.")
+    gManagerPurchaseCheck := true
+    found := false
+    try {
+        if (state := EnsureUnitManagerOpen()) && (state := ResetUnitManagerBottom(state)) {
+            seen := state.Has("lastcount")?Integer(state["lastcount"]):0
+            found := seen && seen!=(Mod(gPlacements.Length,2)?1:2)
+        }
+    } finally {
+        CloseUnitManagerIfOpen("Unit manager check done; press F once to close it.")
+        gManagerPurchaseCheck := false
+        ResetUnitManagerState()
+    }
+    return found
 }
 
 ClickManagerPoint(x,y) {

@@ -50,8 +50,7 @@ global gActivityLog := 0
 #Include MatchState.ahk
 #Include UnitSettings.ahk
 #Include Placement.ahk
-#Include PurchaseVerifier.ahk
-#Include BuildAudit.ahk
+#Include BuildLimits.ahk
 #Include PlacementArea.ahk
 #Include UnitManager.ahk
 #Include PlacedUnits.ahk
@@ -1521,15 +1520,6 @@ RunMacro() {
             if !ManagerCooldownActive() {
                 MaintainUnitManager()
                 UpgradePriorityPass()
-            }
-            ; The manager and the record keep disagreeing about a unit: close F,
-            ; audit the build in the Placing phase, place what is missing, and
-            ; come back to Upgrading (bounded by AUDIT_LIMIT_PER_MATCH).
-            if gRunning && ManagerAuditDue() {
-                repaired := RepairBuildAfterManagerMismatch(plan)
-                if repaired!="complete"
-                    return repaired="replay"?"replay":EndRun("Build repair after a unit manager mismatch ended without a complete build (result '" repaired "').")
-                continue
             }
             ; Every target reached: close the manager once and keep it closed.
             if gRunning && !UpgradeQueue().Length && !HasCardChoice() && !IsEndGameBlocking() {
