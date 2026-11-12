@@ -5,7 +5,7 @@ import subprocess
 from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 logic = "\n".join(function("Placement.ahk", n) for n in [
-    "ReadPlacementMoney", "DigitsValue", "UnitPlacementCost", "PlacementShortOfYen",
+    "ReadPlacementMoney", "DigitsValue", "CostLabelValue", "UnitPlacementCost", "PlacementShortOfYen",
     "WaitForPlacementYen", "RecoverPendingPlacement"])
 logic += "\n" + "\n".join(function("PlacementArea.ahk", n) for n in [
     "RecordFailedPlacement", "PlacementCopyFailures", "PlacementFailureLimitReached"])
@@ -16,7 +16,7 @@ fixture = r'''
 #SingleInstance Off
 #Warn All, Off
 global testNow := 10000,gRunning := true,REF_W := 800,REF_H := 600,LEARNING_FILE := A_Temp "\yen-wait-test.ini"
-global YEN_WAIT_MS := 20000,YEN_WAIT_UNREADABLE_LIMIT := 3
+global YEN_WAIT_MS := 20000,YEN_WAIT_UNREADABLE_LIMIT := 3,COST_WORD_GAP := 6,strayEight := false
 global gLastOcrRect := "",gLastYenRead := 0,gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),gPendingPlacement := 0,gCardInterruptEpoch := 0
 global gPlacementAreaFailures := Map(),gConsecutivePlacementFailures := 0,PLACEMENT_FAILURE_LIMIT := 6,gMapModel := 0,gPlacements := []
 global yen := 9401,costs := ["2000","1400","800","",  "1000","1300"],ocrCalls := 0,remembered := 0,yenSchedule := 0
@@ -27,6 +27,11 @@ try {
     Assert(read.yen=9401,"Yen counter read " read.yen)
     for slot,value in [2000,1400,800,1350,1000,1300]
         Assert(read.costs.Has(slot) && read.costs[slot]=value,"slot " slot " cost read wrongly")
+    ; Portrait art left of slot 3's "1300¥" read as a separate "8" is not part of the cost (it read 81300).
+    strayEight := true
+    read := ReadPlacementMoney()
+    Assert(read.costs[3]=800 && read.costs[4]=1350,"a stray word joined a cost label (slot 3 read " read.costs[3] ")")
+    strayEight := false
     Assert(DigitsValue([{x:1,text:"9,401"},{x:2,text:"¥"}],0,10000000)=9401 && DigitsValue([{x:1,text:"¥"}],0,9)=-1,"digit parsing failed")
 
     dark := {slot:4,name:"Dark Mage",count:1}
@@ -74,7 +79,7 @@ try {
     gPlacementYenWait := {slot:4,cost:1350,since:testNow},yenSchedule := 0,yen := 10,start := testNow
     WaitForPlacementYen(dark)
     Assert(testNow-start<=21000 && !gPlacementYenWait,"Yen wait exceeded 20 s")
-    FileAppend "PASS: Yen 9401 and all six slot costs read (split 13 50 joined); costs confirmed by two reads and saved; Yen-short misses neither counted nor rejected; affordable or unreadable misses counted; wait polls until affordable, max 20 s.`n","*","UTF-8"
+    FileAppend "PASS: Yen 9401 and all six slot costs read (split 13 50 joined, a stray word beside a label ignored); costs confirmed by two reads and saved; Yen-short misses neither counted nor rejected; affordable or unreadable misses counted; wait polls until affordable, max 20 s.`n","*","UTF-8"
     try FileDelete LEARNING_FILE
     ExitApp 0
 } catch as err {
@@ -100,6 +105,8 @@ ReadOcrRows(*) {
             rows.Push({x:xs[slot],y:549,w:24,h:7,text:text "¥"})
     if costs[4]=""
         rows.Push({x:434,y:549,w:8,h:7,text:"13"}),rows.Push({x:444,y:549,w:13,h:7,text:"50¥"})
+    if strayEight
+        rows.Push({x:356,y:549,w:5,h:7,text:"8"})
     rows.Push({x:236,y:560,w:30,h:6,text:"Elyssia"})
     return rows
 }

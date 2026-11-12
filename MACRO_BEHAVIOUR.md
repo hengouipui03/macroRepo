@@ -348,7 +348,7 @@ One loop with explicit stages and the same game steps as before: **play** (read 
 | `PlacementStillBesidePath`, `AddPlacementGeometry`, `OppositePlacementPoint`, `PlacementEdgeNormal`, `SamePlacementEdge`, `BlockedPlacementEdge`, `PlacementBlockedEdgeExclusions`, `RegisterPlacementEdgeMiss` | Edge geometry, opposite-side switch after 3 misses. |
 | `TryPlacementPoints`, `MatchSavedPlacementsToPath`, `FindHillPlacementCandidates` | Try lists of points, saved points, Hill spots. |
 | `PlaceUnit`, `PlaceUnitAction` | One copy of one slot (no F). |
-| `ReadPlacementMoney`, `DigitsValue`, `UnitPlacementCost`, `PlacementShortOfYen`, `WaitForPlacementYen` | Yen counter and slot costs from one OCR pass, read only after a failed purchase; a Yen-short miss is not a failure. |
+| `ReadPlacementMoney`, `DigitsValue`, `CostLabelValue`, `UnitPlacementCost`, `PlacementShortOfYen`, `WaitForPlacementYen` | Yen counter and slot costs from one OCR pass, read only after a failed purchase (a cost is the one run of touching words under the portrait, so a stray word beside it is ignored); a Yen-short miss is not a failure. |
 | `PlaceConfiguredBuild`, `PlaceConfiguredBuildAction`, `MissingBuildPlacements` | The whole build loop (no upgrades until complete). |
 
 ### BuildLimits.ahk

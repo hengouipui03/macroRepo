@@ -38,6 +38,8 @@ global gPlacementYenWait := 0,gUnitCosts := Map(),gUnitCostCandidates := Map(),g
 ; ten minutes) that never made it affordable: the unit is given up (CapSlot,
 ; logged and sent to Discord) instead of waiting for ever.
 global YEN_WAIT_MS := 20000,YEN_WAIT_UNREADABLE_LIMIT := 3,YEN_WAIT_ROUND_LIMIT := 30
+; Words closer than this (reference px) belong to one cost label ("13" "50¥").
+global COST_WORD_GAP := 6
 
 ResetPlacementSearch() {
     global gPlacementYenWait,gLastYenRead,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
@@ -337,12 +339,12 @@ ReadPlacementMoney() {
         if slot {
             if !slotWords.Has(slot)
                 slotWords[slot] := []
-            slotWords[slot].Push({x:x,text:word.text})
+            slotWords[slot].Push({l:word.x*REF_W/geometry.cw,r:(word.x+word.w)*REF_W/geometry.cw,text:word.text})
         }
     }
     result.yen := DigitsValue(yenWords,0,10000000)
     for slot,words in slotWords {
-        cost := DigitsValue(words,50,100000)
+        cost := CostLabelValue(words)
         if cost>=0
             result.costs[slot] := cost
     }
@@ -370,6 +372,38 @@ DigitsValue(words,low,high) {
         return -1
     value := Integer(match[0])
     return value>=low && value<=high?value:-1
+}
+
+; A slot's cost label is ONE run of touching words ("1300¥", or "13" "50¥").
+; A word apart from it is not part of the number (portrait art read as a
+; digit turned 1300 into 81300): the run with the most digits is the label,
+; and its digits are the cost. -1 when there is none or it is implausible.
+CostLabelValue(words) {
+    global COST_WORD_GAP
+    sorted := []
+    for word in words {
+        at := sorted.Length+1
+        for index,other in sorted
+            if word.l<other.l {
+                at := index
+                break
+            }
+        sorted.InsertAt(at,word)
+    }
+    runs := [],current := 0
+    for word in sorted {
+        if current && word.l-current.r<=COST_WORD_GAP
+            current.text .= word.text,current.r := Max(current.r,word.r)
+        else
+            runs.Push(current := {r:word.r,text:word.text})
+    }
+    label := "",digits := 0
+    for run in runs {
+        count := StrLen(RegExReplace(run.text,"\D"))
+        if count && count>=digits
+            label := run.text,digits := count
+    }
+    return label=""?-1:DigitsValue([{x:0,text:label}],50,100000)
 }
 
 ; A unit's placement cost, remembered by unit name in learning.ini. A new
