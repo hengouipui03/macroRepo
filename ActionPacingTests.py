@@ -97,7 +97,7 @@ InputPause(ms,epoch) {
     return epoch=gInputEpoch
 }
 SendEvent(key) {
-    global mouseDownAt,voteVisible
+    global mouseDownAt,voteVisible,voteIgnoreClicks
     events.Push({key:key,at:testNow})
     if InStr(key,"LButton") {
         if InStr(key,"down")

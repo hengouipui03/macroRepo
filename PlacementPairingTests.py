@@ -37,7 +37,7 @@ try {
     Line()
     units := []
     Loop 5
-        units.Push(Unit(A_Index))
+        units.Push(TestUnit(A_Index))
     for unit in units
         Assert(PlaceUnitAction(unit),"unit " unit.slot " was not placed")
     rows := ""
@@ -54,11 +54,11 @@ try {
     ; 2) A failed partner try closes only that spot; the unit goes along the
     ;    edge in the same attempt and the edge is not blocked.
     Reset(),Line()
-    PlaceUnitAction(Unit(1))
+    PlaceUnitAction(TestUnit(1))
     partnerWall[1] := true
-    Assert(PlaceUnitAction(Unit(2)) && gPlacements[2].row=1,"after a failed partner try the unit did not go along the edge")
+    Assert(PlaceUnitAction(TestUnit(2)) && gPlacements[2].row=1,"after a failed partner try the unit did not go along the edge")
     Assert(gPlacements[1].partner="closed" && !gPlacementBlockedEdges.Length,"a partner miss blocked the edge or left the spot open")
-    Assert(PlaceUnitAction(Unit(3)) && gPlacements[3].row=2 && gPlacements[3].anchor=2,"the next edge unit did not get its partner")
+    Assert(PlaceUnitAction(TestUnit(3)) && gPlacements[3].row=2 && gPlacements[3].anchor=2,"the next edge unit did not get its partner")
 
     ; 3) Three misses along a wall block the whole stretch they walked; the
     ;    next tries go to the opposite side, never further along the wall.
@@ -66,7 +66,7 @@ try {
     Loop 6
         wall[A_Index] := true
     tried := []
-    Assert(PlaceUnitAction(Unit(1)),"no unit placed after the wall")
+    Assert(PlaceUnitAction(TestUnit(1)),"no unit placed after the wall")
     Assert(tried.Length>=4 && tried[1].x=420 && tried[2].x=420 && tried[3].x=420 && tried[4].x=380,"after 3 wall misses the 4th try stayed on the walled side")
     Assert(BlockedPlacementEdge(gPlacementLine[5]) && BlockedPlacementEdge(gPlacementLine[6]),"the wall stretch beyond the 3rd miss was not blocked")
     Assert(gPlacements[1].x=380,"unit was not placed across the road")
@@ -74,10 +74,10 @@ try {
     ; 4) Money unit: path edge, farthest from everything; others keep 2 spacings
     ;    away, the line still starts at the player, and she never anchors.
     Reset(),Line()
-    bulby := Unit(1),bulby.money := true
+    bulby := TestUnit(1),bulby.money := true
     Assert(PlaceUnitAction(bulby) && gPlacements[1].y=214 && gPlacements[1].x=420,"Money unit not placed at the far end of the edge")
     Assert(gLastPlacedIndex=0 && !NewestEdgeAnchor(),"Money unit became the line start or an anchor")
-    Assert(PlaceUnitAction(Unit(2)) && gPlacements[2].y-gPlacements[1].y>=48,"a unit was squeezed beside the Money unit")
+    Assert(PlaceUnitAction(TestUnit(2)) && gPlacements[2].y-gPlacements[1].y>=48,"a unit was squeezed beside the Money unit")
     Assert(CandidateOccupied(420,214+40) && !CandidateOccupied(420+28,300),"Money footprint radius wrong")
 
     ; 5) After a rescan the line continues beside the newest edge unit.
@@ -87,19 +87,19 @@ try {
     ; 6) A used-up side fills open partner spots of older edge units, oldest
     ;    first, before crossing the road.
     Reset(),Line()
-    PlaceUnitAction(Unit(1))
+    PlaceUnitAction(TestUnit(1))
     gPlacements[1].partner := ""
     partnerWall[1] := false
-    PlaceUnitAction(Unit(2))                     ; partner of #1
-    PlaceUnitAction(Unit(3))                     ; edge
+    PlaceUnitAction(TestUnit(2))                     ; partner of #1
+    PlaceUnitAction(TestUnit(3))                     ; edge
     partnerWall[3] := true
-    PlaceUnitAction(Unit(4))                     ; #3's partner fails -> edge (#4)
+    PlaceUnitAction(TestUnit(4))                     ; #3's partner fails -> edge (#4)
     gPlacements[3].partner := ""                 ; reopen #3's partner spot for this check
     gPlacements[4].partner := "closed"           ; the newest edge unit has no spot behind
     partnerWall[3] := false
     for point in gPlacementLine
         gFailedPlacementSpots.Push({x:point.x,y:point.y,terrain:"ground"})
-    Assert(PlaceUnitAction(Unit(5)) && gPlacements[5].row=2 && gPlacements[5].anchor=3,"used-up edge crossed the road before filling an open partner spot")
+    Assert(PlaceUnitAction(TestUnit(5)) && gPlacements[5].row=2 && gPlacements[5].anchor=3,"used-up edge crossed the road before filling an open partner spot")
 
     ; 7) Hill only, Hybrid and Money are mutually exclusive in the settings.
     gUnitControls := [{hill:{Value:1},hybrid:{Value:0},money:{Value:1}}]
@@ -116,7 +116,7 @@ Assert(condition,message) {
     if !condition
         throw Error(message)
 }
-Unit(slot) => {slot:slot,name:"Unit " slot,count:1,priority:slot,target:99,enabled:true}
+TestUnit(slot) => {slot:slot,name:"Unit " slot,count:1,priority:slot,target:99,enabled:true}
 Reset() {
     global
     gPlacements := [],gPendingPlacement := 0,gPlacementLine := [],gLastPlacedIndex := 0,gPlacementPreferredSide := 0
@@ -135,7 +135,8 @@ Line() {
     }
 }
 FindPartnerCandidate(anchor) {
-    point := {x:anchor.x+28,y:anchor.y,side:0,row:2,anchor:anchor.id,nx:1,ny:0}
+    ; Beyond FAILED_PLACEMENT_RADIUS: a rejected edge spot (<= radius) must not also reject the partner spot behind it.
+    point := {x:anchor.x+FAILED_PLACEMENT_RADIUS+12,y:anchor.y,side:0,row:2,anchor:anchor.id,nx:1,ny:0}
     return CandidateOccupied(point.x,point.y)?[]:[point]
 }
 ; Simulated purchase: walls and partner walls reject; success is recorded the

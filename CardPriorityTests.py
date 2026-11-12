@@ -14,7 +14,7 @@ logic += '\n' + function('CardContext.ahk', 'ParseWaveNumber')
 logic += '\n' + function('Learning.ahk', 'NormalizeWords')
 logic += '\n' + function('CardContext.ahk', 'PixelInkCards')
 logic += '\n' + '\n'.join(function('AAPathMacro.ahk', name) for name in [
-    'ConfirmLockedCardSelection', 'ResetCardSelection'])
+    'ConfirmLockedCardSelection', 'ResetCardSelection', 'HasValue'])
 fixture = r'''
 #Requires AutoHotkey v2.0
 #SingleInstance Off
@@ -79,9 +79,9 @@ try {
 
     ; Medium difficulty (wave 30+).
     Assert(ParseWaveNumber([{text:"+447"},{text:"Wave 49"}])=49 && !ParseWaveNumber([{text:"Stone Golem"}]),"Wave label misread")
-    shield10 := Red("shield",10),shield3 := Red("shield",3),boom12 := Red("explosive death",12)
-    health50 := Red("health",50),health200 := Red("health",200),health80 := Red("health",80)
-    shared100 := Resist(100,100),phys300 := Resist(300,0),regen := Red("0.5 regen",0.5)
+    shield10 := RedCard("shield",10),shield3 := RedCard("shield",3),boom12 := RedCard("explosive death",12)
+    health50 := RedCard("health",50),health200 := RedCard("health",200),health80 := RedCard("health",80)
+    shared100 := Resist(100,100),phys300 := Resist(300,0),regen := RedCard("0.5 regen",0.5)
     gMatchModifiers := {health:50,healthKnown:true,physical:0,magical:0,regen:0}
     Assert(ChooseBestCard([attack,shield10])=1,"Easy: a Tier II Shield beat a buff")
     gCardDifficulty := "medium",gMatchWave := 29
@@ -89,7 +89,7 @@ try {
     gMatchWave := 30
     Assert(ChooseBestCard([attack,shield10])=2 && ChooseBestCard([Tier("double attack",1),boom12])=2,"Tier II Shield / Explosive Death did not beat buffs")
     Assert(ChooseBestCard([attack,shield3])=1,"a Tier I Shield beat a buff")
-    Assert(ChooseBestCard([Red("shield",6),shield10,attack])=2,"of two Tier II cards the bigger did not win")
+    Assert(ChooseBestCard([RedCard("shield",6),shield10,attack])=2,"of two Tier II cards the bigger did not win")
     Assert(ChooseBestCard([health50,health200,health80])=2,"within the cap the biggest card did not win")
     Assert(ChooseBestCard([shield3,health200])=2,"Tier II Health within its cap lost to a Tier I Shield")
     gMatchModifiers.health := 150
@@ -110,10 +110,10 @@ try {
 }
 Card(stat,ink) => {kind:ink,stat:stat,effectInk:ink,amount:20,tier:1,rank:CardRank(ink,stat)}
 Tier(stat,tier) => {kind:"buff",stat:stat,effectInk:"buff",amount:20,tier:tier,rank:CardRank("buff",stat)}
-Red(stat,amount) => {kind:"debuff",stat:stat,effectInk:"debuff",amount:amount,amountKnown:true,tier:1,rank:CardRank("debuff",stat)}
+RedCard(stat,amount) => {kind:"debuff",stat:stat,effectInk:"debuff",amount:amount,amountKnown:true,tier:1,rank:CardRank("debuff",stat)}
 Resist(physical,magical) {
     stat := physical&&magical?"physical and magical resist":physical?"physical resist":"magical resist"
-    card := Red(stat,Max(physical,magical))
+    card := RedCard(stat,Max(physical,magical))
     card.resistance := {physical:physical,magical:magical,physicalRead:true,magicalRead:true}
     return card
 }

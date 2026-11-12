@@ -176,7 +176,7 @@ VisionRequest(command) {
     return Map("status","ok","open","1","pitch","100","first",first,"last",last,"lastcount",lastcount,"signature",managerReads,"entries",entries,"top","100","bottom","450")
 }
 SendEvent(key) {
-    global managerVisible,scroll,downs,ups
+    global managerVisible,scroll,downs,ups,fPresses
     Assert(windowFocused,"manager input was sent without focusing Roblox")
     if key="{f up}"
         managerVisible := !managerVisible,fPresses += 1
