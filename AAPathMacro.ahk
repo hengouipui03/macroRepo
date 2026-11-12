@@ -59,6 +59,7 @@ global gActivityLog := 0
 #Include Learning.ahk
 #Include CardContext.ahk
 #Include QueueMatch.ahk
+#Include LobbyFlow.ahk
 #Include LearningTests.ahk
 #Include MapNavigation.ahk
 #Include PathLight.ahk
@@ -925,25 +926,6 @@ HasLobbyPlay() {
     return CountRef(65,235,115,315,4,IsLobbyCyan) > 10
 }
 
-ReadVisibleLobbyPlay() {
-    global REF_W,REF_H,gRunning
-    if !gRunning || !HasLobbyPlay() || !(geometry := WindowGeometry())
-        return false
-    for row in ReadOcrRows(ButtonRegion("LobbyPlay")*) {
-        if NormalizeWords(row.text)!="play"
-            continue
-        x := (row.x+row.w/2)*REF_W/geometry.cw
-        y := (row.y+row.h/2)*REF_H/geometry.ch
-        if LobbyPlayAt(x,y)
-            return {x:x,y:y}
-    }
-    return false
-}
-
-LobbyPlayAt(x,y) {
-    return CountRef(Max(0,x-20),Max(0,y-34),x+20,y+8,4,IsLobbyCyan)>8
-}
-
 IsLobbyCyan(color) {
     RGB(color,&r,&g,&b)
     return r < 110 && g > 155 && b > 175
@@ -1278,70 +1260,6 @@ HasValue(list,value) {
     return false
 }
 
-TryStartFromLobby(afterReturnToLobby := false) {
-    global gRunning,gQueueMode
-    play := 0,findMatch := 0
-    playWaitMs := afterReturnToLobby ? 60000 : 30000
-    panelReady := gQueueMode ? () => (findMatch := ReadVisibleFindMatch()) : HasMatchmakingPanel
-    while gRunning {
-        panelOpen := gQueueMode && panelReady.Call()
-        if !panelOpen {
-            Loop 2 {
-                playDeadline := A_TickCount+playWaitMs
-                if !WaitFor(() => (play := ReadVisibleLobbyPlay()),playWaitMs,500) {
-                    if !gRunning
-                        return false
-                    if !afterReturnToLobby || A_TickCount<playDeadline {
-                        Notify("Lobby Play could not be verified on screen.")
-                        return false
-                    }
-                    if !ClickSavedLobbyPlay()
-                        return false
-                    panelOpen := panelReady.Call()
-                    break
-                }
-                if !ClickRef(play.x,play.y,() => LobbyPlayAt(play.x,play.y)) || !ActionPause(250)
-                    return false
-                Log("Lobby Play verified and clicked (" A_Index "/2).")
-                if (panelOpen := panelReady.Call())
-                    break
-            }
-        }
-        if !panelOpen && gRunning {
-            Log("Play clicked. Hold W until the matchmaking panel appears, then release W.")
-            Send "{w down}"
-            try panelOpen := WaitFor(panelReady,7000,150)
-            finally Send "{w up}"
-            if !panelOpen && gRunning {
-                Log("Matchmaking panel did not appear after 7 seconds of walking. Wait 3 seconds before retrying Lobby Play.")
-                panelOpen := WaitFor(panelReady,3000,150)
-            }
-        }
-        if !panelOpen || !gRunning
-            continue
-        if !gQueueMode
-            break
-        submittedAt := StartQueueMatch(findMatch)
-        if submittedAt != "retry"
-            return submittedAt
-    }
-    if !gRunning
-        return false
-    if !ClickButton("PlayHere",-1,HasOpenPortal) || !ClickButton("PortalOpen")
-        return false
-    return TryStartPortal()
-}
-
-ClickSavedLobbyPlay() {
-    geometry := WindowGeometry()
-    if !geometry || !(point := ReadButtonRecord("LobbyPlay",geometry)) {
-        Notify("Lobby Play is still unverified and has no saved position for this window. Teach it with F10.")
-        return false
-    }
-    Notify("Lobby Play was not detected for 60 seconds. Clicking its saved position.")
-    return ClickWindowOnce(point,geometry) && ActionPause(250)
-}
-
 ; One click on the visible Yes. A counted vote closes the panel within about
 ; a second. If it is still open 4 s later, the "0/1" count under the title
 ; decides: a vote already counted gets no second click (Yes may toggle it
@@ -1585,6 +1503,9 @@ RunMacro() {
             }
             SetPhase("Lobby")
             submittedAt := TryStartFromLobby(returningToLobby)
+            ; The lobby flow ends the run itself (EndRun logs why) when its stages and restarts run out.
+            if !submittedAt && gRunning && InPhase("Idle")
+                return ""
             if !submittedAt && (!gRunning || !gQueueMode) {
                 if gRunning
                     Notify("Could not find the lobby Play flow. Teach LobbyPlay with F10 if OCR cannot read it.")
@@ -1596,6 +1517,9 @@ RunMacro() {
         Notify("Waiting for Vote Start before any map preparation.")
         if gQueueMode {
             if (!voteVisible && !submittedAt) || !WaitForQueuedMatch(submittedAt) {
+                ; A fresh queue inside the wait can end the run (lobby restart limit); EndRun has logged it.
+                if gRunning && InPhase("Idle")
+                    return ""
                 outcome := RecoverVoteStart(true)
                 if outcome!="vote"
                     return ResultOrEndRun(outcome,"The queued match did not reach Vote Start (stopped, disconnected, or nothing to act on).")
@@ -1905,50 +1829,6 @@ ReconnectButtonVisible(button) {
         y += 2
     }
     return dark>0 && light>0 && darkMatches>=dark*0.75 && lightMatches>=light*0.75
-}
-
-ReconnectAndRestart() {
-    global gRunning,gReconnecting,gReconnectButton,gMacroThreadActive
-    if !gReconnecting
-        return
-    ; The interrupted run must finish unwinding before anything is clicked.
-    if gMacroThreadActive {
-        SetTimer ReconnectAndRestart, -300
-        return
-    }
-    gRunning := true,button := gReconnectButton,gReconnectButton := false
-    nextCheck := 0,clicks := 0
-    readyToClick := () => ReconnectButtonVisible(button) && (nextCheck := A_TickCount+1000)
-    while gRunning && gReconnecting {
-        if A_TickCount<nextCheck {
-            ActionPause(nextCheck-A_TickCount,false)
-            continue
-        }
-        nextCheck := A_TickCount+1000
-        disconnected := false
-        if !button || !ReconnectButtonVisible(button)
-            button := HasDisconnectPanel() ? FindReconnectButton(&disconnected) : false
-        if !gRunning || !gReconnecting
-            return
-        ; A disconnect over the lobby can leave Play visible behind the dialog.
-        if button {
-            if ClickRef(button.x,button.y,readyToClick) {
-                clicks += 1
-                Log("Reconnect click " clicks " sent. Waiting for the lobby.")
-            }
-        } else if !disconnected && ReadVisibleLobbyPlay() && gRunning && gReconnecting {
-            ; The restart takes the same steps as F6 (Roblox sized, attached,
-            ; focused). If Roblox is not ready yet, keep waiting in this loop.
-            if !PrepareRunStart()
-                continue
-            gReconnecting := false
-            ResetMatchState()
-            SetPhase("Lobby")
-            Notify("Reconnected: back in the lobby after " clicks " Reconnect click(s). Restarting from Play.")
-            SetTimer RunMacroSafely, -10
-            return
-        }
-    }
 }
 
 ReleaseMovementKeys() {

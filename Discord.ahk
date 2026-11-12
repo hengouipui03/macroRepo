@@ -69,3 +69,15 @@ ReportMatchResult(won) {
         return
     PostToWebhook(url,won?"Result: WIN":"Result: LOSS")
 }
+
+; A warning (a give-up, a long reconnect) to the same webhook, with a screenshot
+; when Roblox is open. Quiet when no webhook is saved or posting is turned off.
+DiscordWarn(text) {
+    global SETTINGS_FILE
+    url := MemoryRead("discord","webhook","",SETTINGS_FILE)
+    if url="" || MemoryRead("discord","enabled","1",SETTINGS_FILE)!="1"
+        return false
+    try return PostToWebhook(url,"Warning: " text)
+    catch
+        return false
+}
