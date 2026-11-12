@@ -3,11 +3,13 @@
 Generated fixtures never capture the screen or send game input.
 """
 from pathlib import Path
+import os
 import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parent
-RUNTIME = Path(r"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe")
+# AHK_RUNTIME overrides the interpreter (e.g. a wine wrapper off Windows).
+RUNTIME = Path(os.environ.get("AHK_RUNTIME", r"C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe"))
 
 
 def function(file, name):
