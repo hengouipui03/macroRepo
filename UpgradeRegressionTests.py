@@ -36,6 +36,11 @@ for name in ["PlacementFailureLimitReached", "ResetPlacementFailureStreak", "Rec
 logic += "\n" + function("Placement.ahk", "TryPlacementPoints")
 logic += "\n" + function("Placement.ahk", "PlaceConfiguredBuildAction")
 logic += "\n" + function("Placement.ahk", "MissingBuildPlacements")
+for name in ["SlotTargetCount", "SlotCounterFull", "CapSlot", "ReconcileSlot", "RemoveNewestSlotEntries", "AddMissedPurchases",
+             "RenumberPlacements", "NoteManagerLookupMiss", "ManagerLookupExhausted", "EscalateManagerLookup", "MarkUnitUnreachable",
+             "NoteManagerOpenFailure", "NoteManagerTileFound", "ManagerAuditDue"]:
+    logic += "\n" + function("BuildAudit.ahk", name)
+logic += "\n" + function("PlacementArea.ahk", "AcceptCurrentPlacementArea")
 logic = logic.replace("A_TickCount", "testNow")
 
 fixture = r'''
@@ -50,9 +55,13 @@ global levels := Map(),maxed := Map(),sigs := Map(),pendingLevel := Map(),clicks
 global placeTries := 0,lagMs := 0,opened := [],flashLevel := Map(),warnings := 0
 global gPathLit := false,gPathToggleClicked := false,savedP := false,findCalls := 0,fixedCalls := 0,pClicks := 0,pOn := false,pVisible := true,pIgnoreClicks := 0,gPathReadGaveUp := false
 global PATH_TOGGLE_CLICKS := 3,PATH_TOGGLE_CHANGE := 25
+global gSlotCaps := Map(),gLookupMisses := Map(),gOpenFailures := 0,gEscalationAudits := 0,gAuditDue := false,gLastAudit := 0
+global MANAGER_LOOKUP_LIMIT := 6,AUDIT_LIMIT_PER_MATCH := 2,MANAGER_OPEN_FAIL_LIMIT := 30,UPGRADE_DEFER_LIMIT := 40
+global BUILD_COPY_ATTEMPT_LIMIT := 40,BUILD_RELOCATE_WAIT_LIMIT := 20,HILL_RETRY_LIMIT := 12,CARD_RESUME_LIMIT := 5,gPathVisionErrors := 0,PATH_VISION_ERROR_LIMIT := 6
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
 global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
+global verifyCalls := 0,blockReason := "scroll"
 global moveCalls := 0,shiftReads := 0,trackingOkay := true,cameraShifts := [{dx:0,dy:30},{dx:0,dy:0}]
 global gPlacementViewRecovery := 0,gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
 global relocationSceneOkay := true,rememberOkay := true,scaleMovement := false,lastDuration := 120,lastMovementKey := ""
@@ -348,7 +357,65 @@ try {
     result := PlaceConfiguredBuildAction([a])
     Assert(result="stopped" && MissingBuildPlacements([a])!="","temporarily unavailable Hill unit was skipped and build marked complete")
     schedulerMode := false,gRunning := true,hillBlocked := false
-    FileAppend "PASS: checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; tile upgrades: exact targets, slow bars, Yen waits, grey Max, wrong-portrait refusal, MAX targets keep clicking without a counter, a passing grey frame or one wrong level never completes a unit, escalating back-off; build order kept (same unit retried; only Hill-only without Hill lets later units go first); no duplicate purchases; stop handling.`n","*"
+
+    ; Manager lookups that keep failing ("the bottom row disagrees with the
+    ; record", "reached the top without #N"): retried at the same priority at
+    ; most MANAGER_LOOKUP_LIMIT times, then the build audit is requested (the
+    ; run loop closes F, audits in Placing and returns to Upgrading).
+    for reason in ["mismatch","missing"] {
+        a := Unit(1,1),b := Unit(2,1),gPlacements := [a,b],levels[1] := 0,levels[2] := 0,clicks := 0
+        blockedUnit := 1,blockReason := reason,gPendingPlacement := 0,gLookupMisses := Map(),gAuditDue := false,gEscalationAudits := 0
+        ResetUpgradeSelection()
+        passes := 0
+        while !ManagerAuditDue() && passes<60 {
+            UpgradePriorityPass()
+            testNow += 2100,passes += 1
+        }
+        Assert(ManagerAuditDue() && gLookupMisses[1]=MANAGER_LOOKUP_LIMIT && gEscalationAudits=1,reason ": the lookup limit did not request the audit after exactly " MANAGER_LOOKUP_LIMIT " misses (" gLookupMisses[1] ")")
+        Assert(!a.complete && !(a.HasProp("unreachable") && a.unreachable) && levels[2]=0 && clicks=0,reason ": the unit was given up or a lower priority upgraded before the audit")
+        ; Within the limit the old rule held: strict priority, nothing below ran. Now the audit renumbers/places;
+        ; after it the tile is found and upgrading goes on from the same unit.
+        gAuditDue := false,blockedUnit := 0,gLookupMisses := Map()
+        Loop 12 {
+            UpgradePriorityPass()
+            testNow += 700
+        }
+        Assert(a.complete && levels[1]=1,reason ": the unit was not upgraded after the audit")
+    }
+    ; Audits used up: the unit that cannot be found is skipped as unreachable, not unfinished;
+    ; the found units go on in priority order.
+    a := Unit(1,1),b := Unit(2,1),c := Unit(3,1),gPlacements := [a,b,c],levels[1] := 0,levels[2] := 0,levels[3] := 0,clicks := 0
+    blockedUnit := 1,blockReason := "missing",gLookupMisses := Map(),gAuditDue := false,gEscalationAudits := AUDIT_LIMIT_PER_MATCH
+    ResetUpgradeSelection()
+    passes := 0
+    while !(a.HasProp("unreachable") && a.unreachable) && passes<60 {
+        UpgradePriorityPass()
+        testNow += 2100,passes += 1
+    }
+    Assert(a.HasProp("unreachable") && a.unreachable && !a.complete && !ManagerAuditDue() && gEscalationAudits=AUDIT_LIMIT_PER_MATCH,"audit exhaustion did not give the unit up without another audit")
+    Assert(UpgradeQueue().Length=2 && UpgradeQueue()[1].id=2,"an unreachable unit still blocked the queue")
+    Assert(levels[2]=0 && levels[3]=0,"a lower priority ran before the limit was used up")
+    Loop 12 {
+        UpgradePriorityPass()
+        testNow += 700
+    }
+    Assert(b.complete && c.complete && levels[2]=1 && levels[3]=1 && levels[1]=0,"found units were not upgraded after the missing one was skipped")
+    blockedUnit := 0,blockReason := "scroll"
+
+    ; The build loop's bounds. A copy that is never placed is given up after
+    ; BUILD_COPY_ATTEMPT_LIMIT attempts (the slot is held at its count).
+    a := Unit(1,1),a.count := 2,a.enabled := true,gPlacements := [],gSlotCaps := Map(),placeTries := 0,verifyCalls := 0
+    gMapModel := {checkpointIndex:3,checkpoints:[1010,1020,1030]},ResetPlacementFailureStreak(),gPathReadGaveUp := false
+    schedulerMode := false
+    result := PlaceConfiguredBuildAction([a])
+    Assert(result="complete" && placeTries=BUILD_COPY_ATTEMPT_LIMIT && gSlotCaps.Has(1) && gSlotCaps[1]=0 && verifyCalls=1,"a copy that is never placed was retried " placeTries " times or the build did not complete (" result ")")
+    ; Hill-only without Hill space: waits at most HILL_RETRY_LIMIT times, then the unit is given up.
+    a.hill := true,hillBlocked := true,gPlacements := [],gSlotCaps := Map(),placeTries := 0,verifyCalls := 0
+    result := PlaceConfiguredBuildAction([a])
+    Assert(result="complete" && gSlotCaps.Has(1) && placeTries=HILL_RETRY_LIMIT+1,"a Hill unit without Hill space waited forever or was not given up (" placeTries " tries, " result ")")
+    a.hill := false,hillBlocked := false,gSlotCaps := Map(),gMapModel := 0
+    ResetPlacementFailureStreak()
+    FileAppend "PASS: manager lookup limit then audit then back to upgrading, audit exhaustion skips the unreachable unit, bounded build loop; checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; tile upgrades: exact targets, slow bars, Yen waits, grey Max, wrong-portrait refusal, MAX targets keep clicking without a counter, a passing grey frame or one wrong level never completes a unit, escalating back-off; build order kept (same unit retried; only Hill-only without Hill lets later units go first); no duplicate purchases; stop handling.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message " (line " err.Line ")`n" err.Stack,"*"
@@ -402,10 +469,15 @@ ActionPause(ms,*) {
         gRunning := false
     return true
 }
+VerifyCompletedBuild(plan) {
+    global verifyCalls
+    verifyCalls += 1
+    return true
+}
 LocateManagedUnit(id) {
-    global gUnitManagerFailure,pendingLevel,levels
+    global gUnitManagerFailure,pendingLevel,levels,blockReason
     if blockedUnit=id {
-        gUnitManagerFailure := "scroll"
+        gUnitManagerFailure := blockReason
         return false
     }
     if pendingLevel.Has(id) && testNow>=pendingLevel[id] {

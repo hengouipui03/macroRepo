@@ -42,7 +42,12 @@ RecordFailedPlacement(unit,point) {
     return true
 }
 
+; False while a recorded unit has no usable position: its coordinates await
+; view recovery (viewPending), or the build audit recorded it without any
+; (anchorless: a purchase the macro missed). Position-based code skips those.
 PlacementAnchorKnown(item) {
+    if item.HasProp("anchorless") && item.anchorless
+        return false
     return !item.HasProp("viewPending") || !item.viewPending
 }
 
@@ -217,6 +222,21 @@ RetryFinalCheckpointPlacement() {
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     RefreshPlacementSearch()
     Log("Checkpoint 3: refresh local placement attempts and keep trying; no further relocation.")
+}
+
+; Relocation could not even start BUILD_RELOCATE_WAIT_LIMIT times in a row
+; (the player marker or the route is unavailable): stop waiting and treat the
+; current position as the next checkpoint, as RelocatePlacementArea does after
+; its own walking limit. Per-checkpoint failure memory starts fresh.
+AcceptCurrentPlacementArea(unit) {
+    global gMapModel,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses
+    if gMapModel && gMapModel.HasProp("checkpointIndex") && gMapModel.checkpointIndex<3
+        gMapModel.checkpointIndex += 1
+    gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
+    ResetPlacementFailureStreak()
+    RefreshPlacementSearch()
+    Log(unit.name ": relocation could not start " BUILD_RELOCATE_WAIT_LIMIT " times in a row; treat the current position as checkpoint "
+        (gMapModel && gMapModel.HasProp("checkpointIndex")?gMapModel.checkpointIndex:"?") " and place from here.")
 }
 
 RelocatePlacementArea(unit) {

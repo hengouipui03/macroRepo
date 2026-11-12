@@ -13,6 +13,9 @@ logic = '\n'.join(function(file,name) for file,name in [
     ('PurchaseVerifier.ahk','ProbePurchase'),('PurchaseVerifier.ahk','JudgePurchase'),('PurchaseVerifier.ahk','NewPurchaseEvidence'),
     ('AAPathMacro.ahk','CheckCardInterruption')])
 logic += '\n' + function('PlacedUnits.ahk','OpenRecordedUnit')
+for name in ['SlotTargetCount','SlotCounterFull','CapSlot','ReconcileSlot','RemoveNewestSlotEntries','AddMissedPurchases','RenumberPlacements']:
+    logic += '\n' + function('BuildAudit.ahk', name)
+logic += '\n' + function('PlacementArea.ahk','PlacementAnchorKnown')
 for name in ['PlacementFailureLimitReached','ResetPlacementFailureStreak','RecordFailedPlacement','PlacementCopyFailures']:
     logic += '\n' + function('PlacementArea.ahk', name)
 logic = logic.replace('A_TickCount','testNow')
@@ -28,6 +31,7 @@ global gLastPlacedIndex := 0,gPlacementPreferredSide := 0,gPlacementEdgeMisses :
 global gCardHandling := false,gCardAction := "placement",gCardPollAt := 0,gCardInterruptEpoch := 0,gPlacementActiveUnit := 0,testNow := 10000
 global panel := false,preview := false,existingModel := false,purchased := false,cards := false,buys := 0,slots := 0,registrations := 0
 global gPlacementLine := [],gLayoutValidation := Map(),gPlacementAreaFailures := Map(),PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
+global gSlotCaps := Map(),gLastAudit := 0
 global modelMode := false,models := Map(),hidePanels := false,delayPanel := false,rejectPurchase := false,cardDuringPurchase := false
 global gameCount := Map(),held := false,yen := 90000,UNIT_COST := 1350,GAME_MAX := 9,lastEvidence := "",dropHoldOnBuy := false,probes := 0,unreadableCounter := false,unreadableYen := false
 try {
@@ -147,7 +151,27 @@ try {
     unreadableYen := true,yen := 5
     Assert(TryPlacementCandidateAction(unit,{x:450,y:330}) && buys=2,"unreadable Yen blocked the purchase")
     unreadableYen := false
-    FileAppend "PASS: five actual rejected purchases counted once each; sixth buy blocked after rescan; the slot counter alone confirms a bound purchase (also with the hold dropped or no panel); no UPG OCR; all 16 startup purchases across six slots advance; target four never buys five; existing-model/card/duplicate guards; Yen checked before the click; interruptions.`n","*"
+
+    ; The slot counter shows the slot FULL before the click (the record is
+    ; behind): no click, no failure, no blacklisted spot; the slot is
+    ; reconciled with the counter instead (a missed purchase, no anchor).
+    GAME_MAX := 3
+    unit := {slot:1,name:"Unit 1",count:3,enabled:true,priority:1,target:0}
+    NewGame(1,3),gPlacements := [FullItem(1,1,300,330),FullItem(2,1,340,330)],registrations := 0,buys := 0,models := Map(),slots := 0
+    ResetPlacementFailureStreak(),gFailedPlacementSpots := [],gPlacementYenWait := 0
+    Assert(TryPlacementCandidateAction(unit,{x:400,y:330}),"a full slot did not report the reconciled copy")
+    Assert(buys=0 && !preview && !held,"a click was sent (or the hold kept) for a slot the counter shows full")
+    Assert(gConsecutivePlacementFailures=0 && !gPendingPlacement && !FailedPlacementSpot({x:400,y:330}),"a full slot counted a failure or blacklisted the spot")
+    Assert(gPlacements.Length=3 && CountSlotPlacements(1)=3 && gPlacements[3].anchorless && gPlacements[3].id=3,"the missed purchase was not recorded as a new anchorless copy")
+    Assert(!PlacementAnchorKnown(gPlacements[3]) && PlacementAnchorKnown(gPlacements[1]),"an anchorless copy counted as having an anchor")
+    ; The game's own limit (3) is below the configured count (5): the slot is held at 3, never clicked.
+    unit.count := 5
+    NewGame(1,3),gPlacements := [FullItem(1,1,300,330),FullItem(2,1,340,330),FullItem(3,1,380,330)],buys := 0,gSlotCaps := Map()
+    Assert(!TryPlacementCandidateAction(unit,{x:400,y:330}) && buys=0 && gSlotCaps.Has(1) && gSlotCaps[1]=3,"a unit limit below the configured count was not capped")
+    Assert(!TryPlacementCandidateAction(unit,{x:420,y:330}) && buys=0 && SlotTargetCount(unit)=3,"a capped slot was tried again")
+    Assert(MissingBuildPlacements([unit])="","a capped slot still counted as missing")
+    GAME_MAX := 9,gSlotCaps := Map()
+    FileAppend "PASS: a full slot before the click: no click, no failure, reconciled; five actual rejected purchases counted once each; sixth buy blocked after rescan; the slot counter alone confirms a bound purchase (also with the hold dropped or no panel); no UPG OCR; all 16 startup purchases across six slots advance; target four never buys five; existing-model/card/duplicate guards; Yen checked before the click; interruptions.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack,"*"
@@ -185,6 +209,8 @@ ReadPurchaseState(unit) {
     count := gameCount.Has(unit.slot)?gameCount[unit.slot]:0
     return {yen:unreadableYen?-1:yen,cost:UNIT_COST,counter:held && !unreadableCounter?{n:count,max:GAME_MAX}:false}
 }
+FullItem(id,slot,x,y) => {id:id,slot:slot,name:"Unit " slot,priority:1,target:0,x:x,y:y,anchor:0,partner:"",hill:false,row:1,complete:false}
+ResetUpgradeSelection(*) => 0
 PlacementPanelClosedStable(*) => true
 PlacementStillBesidePath(*) => true
 PlacementClickRef(x,y,guard := false,purchase := 0) {

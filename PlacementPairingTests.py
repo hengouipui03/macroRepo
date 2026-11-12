@@ -23,6 +23,7 @@ logic += "\n" + arrow("Placement.ahk", "PartnerOpen") + "\n" + arrow("Placement.
 logic += "\n" + function("PlacedUnits.ahk", "RegisterPlacedUnit")
 logic += "\n" + function("Learning.ahk", "CandidateOccupied")
 logic += "\n" + function("UnitSettings.ahk", "UnitPlacementModeChanged")
+logic += "\n" + function("BuildAudit.ahk", "SlotTargetCount")
 
 fixture = r'''
 #Requires AutoHotkey v2.0
@@ -31,7 +32,7 @@ fixture = r'''
 global gRunning := true,gPlacements := [],gPendingPlacement := 0,gPlacementAttemptClicked := false
 global gPlacementLine := [],gLastPlacedIndex := 0,gPlacementPreferredSide := 0,gHillPlacementUnavailable := false
 global gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),FAILED_PLACEMENT_RADIUS := 28
-global gCardInterruptEpoch := 0,wall := Map(),partnerWall := Map(),tried := [],gUnitControls := []
+global gSlotCaps := Map(),gCardInterruptEpoch := 0,wall := Map(),partnerWall := Map(),tried := [],gUnitControls := []
 try {
     ; 1) Pairs: edge, behind, edge, behind, edge. Row-2 units never anchor.
     Line()

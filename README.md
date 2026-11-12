@@ -466,6 +466,8 @@ Capture failures never count as failed purchases or authorize movement.
 Purchase confirmation recovery keeps unresolved purchases across path rescans. An opened side unit panel confirms the pending purchase immediately, regardless of whether its upgrade number is readable; selection-only recovery handles a delayed panel without buying again. Delayed panels are rechecked at the exact purchase coordinate. A failed spot advances only after two completed selection-only probes find no model and no panel has ever been seen. The configured count and copy number are checked again immediately before each purchase mouse-down. Run PlacementConfirmationTests.py for the four-versus-five regression.
 
 
+Build audit: when placement believes the build is complete (and when the F unit manager keeps disagreeing with the record) the macro reads every enabled slot's `n/max` counter and corrects its record: ghost entries are removed newest first, a purchase it missed is recorded with no position, and a slot that is already full is never clicked. See MACRO_BEHAVIOUR.md section 5a. BuildAuditTests.py covers it.
+
 ## Unit manager selection
 
 F opens Unit Overview. The newest unit is top-left and the list reads left to

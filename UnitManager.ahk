@@ -343,7 +343,9 @@ ManagedUnitCell(purchaseId,bottomCount) {
 
 ; Finds purchase #N's tile: the remembered position while the list has not
 ; moved, otherwise anchored at the list bottom and scrolled up a notch at a
-; time. Returns {state,entry} or false with gUnitManagerFailure set.
+; time. Returns {state,entry} or false with gUnitManagerFailure set: "card",
+; "manager" (F would not open), "mismatch" (the bottom row disagrees with the
+; record), "missing" (the list ends before #N), "scroll", "blocked".
 LocateManagedUnit(purchaseId) {
     global gPlacements,gRunning,gPendingPlacement,gUnitManagerFailure,gManagerTile
     gUnitManagerFailure := ""
@@ -355,8 +357,10 @@ LocateManagedUnit(purchaseId) {
     if !state
         return UnitManagerFail(HasCardChoice()?"card":"manager")
     if gManagerTile && gManagerTile.id=purchaseId {
-        if entry := UnitManagerEntry(state,gManagerTile.column,gManagerTile.row)
+        if entry := UnitManagerEntry(state,gManagerTile.column,gManagerTile.row) {
+            NoteManagerTileFound()
             return {state:state,entry:entry}
+        }
         ForgetManagerTile()
     }
     if !(state := ResetUnitManagerBottom(state))
@@ -368,7 +372,7 @@ LocateManagedUnit(purchaseId) {
     seen := state.Has("lastcount")?Integer(state["lastcount"]):0
     if seen!=bottomCount {
         Log("Unit manager bottom row shows " seen " tile(s) but " gPlacements.Length " units are recorded; no tile used.")
-        return UnitManagerFail("scroll")
+        return UnitManagerFail("mismatch")
     }
     cell := ManagedUnitCell(purchaseId,bottomCount)
     pitch := Number(state["pitch"]),last := Number(state["last"]),offset := 0
@@ -383,6 +387,7 @@ LocateManagedUnit(purchaseId) {
         if entry := UnitManagerEntry(state,cell.column,last-cell.row*pitch+offset) {
             Log("Purchase #" purchaseId " in unit manager | row from bottom " (cell.row+1) " | " (cell.column?"right":"left") " | " (bottomCount=1?"odd":"even") " unit count")
             gManagerTile := {id:purchaseId,column:cell.column,row:entry.row}
+            NoteManagerTileFound()
             return {state:state,entry:entry}
         }
         oldLast := Number(state["last"])

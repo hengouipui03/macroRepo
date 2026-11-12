@@ -87,6 +87,8 @@ global gPlacements := [],managerVisible := false,scroll := 180,panel := false,wa
 global gUnitManagerOpen := false,gUnitManagerConfirmed := false,gPhase := "Upgrading",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"],gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
 global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := "",UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
 global fPresses := 0,blindVision := false,gManagerTile := 0,gSlotPortraits := Map(),gUnitManagerClosedForCards := false
+NoteManagerTileFound() {
+}
 try {
     ; The game lists the newest unit top-left, reading left to right, so with
     ; an odd count #1 sits alone at the bottom-LEFT (the user's 9-unit match).

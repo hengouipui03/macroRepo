@@ -15,6 +15,7 @@ to the live Roblox client area at run time. Roblox is sized to 1401 x 975 outer 
 | `UnitSettings.ahk` | Six unit slots (enabled, name, count, priority, target, Hill only / Hybrid / Money, mutually exclusive) saved to `unit_settings.ini`. |
 | `MapNavigation.ahk` | Minimap reading (Python vision or AHK fallback), route graph, checkpoints, player probing, movement, obstacle escape, P (path light) toggle. |
 | `Placement.ahk` | Placement candidates, purchase clicks, unit-panel detection, click-away, pending-purchase recovery, the build loop. |
+| `BuildAudit.ahk` | The build audit: the recorded placements against the game's slot counters (`AuditBuild`), the bounded audit at build completion, the unit-manager lookup limits and the escalation back through Placing (`RepairBuildAfterManagerMismatch`), per-slot caps. |
 | `PurchaseVerifier.ahk` | The one place that decides "did this click buy a unit?": slot-counter probe, Yen probe, weak unit-panel probe and the pure `DecidePurchase`. |
 | `PlacementArea.ahk` | Six-failure streak, checkpoint relocation (25% → 50% → 75% of the route). |
 | `PlacedUnits.ahk` | Numbered purchase record, upgrade queue, tile-based upgrades (segments, Max, Upg clicks), identity guard, back-off. |
@@ -44,11 +45,13 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
   ├─ TryVoteStart                   click the green Yes
   ├─ phase Placing
   ├─ PlaceConfiguredBuild           every enabled slot × count, cards handled throughout, NO upgrades, NO F
+  │                                 when every slot looks complete: AuditBuild (slot counters vs the record); incomplete → keep placing
   ├─ BeginUnitManagerPhase (phase Upgrading) + EnsureUnitManagerOpen      ← the FIRST time F can be pressed
   └─ Watch loop until the match ends:
         cards → ClearCardChoice (a timeout is logged and the loop carries on; it never ends the run)
         end screen → TryEndState (phase Ended; Next, rewards, Replay) → return "replay"
         RefreshMatchModifiers, MaintainUnitManager, UpgradePriorityPass, IdleKeepAliveTick
+        a unit-manager lookup that keeps failing → close F, phase Placing, AuditBuild, place what is missing, back to Upgrading (§5a)
 ```
 
 ### Decisions in the flow
@@ -86,7 +89,7 @@ F6 → StartMacro → RunMacro (loops on "replay" and "restart")
    - even unit count: #1 bottom-right, #2 bottom-left, #3 the row above on the right, and so on;
    - odd unit count: #1 **alone at the bottom-left**, then #2 right / #3 left in the row above, and so on.
 6. Scroll up one notch at a time. If a notch moves a full row or more, it stops instead of guessing. If the list cannot move any further, the reason is `missing` (the manager shows fewer units than recorded).
-7. Every failure records a reason in `gUnitManagerFailure`: `card`, `manager`, `scroll`, `missing`, `panel` or `blocked`.
+7. Every failure records a reason in `gUnitManagerFailure`: `card`, `manager`, `mismatch` (the bottom row disagrees with the record), `scroll`, `missing`, `panel` or `blocked`. `mismatch`, `missing` and `scroll` are counted per purchase and audit cycle against `MANAGER_LOOKUP_LIMIT` (§5a).
 
 `SelectManagedUnit` (relocation checks, and upgrades when the game needs the unit selected) closes the previous side panel, finds the tile as above and clicks **only the portrait**, then waits for the side unit panel.
 
@@ -101,13 +104,15 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **When the tile cannot be found:**
   - `card` → choose the card (the manager is closed for it, then reopened), then find **the same** unit again. Nothing is deferred.
   - `manager` → retry the same priority. This is never counted against the unit.
+  - `mismatch`, `missing`, `scroll` → the same retries as below, but at most **`MANAGER_LOOKUP_LIMIT` (6)** failed lookups per purchase per audit cycle. Then the build is audited (§5a); once `AUDIT_LIMIT_PER_MATCH` (2) audits are used up the unit is given up as **unreachable** (logged) and the units that are found go on.
+  - `manager` (F will not open) → retry the same priority; `MANAGER_OPEN_FAIL_LIMIT` (30) failures in a row without a found tile give up every unfinished unit as unreachable.
   - Any other reason → retry the same unit up to **3** times, then pause it 2 s (see Pause).
 - **Level:** the number of lit segments. A new lit segment confirms an upgrade. Fewer lit segments than already confirmed means the tile is doubtful: it is found again, and the lower count is accepted only after three reads in a row.
 - **Not enough Yen:** vision reads the Upg button's brightness (`afford`: lit = can buy, dimmed = cannot). A dimmed button is waited on with no click and no failed read counted, even if the bar is unreadable.
 - **Clicks (like holding R):** keep clicking the tile's Upg button until MAX or the target. When the button state is unknown, clicks that buy nothing are repeated with no failure counter. MAX target: every 0.3 s, even if the bar is unreadable. Finite target: after each click wait for the new segment, at most 2 s, so a slow bar cannot overshoot.
 - **Second look (`StableTileRead`):** a level jump that no click explains, and any MAX, must read the same twice, 0.25 s apart. One more segment right after a click is accepted at once.
 - **Identity guard:** the first tile seen for each slot teaches that slot's portrait colours. A tile is refused only when it is far from its own slot's colours and at most half as far from another slot's, so look-alike units never block upgrades.
-- **Pause:** unreadable bars (3 reads), missing tiles (3 tries) or a portrait mismatch pause **the same unit** for 2 s, then it is read again; lower priorities wait (no back-off, no hand-over). Logged on the first pause and about every 30 s. One diagnostic screenshot per unit per match goes to `cache\upg-tile-<id>.bmp`.
+- **Pause:** unreadable bars (3 reads), missing tiles (3 tries) or a portrait mismatch pause **the same unit** for 2 s, then it is read again; lower priorities wait (no back-off, no hand-over), but only within the bounds: `UPGRADE_DEFER_LIMIT` (40) deferrals without progress, or the lookup limit above, end the wait by giving the unit up as unreachable. An unreachable unit is not unfinished: the upgrade queue skips it, so it never holds lower priorities back. Logged on the first pause and about every 30 s. One diagnostic screenshot per unit per match goes to `cache\upg-tile-<id>.bmp`.
 - **Sell X only:** Fishi's small red element icon once passed as a sell X, added a fake row, broke the row pitch and left every bar unreadable. Vision now keeps only sell-X-sized marks.
 - **MAX = grey Max button and every segment lit** (or unreadable bar). A grey button over unlit segments (a manager still opening; this ended #7 at 5 of 8 and skipped unit 2) is never clicked and is believed only if it stays for 4 s.
 - **Target reached or MAX:** mark complete, log the next unit. After the last target the manager is closed (§3).
@@ -128,6 +133,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **Money:** on the path edge, the free spot farthest from all placed units (or from the player if first). Others keep 48 px from it (normal 24). Never an anchor; the line keeps growing from the last ordinary edge unit.
 - **Hill-only / Hybrid:** Hill-only needs highlighted Hill terrain and never falls back to ground. Hybrid tries the green Hill highlights (nearest the path first), then ground. Hill units are never anchors.
 - **Purchase confirmation (`PurchaseVerifier.ahk`):** the side unit panel is NOT proof of a purchase (it also opens on an already placed unit; it once recorded ghost units). `DecidePurchase(evidence)` is a pure function with this rule order: (1) **slot counter**: holding a unit shows `n/max` above its hotbar card (also when the slot is full); read before the click (while holding the unit) and after it, `n+1` is `confirmed`, `n` unchanged is `denied` (any other change is not trusted); (2) **Yen**: before and after, each from two agreeing reads; a drop of at least `PURCHASE_YEN_DROP_FRACTION` (0.5) of the unit's cost is `confirmed`, a smaller drop `denied`; (3) **unit panel (weak)**: `confirmed` only when no recorded unit lies within the `CandidateOccupied` radius of the click point (the panel is not even checked next to a recorded unit); (4) otherwise `unknown`. After the click the HUD is read once settled (`PURCHASE_SETTLE_MS`); if the counter cannot be read the unit is no longer held, so its slot key is pressed once to read it and Q drops it again. `confirmed` goes to `RegisterPlacedUnit`, whose PlacedUnits log line names the evidence ("confirmed by slot counter 0/3 -> 1/3", "Yen ..." or "unit panel (no recorded unit nearby)"). `denied` is a failed purchase: the failure is counted and the spot blacklisted. `unknown` keeps the purchase pending and probes again up to `PURCHASE_REPROBE_LIMIT` (3) more times; if it is still unknown the attempt counts as a failure but the spot is NOT blacklisted. The counter is OCR of the strip above the hotbar (`ReadPlacementMoney`, mapped to the slot by the same `HOTBAR_SLOT_X` the cost reader uses). Before buying, a selection-only click rejects spots that already hold a unit. Failed spots (28 px radius) are skipped for the rest of the game. Hill spots that failed in two matches in a row on the same map profile are skipped from the start of the next match; a success there clears the record.
+- **Slot already full before the click:** if the counter read while holding the unit already shows `n = max`, nothing is clicked (it could only be refused). It is not a failure and blacklists no spot; the slot is reconciled with the counter instead (§5a). If the game's limit is below the configured count, the slot is held at that limit (`CapSlot`) and counts as complete.
 - **Recovery:** a purchase hidden by cards is resolved from the same evidence (`RecoverPendingPlacement`) and never bought twice. It never clicks the field again: a click on the spot can select an existing unit.
 - **Short of Yen (`PlacementShortOfYen`, `WaitForPlacementYen`):** checked BEFORE the click, while the unit is held (`ReadPurchaseState`: Yen needs two agreeing OCR reads, at most `PURCHASE_READ_ATTEMPTS`). One OCR pass reads the Yen counter above the toolbar, the held unit's counter and the cost under each of the six slot portraits (`ReadPlacementMoney`). If Yen is below the unit's cost, no click is sent, nothing counts toward relocation, the spot is not rejected and no edge is blocked; the held unit is dropped, the macro re-reads Yen about once a second (at most 20 s) and then places the same unit (checking again before it clicks). Costs are remembered by unit name in `learning.ini` (`[UnitCosts]`); a new value is believed only when two reads agree. Unreadable Yen or an unknown cost does not block the click: the counter decides afterwards. Each purchase costs about four OCR passes (two before the click, two after).
 - **Relocation:** 6 consecutive failed purchases move the player to the next route checkpoint (25% → 50% → 75%). At checkpoint 3 it keeps trying locally.
@@ -136,6 +142,7 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **P is switched ON** (`EnsurePathLit`): the lit path is placement's first path source and steers walking (`FollowLitPath`). If the P glyph reads dim, P is clicked; a click that leaves the glyph unchanged did not register and is repeated (up to 3 clicks), while a click that changed the glyph is never repeated (it could toggle P back off). If placement then finds no lit path and P was never confirmed on, P is tried once more before the red overlay fallback. An unreadable or unconfirmed P never stops the macro. On maps with no lit path, P being on draws nothing, so the red overlay fallback works with P left on.
 - **Path source, lit P path first (`RefreshPathView`):** before placing (first unit, after a rescan or relocation) the macro reads the lit path with nothing held (vision `world`, after `pathviewclear` drops any earlier red view), so green Hill highlights never count. It is accepted once it covers at least 1% of the client (`LIT_PATH_MIN_FRACTION`; real lit paths measure 2.4-5%, maps without one 0). It still reads under Sandstorm, where the haze turns the red overlay orange (`path-world-sandstorm-p-on.png`).
 - **Fallback, the red no-place overlay (vision `pathview`):** used only when no lit path shows. The overlay appears only while a unit is held. The macro selects the slot, moves the cursor onto the HUD, reads the overlay and cancels the hold. The road is the long red band of constant width; red that is wider (Hill ground) or thinner/shorter (health bars, unit rings) is not road. Every red area is also stored as no-place: lane spots, partner spots and click re-checks never land on red. Later unselected frames only refresh the baseline image and keep this view; `worldreset` clears it at match start. The first read of each game is saved as `cache\pathview-<date_time>.png` (road magenta, other red blue, player white; newest 10 kept).
+- **Bounds in the build loop** (`PlaceConfiguredBuildAction`): `BUILD_COPY_ATTEMPT_LIMIT` (40) attempts at one copy, then the copy is given up (the slot is held at its count); `BUILD_RELOCATE_WAIT_LIMIT` (20 waits of 3 s) for a relocation that cannot start, then the current position is accepted as the checkpoint (`AcceptCurrentPlacementArea`); `HILL_RETRY_LIMIT` (12 waits of 10 s) for a Hill-only unit, then it is given up; `PATH_VISION_ERROR_LIMIT` (6) vision calls with no answer in a row while reading the path, then the match is sat out like an empty path; `CARD_RESUME_LIMIT` (5) card-interrupted resumptions per placement or upgrade call. Every give-up is logged.
 - **No path from either source:** after 3 reads in a row with neither a lit path nor a red road (`PATH_READ_ATTEMPTS`), the raw frame of the last red read is saved as `cache\pathfail-<date_time>.png` (newest 10 kept) and the match is sat out until its end screen (Replay follows), instead of retrying the same unit forever.
 - **Hidden base heart** (the player spawns standing on it, e.g. Magic Town): the 25/50/75% points are the same three spots from either end of the route, so they are drawn from the route's two far ends (`MapRouteQuarters`) and the player walks toward the middle one. Each step re-reads the minimap; once the arrow has left the heart it is read whole, the checkpoints are numbered from it and the target switches to checkpoint 1 (`ResolveHiddenBase`). If the heart is still hidden on reaching the middle point, or when the prep timer runs out, the route end nearest where the player started is taken as the base.
 - **Two-path maps:** when the minimap has a second (purple) path, the checkpoints are the points where it meets the green route (`MapCrossingCheckpoints`): the first crossing the enemies reach, then the next meeting points toward the base. Vision reports them (`scan` → `crossings`); they are saved with the learned minimap variant.
@@ -148,6 +155,16 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 - **Click-away after each confirmed placement** uses the same (497,168) point.
 
 ---
+
+### 5a. Build audit (`BuildAudit.ahk`)
+The macro's record (`gPlacements`) can be wrong in both directions, so the game's own slot counters are used to correct it:
+- **When:** when placement believes the build is complete (`VerifyCompletedBuild`, at most `BUILD_AUDIT_LIMIT` = 4 per match, then the record is accepted), and when the unit manager keeps disagreeing with the record (see below). Never before the phase becomes Upgrading.
+- **What:** for each enabled slot with a count (`AuditBuild`): press its key, read the counter (`ProbeSlotCounter`, up to `AUDIT_COUNTER_ATTEMPTS` = 3 reads), cancel with Q, compare with `CountSlotPlacements(slot)`.
+  - recorded > counter: **ghosts**. The slot's NEWEST entries are removed down to the counter, each removal logged ("ghost #N"), the order of the remaining entries kept, purchase numbers renumbered (the manager lists units in purchase order) and anchor/partner links fixed. The ghost's spot is kept off the candidate list for this match.
+  - recorded < counter: a purchase the macro **missed**. It is recorded as placed (the build does not buy it again) with no position (`anchorless`): `PlacementAnchorKnown` is false for it, so `CandidateOccupied`, `EdgeAnchors`, partner placement, vision exclusions and `MoneySpotScore` skip it. It joins the upgrade queue.
+  - counter unreadable after the retries: the recorded count is trusted and logged.
+  - Returns whether every slot reaches its target (configured count, or the cap) per the counters. Incomplete: placement stays in the Placing phase and keeps placing.
+- **Manager mismatch escalation:** `mismatch`/`missing`/`scroll` lookups for one purchase (and portrait mismatches) are retried at most `MANAGER_LOOKUP_LIMIT` (6) times per audit cycle. Then the run loop calls `RepairBuildAfterManagerMismatch`: close F, `SetPhase("Placing")`, `AuditBuild`, place whatever is missing, `BeginUnitManagerPhase` and reopen F (the normal path back to Upgrading). At most `AUDIT_LIMIT_PER_MATCH` (2) per match. When that is used up, the unit that cannot be found is logged and skipped (`unreachable`); the units that are found keep their priority order.
 
 ## 6. Cards
 
@@ -292,6 +309,16 @@ Each tile is read by vision (`unitmanager`): bright bar segments are done (green
 | `ReadPlacementMoney`, `DigitsValue`, `UnitPlacementCost`, `PlacementShortOfYen`, `WaitForPlacementYen` | Yen counter, held-unit counter words and slot costs from one OCR pass; a Yen-short unit is held back before the click and is not a failure. |
 | `PlaceConfiguredBuild`, `PlaceConfiguredBuildAction`, `MissingBuildPlacements` | The whole build loop (no upgrades until complete). |
 
+### BuildAudit.ahk
+| Function | What it does |
+|---|---|
+| `AuditBuild`, `AuditReadCounter`, `ReconcileSlot`, `RemoveNewestSlotEntries`, `RenumberPlacements`, `AddMissedPurchases` | The audit and its repairs (§5a). |
+| `VerifyCompletedBuild` | The bounded audit run at build completion. |
+| `SlotTargetCount`, `CapSlot`, `SlotCounterFull` | A slot's target (configured count or cap); the full-slot test used before a click. |
+| `NoteManagerLookupMiss`, `ManagerLookupExhausted`, `EscalateManagerLookup`, `MarkUnitUnreachable`, `ManagerAuditDue`, `NoteManagerOpenFailure`, `NoteManagerTileFound` | Lookup limits and the request/give-up decision. |
+| `RepairBuildAfterManagerMismatch` | Close F, Placing, audit, place, back to Upgrading. |
+| `ResetBuildAudit` | Per-match reset (called by `ResetMatchState`). |
+
 ### PlacementArea.ahk
 | Function | What it does |
 |---|---|
@@ -348,6 +375,7 @@ Minimap capture and graph (`MiniMapBounds`, `CaptureMiniMap`, `MapNeighbours`, `
 - `LearningTests.ahk` (`--self-test`): card policy. Shared resist beats sole 100/75/25, the reported screenshot picks green Range, pixel-only green is found in each position, the reported loss (230% Health, Health +200 offered) now takes resist, the 300/150/2% caps, and Level Modifiers parsing that ignores card wording.
 - `CardPhaseTests.py`: F opens only in Upgrading and closes in any phase; cards per phase (Placing: no F, leftover manager only closed; Upgrading: close then reopen, unit reselected; Watching: no F); the card timeout logs and returns without ending the run; `RunMacro` has no bare `return` and no `if !ClearCardChoice() return`.
 - `PurchaseVerifierTests.py`: the `DecidePurchase` table (every rule branch, the half-cost Yen edge, precedence, reasons), counter parsing and slot mapping, the weak panel refused next to a recorded unit, and recovery: confirmed registers with its evidence, denied blacklists, unknown re-probes 1+3 times then fails without blacklisting.
+- `BuildAuditTests.py`: ghosts removed newest first with order kept, renumbering and links; a missed purchase is anchorless and skipped by the anchor-dependent code; unreadable counters bounded then trusted; caps; the bounded completion audit; escalation limits; the repair goes close F, Placing, audit, place, Upgrading. `UpgradeRegressionTests.py` also covers the lookup limit, audit exhaustion (lower priorities proceed) and the bounded build loop.
 - `PlacementConfirmationTests.py`: purchases confirmed by the slot counter alone (also with the hold dropped, or no side panel), old models and card overlays never count, Yen checked before the click.
 - `MatchStateTests.py`: `SetPhase`/`InPhase` transitions (including Watching) and invalid-phase rejection, `EndRun` logs its reason and goes Idle, `ResetMatchState` calls every module reset once; `CheckDisconnect` with `gRunning` false and `gSessionArmed` true reads the dialog and never sets `gRunning`, and does nothing after F7.
 - `CardPriorityTests.py`, `UnitManagerVisionTests.py`, and the existing placement/vision tests.

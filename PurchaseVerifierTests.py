@@ -7,7 +7,7 @@ from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 logic = "\n".join(function("PurchaseVerifier.ahk", n) for n in [
     "NewPurchaseEvidence", "JudgePurchase", "DecidePurchase", "ParseCounterWords",
-    "SlotCounterFromWords", "AgreedCounter", "ProbePurchase"])
+    "SlotCounterFromWords", "AgreedCounter", "ProbePurchase", "ProbeSlotCounter"])
 logic += "\n" + function("Placement.ahk", "RecoverPendingPlacement")
 logic += "\n" + function("Placement.ahk", "CountSlotPlacements")
 logic = logic.replace("A_TickCount", "testNow")
@@ -140,6 +140,17 @@ try {
     Script([{yen:-1,cost:1350,counter:false}])
     gRunning := false
     Assert(!RecoverPendingPlacement(unit) && gPendingPlacement && failures=0 && blacklisted=0,"a stopped run turned the pending purchase into a failure")
+    gRunning := true
+    ; ---- ProbeSlotCounter (used by the build audit): select, read, Q ----
+    slotKeys := 0,drops := 0
+    Script([{yen:-1,cost:1350,counter:C(2,3)}])
+    got := ProbeSlotCounter(unit)
+    Assert(got && got.n=2 && got.max=3 && slotKeys=1 && drops=1,"the slot counter probe did not select, read and drop the hold once")
+    slotKeys := 0,drops := 0
+    Script([{yen:-1,cost:1350,counter:false}])
+    Assert(!ProbeSlotCounter(unit) && slotKeys=1 && drops=1,"an unreadable counter was invented or the hold kept")
+    gRunning := false,slotKeys := 0
+    Assert(!ProbeSlotCounter(unit) && slotKeys=0,"the counter probe pressed a key after a stop")
     gRunning := true
     FileAppend "PASS: DecidePurchase table (counter, Yen at the half-cost edge, weak panel, precedence, reasons); counter parsing and slot mapping; weak panel rejected next to a recorded unit; counter re-read through the slot key; confirmed registers with its evidence, denied blacklists, unknown re-probes 1+3 times then fails without blacklist.`n","*","UTF-8"
     ExitApp 0

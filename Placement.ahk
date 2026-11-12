@@ -10,8 +10,19 @@ global gPathViewReady := false,gPathViewSavedThisGame := false
 global LIT_PATH_MIN_FRACTION := 0.01
 ; Reads in a row with neither a lit path nor a red road before giving up.
 global PATH_READ_ATTEMPTS := 3,gPathReadFailures := 0,gPathReadGaveUp := false,gPathRelightTried := false
+; Vision errors (no answer at all) in a row; counted apart from empty reads.
+global gPathVisionErrors := 0
 global gHillPlacementUnavailable := false
 global gPlacementAttemptClicked := false
+; Bounds on the build loop (each has a defined escalation, see
+; PlaceConfiguredBuildAction): attempts at one copy before placement gives up
+; on it; waits (3 s each) for a relocation that cannot start before the
+; current position is accepted as the checkpoint; waits (10 s each) for Hill
+; space before a Hill-only unit is given up; vision errors in a row while
+; reading the path before the match is sat out; card interruptions resumed in
+; one placement call.
+global BUILD_COPY_ATTEMPT_LIMIT := 40,BUILD_RELOCATE_WAIT_LIMIT := 20,HILL_RETRY_LIMIT := 12
+global PATH_VISION_ERROR_LIMIT := 6,CARD_RESUME_LIMIT := 5
 global FAILED_PLACEMENT_RADIUS := 28
 global gFailedPlacementSpots := []
 global gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
@@ -33,8 +44,9 @@ global HOTBAR_COUNTER_Y_MIN := 510,HOTBAR_COUNTER_Y_MAX := 535
 
 ResetPlacementSearch() {
     global gPlacementYenWait,gPlacementLine,gLastPlacedIndex,gPendingPlacement,gPlacementPreferredSide,gFailedPlacementSpots,gPlacementBlockedEdges,gPlacementEdgeMisses,gPathViewReady,gPathViewSavedThisGame
-    global gPathReadFailures,gPathReadGaveUp,gPathRelightTried
+    global gPathReadFailures,gPathReadGaveUp,gPathRelightTried,gPathVisionErrors
     gPathViewReady := false,gPathViewSavedThisGame := false
+    gPathVisionErrors := 0
     gPathReadFailures := 0,gPathReadGaveUp := false,gPathRelightTried := false
     gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map()
     gPlacementLine := [],gLastPlacedIndex := 0,gPendingPlacement := 0,gPlacementPreferredSide := 0
@@ -768,6 +780,7 @@ TryPlacementCandidate(unit,candidate) {
         return false
     if gPendingPlacement
         return RecoverPendingPlacement(unit)
+    resumes := 0
     loop {
         epoch := gCardInterruptEpoch,before := CountSlotPlacements(unit.slot)
         result := TryPlacementCandidateAction(unit,candidate)
@@ -781,7 +794,12 @@ TryPlacementCandidate(unit,candidate) {
         if epoch=gCardInterruptEpoch || !gRunning {
             return result
         }
-        ; The interruption cancelled input; retry this unfinished copy/spot.
+        ; The interruption cancelled input; retry this unfinished copy/spot,
+        ; but only CARD_RESUME_LIMIT times per call.
+        if ++resumes>CARD_RESUME_LIMIT {
+            Log(unit.name ": card interruptions resumed " CARD_RESUME_LIMIT " times for this spot; handing back to the build loop.")
+            return result
+        }
     }
 }
 
@@ -789,7 +807,7 @@ TryPlacementCandidateAction(unit,candidate) {
     global gRunning,gPendingPlacement,gPlacementAttemptClicked
     gPlacementAttemptClicked := false
     before := CountSlotPlacements(unit.slot)
-    if !gRunning || before>=unit.count
+    if !gRunning || before>=SlotTargetCount(unit)
         return false
     if IsEndGameBlocking()
         return false
@@ -827,6 +845,15 @@ TryPlacementCandidateAction(unit,candidate) {
     ; Holding the unit: read its slot counter and Yen BEFORE the click (Yen
     ; needs two agreeing reads). Short of Yen: no click, wait for Yen instead.
     start := ReadPurchaseState(unit)
+    if SlotCounterFull(start.counter) {
+        ; The game says this slot is full, so the record is behind (or the
+        ; game's limit is below the configured count). No click: it could
+        ; only be refused. Not a failure and no spot is blacklisted; the
+        ; slot is reconciled with its counter instead.
+        CancelUnitPreview()
+        ReconcileSlot(unit,start.counter,"slot already full before the click")
+        return CountSlotPlacements(unit.slot)>before
+    }
     if PlacementShortOfYen(unit,start) {
         CancelUnitPreview()
         return false
@@ -1047,7 +1074,7 @@ TryPlacementPoints(unit,points,replanStaleLine := false) {
             return false
         if gPendingPlacement
             return RecoverPendingPlacement(unit)
-        if CountSlotPlacements(unit.slot)>=unit.count
+        if CountSlotPlacements(unit.slot)>=SlotTargetCount(unit)
             return false
         point := UsablePlacementPoint(queue.RemoveAt(1))
         if !point
@@ -1156,6 +1183,7 @@ PlaceUnit(unit) {
     previous := gCardAction,previousUnit := gPlacementActiveUnit
     gCardAction := "placement",gPlacementActiveUnit := unit
     try {
+        resumes := 0
         loop {
             epoch := gCardInterruptEpoch,before := CountSlotPlacements(unit.slot)
             result := PlaceUnitAction(unit)
@@ -1168,6 +1196,10 @@ PlaceUnit(unit) {
                 return true
             if epoch=gCardInterruptEpoch || !gRunning
                 return result
+            if ++resumes>CARD_RESUME_LIMIT {
+                Log(unit.name ": card interruptions resumed " CARD_RESUME_LIMIT " times for this copy; handing back to the build loop.")
+                return result
+            }
         }
     } finally {
         gCardAction := previous,gPlacementActiveUnit := previousUnit
@@ -1184,7 +1216,7 @@ PlaceUnit(unit) {
 ; source save the frame and give up (the build then sits the match out).
 RefreshPathView(unit) {
     global gPathViewReady,gPathViewSavedThisGame,gPathReadFailures,gPathReadGaveUp,PATH_READ_ATTEMPTS,LIT_PATH_MIN_FRACTION
-    global gPathLit,gPathRelightTried
+    global gPathLit,gPathRelightTried,gPathVisionErrors,PATH_VISION_ERROR_LIMIT
     if gPathViewReady
         return true
     if !GetClient(&cx,&cy,&cw,&ch) || !CloseUnitPanel() || !CancelUnitPreview() || HasCardChoice()
@@ -1230,13 +1262,24 @@ RefreshPathView(unit) {
         return true
     }
     if ok {
-        ; Only a completed read that found nothing counts toward giving up.
+        ; A completed read that found nothing counts toward giving up. So does
+        ; a vision call with no answer, but only PATH_VISION_ERROR_LIMIT of
+        ; them in a row: past that the match is sat out like an empty path.
         if VisionOk(reply) {
+            gPathVisionErrors := 0
             gPathReadFailures += 1
             Log("No lit P path and no red road (" gPathReadFailures "/" PATH_READ_ATTEMPTS "); no placement click sent.")
             if gPathReadFailures>=PATH_READ_ATTEMPTS {
                 gPathReadGaveUp := true
                 SavePathReadFailure()
+                return false
+            }
+        } else {
+            gPathVisionErrors += 1
+            Log("The vision service gave no answer for the path read (" gPathVisionErrors "/" PATH_VISION_ERROR_LIMIT ").")
+            if gPathVisionErrors>=PATH_VISION_ERROR_LIMIT {
+                gPathReadGaveUp := true
+                Log("The path could not be read " PATH_VISION_ERROR_LIMIT " times in a row; giving up on it.")
                 return false
             }
         }
@@ -1382,23 +1425,41 @@ PlaceConfiguredBuild(plan) {
     } finally gCardAction := previous
 }
 
+; Every retry here is bounded; the escalation when a bound runs out:
+;  BUILD_COPY_ATTEMPT_LIMIT  attempts at one copy      -> give up the copy: the slot is held
+;                                                         at its recorded count (CapSlot)
+;  BUILD_RELOCATE_WAIT_LIMIT relocation could not start -> accept the current position as the
+;                                                         checkpoint (AcceptCurrentPlacementArea)
+;  HILL_RETRY_LIMIT          Hill-only waits            -> give up the Hill unit (CapSlot)
+; When every slot reaches its target the build is audited (VerifyCompletedBuild)
+; before it counts as complete; an incomplete audit sends placement back to work.
 PlaceConfiguredBuildAction(plan) {
     global gRunning,gHillPlacementUnavailable,gPathReadGaveUp
+    global BUILD_COPY_ATTEMPT_LIMIT,BUILD_RELOCATE_WAIT_LIMIT,HILL_RETRY_LIMIT
     retryAt := Map(),pendingLogAt := 0
+    attempts := Map(),relocateWaits := Map(),hillWaits := Map()
     while gRunning {
         RetryFinalCheckpointPlacement()
         for unit in plan {
             if !unit.enabled
                 continue
-            while gRunning && CountSlotPlacements(unit.slot)<unit.count {
+            while gRunning && CountSlotPlacements(unit.slot)<SlotTargetCount(unit) {
                 if retryAt.Has(unit.slot) && A_TickCount<retryAt[unit.slot]
                     break
                 if TryEndState()
                     return "replay"
                 before := CountSlotPlacements(unit.slot)
                 if PlacementFailureLimitReached() {
-                    if RelocatePlacementArea(unit)
+                    if RelocatePlacementArea(unit) {
+                        relocateWaits[unit.slot] := 0
                         continue
+                    }
+                    relocateWaits[unit.slot] := relocateWaits.Get(unit.slot,0)+1
+                    if relocateWaits[unit.slot]>=BUILD_RELOCATE_WAIT_LIMIT {
+                        AcceptCurrentPlacementArea(unit)
+                        relocateWaits[unit.slot] := 0
+                        continue
+                    }
                     ; Relocation not possible yet: wait, then the same unit again.
                     ActionPause(3000)
                     continue
@@ -1408,6 +1469,13 @@ PlaceConfiguredBuildAction(plan) {
                 after := CountSlotPlacements(unit.slot)
                 if placed && after=before+1 {
                     Log("Confirmed slot " unit.slot ": " after "/" unit.count " placements.")
+                    attempts[unit.slot] := 0
+                    continue
+                }
+                if after>before {
+                    ; The slot counter showed more units than were recorded.
+                    Log("Slot " unit.slot " now has " after "/" unit.count " placements recorded (reconciled with its counter).")
+                    attempts[unit.slot] := 0
                     continue
                 }
                 if !gRunning
@@ -1421,12 +1489,25 @@ PlaceConfiguredBuildAction(plan) {
                 if WaitForPlacementYen(unit)
                     continue
                 if gHillPlacementUnavailable && unit.HasProp("hill") && unit.hill {
+                    hillWaits[unit.slot] := hillWaits.Get(unit.slot,0)+1
+                    if hillWaits[unit.slot]>HILL_RETRY_LIMIT {
+                        Log(unit.name ": no Hill space after " HILL_RETRY_LIMIT " waits; giving this unit up.")
+                        CapSlot(unit,before,"no Hill space")
+                        continue
+                    }
                     retryAt[unit.slot] := A_TickCount+10000
                     Log(unit.name ": Hill placement still pending; retry in 10 seconds.")
                     break
                 }
                 if PlacementFailureLimitReached() && RelocatePlacementArea(unit)
                     continue
+                attempts[unit.slot] := attempts.Get(unit.slot,0)+1
+                if attempts[unit.slot]>=BUILD_COPY_ATTEMPT_LIMIT {
+                    Log(unit.name ": copy " (before+1) " was not placed in " BUILD_COPY_ATTEMPT_LIMIT " attempts; giving up on it.")
+                    CapSlot(unit,before,"placement kept failing")
+                    attempts[unit.slot] := 0
+                    continue
+                }
                 ; Build order is kept: stay on this unit until it is placed (a
                 ; failed spot is already excluded, so the next try is elsewhere).
                 ; Only a Hill-only unit without Hill space (above) lets later
@@ -1439,8 +1520,13 @@ PlaceConfiguredBuildAction(plan) {
         if !gRunning
             return "stopped"
         missing := MissingBuildPlacements(plan)
-        if missing=""
-            return "complete"
+        if missing="" {
+            ; Placement believes the build is complete: the game's own slot
+            ; counters decide. Incomplete means more placing in this phase.
+            if VerifyCompletedBuild(plan)
+                return "complete"
+            continue
+        }
         if !pendingLogAt || A_TickCount>=pendingLogAt {
             Notify("Placement pending: " missing ". Upgrades (F manager) start once every unit is placed.")
             pendingLogAt := A_TickCount+10000
@@ -1458,8 +1544,8 @@ MissingBuildPlacements(plan) {
     missing := ""
     for unit in plan {
         count := CountSlotPlacements(unit.slot)
-        if unit.enabled && count<unit.count
-            missing .= (missing=""?"":"; ") "slot " unit.slot " " count "/" unit.count
+        if unit.enabled && count<SlotTargetCount(unit)
+            missing .= (missing=""?"":"; ") "slot " unit.slot " " count "/" SlotTargetCount(unit)
     }
     return missing
 }

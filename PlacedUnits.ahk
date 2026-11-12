@@ -3,6 +3,9 @@ global PLACEMENT_RUN_FILE := A_ScriptDir "\placement_run.ini"
 global PLACEMENT_LAYOUT_FILE := A_ScriptDir "\placement_layouts.ini"
 global gRunRecording := false,gRunMap := "",gLayoutValidation := Map()
 global gUpgradeSelectedId := 0
+; Deferrals (2 s each) of one unit with no progress before it is given up as
+; unreachable (the lookup limit in BuildAudit.ahk covers the manager tile).
+global UPGRADE_DEFER_LIMIT := 40
 
 ; Per-match state of the placed-unit record (called by ResetMatchState).
 ResetPlacedUnits() {
@@ -66,7 +69,7 @@ RegisterPlacedUnit(unit,point,evidence) {
     }
     item := {id:gPlacements.Length+1,slot:unit.slot,name:unit.name,priority:unit.priority,
         target:unit.target,hill:point.HasProp("hill") && point.hill,row:point.HasProp("hill") && point.hill?0:point.HasProp("row")?point.row:1,upgrades:0,x:point.x,y:point.y,selectX:point.x,selectY:point.y,complete:unit.target=0,
-        money:unit.HasProp("money") && unit.money,anchor:point.HasProp("anchor")?point.anchor:0,partner:""}
+        money:unit.HasProp("money") && unit.money,anchor:point.HasProp("anchor")?point.anchor:0,partner:"",unreachable:false}
     ; A row-2 unit fills its edge unit's single partner spot.
     if item.anchor
         for other in gPlacements
@@ -128,7 +131,9 @@ UpgradeQueue() {
     global gPlacements
     queue := []
     for item in gPlacements {
-        if item.complete
+        ; A unit the manager cannot reach is skipped, not unfinished: it must
+        ; not hold lower priorities back.
+        if item.complete || (item.HasProp("unreachable") && item.unreachable)
             continue
         at := queue.Length+1
         for index,other in queue {
@@ -198,11 +203,20 @@ SaveUpgradeDiagnostic(item) {
         Log("#" item.id ": saved " path " for diagnosis.")
 }
 
-; Strict priority: a stuck unit is never skipped. It pauses 2 s, then the same
-; unit is read again; lower priorities wait until it reaches its target.
+; Strict priority: a stuck unit is not skipped. It pauses 2 s, then the same
+; unit is read again; lower priorities wait until it reaches its target, for at
+; most UPGRADE_DEFER_LIMIT deferrals (then it is given up as unreachable).
 ; Logged on the first pause and then about every 30 s.
 DeferUnitUpgrade(item,message) {
+    global UPGRADE_DEFER_LIMIT
     count := (item.HasProp("deferCount")?item.deferCount:0)+1
+    if count>UPGRADE_DEFER_LIMIT {
+        ; Deferred this many times without any progress: give the unit up.
+        MarkUnitUnreachable(item,"still stuck after " UPGRADE_DEFER_LIMIT " deferrals (" message ")")
+        CloseUnitPanel()
+        ResetUpgradeSelection()
+        return false
+    }
     item.deferCount := count,item.upgradeRetryAt := A_TickCount+2000
     item.lastClickAt := 0,item.upgradeUnreadCount := 0,item.upgradeWarningAt := A_TickCount
     if count=1 || Mod(count,15)=0
@@ -220,12 +234,16 @@ UpgradeOnce(item) {
     global gCardAction,gCardInterruptEpoch,gRunning
     previous := gCardAction,gCardAction := "upgrading"
     try {
+        resumes := 0
         loop {
             epoch := gCardInterruptEpoch
             result := UpgradeOnceAction(item)
             if epoch=gCardInterruptEpoch || !gRunning || item.complete
                 return result
-            ; Keep this exact recorded unit/priority after the card.
+            ; Keep this exact recorded unit/priority after the card, at most
+            ; CARD_RESUME_LIMIT times per call.
+            if ++resumes>CARD_RESUME_LIMIT
+                return result
         }
     } finally gCardAction := previous
 }
@@ -325,6 +343,20 @@ UpgradeOnceAction(item) {
             ClearCardChoice()
             return false
         }
+        ; F will not open: bounded, then every unfinished unit is given up.
+        if reason="manager" && NoteManagerOpenFailure()
+            return false
+        ; A tile that cannot be matched to this purchase (bottom row, missing,
+        ; scroll trouble): retried at most MANAGER_LOOKUP_LIMIT times per audit
+        ; cycle. Then the build is audited, or (audits used up) the unit is
+        ; given up as unreachable and the others go on.
+        if (reason="mismatch" || reason="missing" || reason="scroll") && NoteManagerLookupMiss(item.id)>=MANAGER_LOOKUP_LIMIT {
+            SaveUpgradeDiagnostic(item)
+            EscalateManagerLookup(item,reason)
+            CloseUnitPanel()
+            ResetUpgradeSelection()
+            return false
+        }
         item.openFailures := (item.HasProp("openFailures")?item.openFailures:0)+1
         if reason="manager" || item.openFailures<3 {
             UpgradeWarning(item,"tile not found in the unit manager" (reason=""?"":" (" reason ")") "; retry the same priority.")
@@ -338,6 +370,13 @@ UpgradeOnceAction(item) {
     entry := found.entry
     if TileIdentityMismatch(item,entry) {
         SaveUpgradeDiagnostic(item)
+        ; The same kind of disagreement: bounded by the same lookup limit.
+        if NoteManagerLookupMiss(item.id)>=MANAGER_LOOKUP_LIMIT {
+            EscalateManagerLookup(item,"portrait mismatch")
+            CloseUnitPanel()
+            ResetUpgradeSelection()
+            return false
+        }
         return DeferUnitUpgrade(item,"the purchase list and the unit manager disagree about this tile. No upgrade clicked.")
     }
     level := entry.filled,finite := item.target!=99

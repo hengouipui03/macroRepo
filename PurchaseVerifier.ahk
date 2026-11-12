@@ -205,3 +205,18 @@ ProbePurchase(unit,point) {
     judged.evidence := ev
     return judged
 }
+
+; The slot counter right now, read the way the audit needs it: select the
+; unit, read the hotbar, drop the hold with Q. {n,max}, or false when the
+; counter cannot be read (or the run stopped). One attempt; callers bound
+; their own retries.
+ProbeSlotCounter(unit) {
+    global gRunning,PURCHASE_SETTLE_MS
+    if !gRunning || !SelectPlacementUnit(unit)
+        return false
+    counter := false
+    if ActionPause(PURCHASE_SETTLE_MS)
+        counter := ReadPurchaseState(unit).counter
+    CancelUnitPreview()
+    return counter
+}

@@ -5,7 +5,7 @@ import subprocess
 from UpgradeRegressionTests import ROOT, RUNTIME, function
 
 RESETS = ["ResetPlacementSearch", "ResetPlacedUnits", "ResetCardSelection",
-          "ResetMatchCardContext", "ResetEndGameFlow", "ResetUnitManagerState"]
+          "ResetMatchCardContext", "ResetEndGameFlow", "ResetUnitManagerState", "ResetBuildAudit"]
 
 phase_logic = "\n".join(function("MatchState.ahk", n) for n in ["SetPhase", "InPhase", "ResetMatchState", "EndRun", "ResultOrEndRun"])
 phase_fixture = r"""
@@ -40,7 +40,7 @@ try {
     ; ResetMatchState calls every module reset exactly once and leaves the phase alone.
     calls := []
     ResetMatchState()
-    expected := ["ResetPlacementSearch","ResetPlacedUnits","ResetCardSelection","ResetMatchCardContext","ResetEndGameFlow","ResetUnitManagerState"]
+    expected := ["ResetPlacementSearch","ResetPlacedUnits","ResetCardSelection","ResetMatchCardContext","ResetEndGameFlow","ResetUnitManagerState","ResetBuildAudit"]
     Assert(calls.Length=expected.Length,"ResetMatchState made " calls.Length " reset calls, expected " expected.Length)
     for name in expected {
         found := 0
