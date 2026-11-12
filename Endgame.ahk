@@ -167,6 +167,7 @@ TryEndState() {
         return false
     if !gEndHandling {
         gEndHandling := true
+        SetPhase("Ended")
         ResetIdleKeepAlive()
         ResetUpgradeSelection()
         ResetCardSelection()

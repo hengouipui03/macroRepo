@@ -74,7 +74,7 @@ Assert(value,message) {
 '''
 
 manager_logic=(ROOT/'UnitManager.ahk').read_text(encoding='utf-8-sig')
-manager_logic += '\n'+function('AAPathMacro.ahk','BeginInputAction')+'\n'+function('AAPathMacro.ahk','EndInputAction')
+manager_logic += '\n'+function('MatchState.ahk','SetPhase')+'\n'+function('MatchState.ahk','InPhase')+'\n'+function('AAPathMacro.ahk','BeginInputAction')+'\n'+function('AAPathMacro.ahk','EndInputAction')
 manager_logic=manager_logic.replace('A_TickCount','testNow')
 manager_fixture=r'''
 #Requires AutoHotkey v2.0
@@ -84,8 +84,9 @@ global gRunning := true,UNIT_ACTION_MS := 200,REF_W := 800,REF_H := 600,gPending
 global windowFocused := false
 global ACTION_GAP_MS := 300,gLastInputFinishedAt := 0,gInputEpoch := 0,testNow := 10000
 global gPlacements := [],managerVisible := false,scroll := 180,panel := false,wantedNumber := 0,selected := [],downs := 0,ups := 0,managerReads := 0,readFailure := false
-global gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerPhase := true,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
+global gUnitManagerOpen := false,gUnitManagerConfirmed := false,gPhase := "Upgrading",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Ended"],gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
 global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := "",UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
+global gUnitManagerFinished := false,gManagerFallbackProbe := false
 global fPresses := 0,blindVision := false,gManagerTile := 0,gSlotPortraits := Map(),gUnitManagerClosedForCards := false
 try {
     ; The game lists the newest unit top-left, reading left to right, so with
@@ -112,8 +113,13 @@ try {
     Assert(!SelectManagedUnit(1) && selected.Length=count,"manager selection interfered with an unresolved purchase")
     gPendingPlacement := 0
     ; Before every unit is placed, F is never pressed.
-    EndUnitManagerPhase(),managerVisible := false,before := fPresses,count := selected.Length
+    SetPhase("Placing"),managerVisible := false,before := fPresses,count := selected.Length
     Assert(!SelectManagedUnit(1) && fPresses=before && !managerVisible && selected.Length=count,"F was pressed before all units were placed")
+    BeginUnitManagerPhase()
+    Assert(InPhase("Upgrading"),"BeginUnitManagerPhase did not enter the Upgrading phase")
+    ; All targets reached: the phase stays Upgrading, but F stays shut until a target is raised.
+    EndUnitManagerPhase(),managerVisible := false,before := fPresses,count := selected.Length
+    Assert(InPhase("Upgrading") && !SelectManagedUnit(1) && fPresses=before && !managerVisible,"F was pressed after every upgrade target was reached")
     BeginUnitManagerPhase()
     readFailure := true,count := selected.Length,before := fPresses
     Assert(!SelectManagedUnit(1) && selected.Length=count && fPresses=before,"missing manager vision caused F or an unverified portrait click")

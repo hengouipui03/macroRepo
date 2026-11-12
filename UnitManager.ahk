@@ -8,28 +8,53 @@
 ; manager really is closed, so a misread can never toggle it shut.
 global gUnitManagerOpen := false
 global gUnitManagerConfirmed := false
-global gUnitManagerPhase := false,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
+global gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
+; Set when every upgrade target is reached and the manager was closed for good;
+; cleared by the next ResetUnitManagerState/BeginUnitManagerPhase. The phase
+; itself stays Upgrading, so this only keeps F shut until a target is raised.
+global gUnitManagerFinished := false
 global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := ""
 global UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
 global gUnitManagerClosedForCards := false
 ; The last tile found for a purchase, valid only while the list has not moved.
 global gManagerTile := 0,gSlotPortraits := Map()
 
-BeginUnitManagerPhase(message := "All units placed. The F unit manager opens now and stays open while upgrades remain.") {
-    global gUnitManagerPhase,gUnitManagerLastF,gUnitManagerCheckAt,gUnitManagerUnconfirmedF,gUnitManagerLockUntil
-    gUnitManagerPhase := true,gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
-    gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0
+; All of this module's per-match state. Called by ResetMatchState, and by
+; the phase transitions below.
+ResetUnitManagerState() {
+    global gUnitManagerOpen,gUnitManagerConfirmed,gUnitManagerLastF,gUnitManagerCheckAt
+    global gUnitManagerUnconfirmedF,gUnitManagerLockUntil,gUnitManagerFailure,gUnitManagerClosedForCards
+    global gUnitManagerFinished
+    gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerClosedForCards := false
+    gUnitManagerLastF := 0,gUnitManagerCheckAt := 0,gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0
+    gUnitManagerFailure := "",gUnitManagerFinished := false
     ResetManagerTileMemory()
+}
+
+; Upgrading is the only phase in which F may open the manager.
+BeginUnitManagerPhase(message := "All units placed. The F unit manager opens now and stays open while upgrades remain.") {
+    SetPhase("Upgrading")
+    ResetUnitManagerState()
     Log(message)
 }
 
+; Every upgrade target is reached and the manager has been closed: forget the
+; manager's state and keep F shut until BeginUnitManagerPhase (a raised target).
+; The phase itself is left to the run loop (Ended / Idle).
 EndUnitManagerPhase() {
-    global gUnitManagerPhase,gUnitManagerOpen,gUnitManagerConfirmed,gUnitManagerLastF,gUnitManagerCheckAt
-    global gUnitManagerUnconfirmedF,gUnitManagerLockUntil,gUnitManagerFailure,gUnitManagerClosedForCards
-    gUnitManagerPhase := false,gUnitManagerOpen := false,gUnitManagerConfirmed := false,gUnitManagerClosedForCards := false
-    gUnitManagerLastF := 0,gUnitManagerCheckAt := 0,gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0
-    gUnitManagerFailure := ""
-    ResetManagerTileMemory()
+    global gUnitManagerFinished
+    ResetUnitManagerState()
+    gUnitManagerFinished := true
+}
+
+; TODO(step 2): removed together with ManagerHoldsUnrecordedUnit.
+global gManagerFallbackProbe := false
+UnitManagerMayOpen() => UnitManagerActive() || gManagerFallbackProbe
+
+; True while the F manager is wanted: Upgrading, and not every target done.
+UnitManagerActive() {
+    global gUnitManagerFinished
+    return InPhase("Upgrading") && !gUnitManagerFinished
 }
 
 ResetManagerTileMemory() {
@@ -57,10 +82,10 @@ FocusUnitManagerGame() {
 }
 
 PressUnitManagerKey(closing := false) {
-    global UNIT_ACTION_MS,gRunning,gUnitManagerPhase,gUnitManagerLastF
+    global UNIT_ACTION_MS,gRunning,gUnitManagerLastF
     ; Hard rule: no F to open the manager before the whole build is placed.
     ; Closing (after two readings confirm it is open) is allowed any time.
-    if !gRunning || (!gUnitManagerPhase && !closing) || !FocusUnitManagerGame() || !BeginInputAction(true,UNIT_ACTION_MS)
+    if !gRunning || (!UnitManagerMayOpen() && !closing) || !FocusUnitManagerGame() || !BeginInputAction(true,UNIT_ACTION_MS)
         return false
     gUnitManagerLastF := A_TickCount
     ForgetManagerTile()
@@ -83,9 +108,9 @@ UnitManagerBlocked(fresh := false) {
 ; closed, F is never repeated while a previous press may still be animating,
 ; and two presses that never produced an "open" reading stop F for 20 seconds.
 EnsureUnitManagerOpen() {
-    global gUnitManagerOpen,gUnitManagerConfirmed,gUnitManagerPhase,gUnitManagerLastF,gRunning
+    global gUnitManagerOpen,gUnitManagerConfirmed,gUnitManagerLastF,gRunning
     global gUnitManagerUnconfirmedF,gUnitManagerLockUntil,UNIT_MANAGER_F_COOLDOWN_MS
-    if !gRunning || !gUnitManagerPhase
+    if !gRunning || !UnitManagerMayOpen()
         return false
     closedReads := 0
     Loop 14 {
@@ -127,8 +152,8 @@ EnsureUnitManagerOpen() {
 
 ; Watch-loop keep-alive for the manager: it must stay open all match.
 MaintainUnitManager() {
-    global gUnitManagerPhase,gUnitManagerCheckAt,gRunning,UNIT_MANAGER_CHECK_MS
-    if !gRunning || !gUnitManagerPhase || A_TickCount<gUnitManagerCheckAt || UnitManagerBlocked()
+    global gUnitManagerCheckAt,gRunning,UNIT_MANAGER_CHECK_MS
+    if !gRunning || !UnitManagerActive() || A_TickCount<gUnitManagerCheckAt || UnitManagerBlocked()
         return false
     gUnitManagerCheckAt := A_TickCount+UNIT_MANAGER_CHECK_MS
     state := ReadUnitManager()
@@ -143,8 +168,8 @@ MaintainUnitManager() {
 ; confirm it is closed. F is sent only when two readings agree it is open
 ; (at most two presses); mixed or unreadable readings never send F.
 CloseUnitManagerForCards() {
-    global gUnitManagerPhase,gUnitManagerClosedForCards,gRunning
-    if !gRunning || !gUnitManagerPhase
+    global gUnitManagerClosedForCards,gRunning
+    if !gRunning || !UnitManagerActive()
         return gRunning
     ; Marked even if nothing is pressed, so the unit is always reselected.
     gUnitManagerClosedForCards := true
@@ -189,11 +214,11 @@ CloseUnitManagerForCards() {
 ; current selection so the next upgrade reselects the correct top-priority
 ; unit through the manager before any R is pressed.
 ReopenUnitManagerAfterCards() {
-    global gUnitManagerPhase,gUnitManagerClosedForCards,gRunning
+    global gUnitManagerClosedForCards,gRunning
     if !gUnitManagerClosedForCards
         return true
     gUnitManagerClosedForCards := false
-    if !gRunning || !gUnitManagerPhase
+    if !gRunning || !UnitManagerActive()
         return true
     ResetUpgradeSelection()
     Log("Cards closed: reopen the unit manager and reselect the top-priority unit.")
@@ -412,10 +437,16 @@ SelectManagedUnit(purchaseId) {
 ; F manager is the fallback: one more unit than recorded flips the parity of
 ; its bottom row. F is opened for this check only and closed again.
 ManagerHoldsUnrecordedUnit() {
-    global gPlacements,gRunning,gUnitManagerPhase
-    if !gRunning || gUnitManagerPhase || HasCardChoice() || IsEndGameBlocking()
+    global gPlacements,gRunning,gManagerFallbackProbe
+    if !gRunning || InPhase("Upgrading") || HasCardChoice() || IsEndGameBlocking()
         return false
-    BeginUnitManagerPhase("The unit panel was not seen after the purchase; checking the F manager for the unit.")
+    ; TODO(step 2): this fallback is deleted. Until then it opens F for this one
+    ; check WITHOUT changing the phase (a phase change during placement
+    ; confused the card handler); gManagerFallbackProbe is read only by
+    ; UnitManagerMayOpen in this file.
+    ResetUnitManagerState()
+    gManagerFallbackProbe := true
+    Log("The unit panel was not seen after the purchase; checking the F manager for the unit.")
     found := false
     try {
         if (state := EnsureUnitManagerOpen()) && (state := ResetUnitManagerBottom(state)) {
@@ -424,7 +455,8 @@ ManagerHoldsUnrecordedUnit() {
         }
     } finally {
         CloseUnitManagerIfOpen("Unit manager check done; press F once to close it.")
-        EndUnitManagerPhase()
+        gManagerFallbackProbe := false
+        ResetUnitManagerState()
     }
     return found
 }

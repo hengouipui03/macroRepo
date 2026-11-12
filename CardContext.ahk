@@ -221,12 +221,12 @@ ReadModifiersForCards(words,geometry) {
 }
 
 RefreshMatchModifiers() {
-    global gRunning,gModifierReadAt,gMatchModifiers,gUnitManagerPhase
+    global gRunning,gModifierReadAt,gMatchModifiers
     ; The open F manager covers this panel, so it is never read once upgrades
     ; start (card effects are still added as they are chosen). During
     ; placement the values only change with cards, so a 30 s re-read is
     ; plenty: each OCR read costs up to a second between placement actions.
-    if !gRunning || A_TickCount<gModifierReadAt || HasCardChoice() || (IsSet(gUnitManagerPhase) && gUnitManagerPhase)
+    if !gRunning || A_TickCount<gModifierReadAt || HasCardChoice() || UnitManagerActive()
         return
     gModifierReadAt := A_TickCount+30000
     ; This crop is NEVER passed to card selection, card detection or clicking.

@@ -272,7 +272,9 @@ SaveFrameBmp(frame, path) {
     return true
 }
 
-ReadOcrRows(rx1, ry1, rx2, ry2,words := false,scale := 2) {
+; keepReading (optional) is a function that returns false to cut the read
+; short; the default keeps reading while the run is live (gRunning).
+ReadOcrRows(rx1, ry1, rx2, ry2,words := false,scale := 2,keepReading := 0) {
     global gOcrPid, gRunning, gLastOcrRows, gLastOcrRect, gLastOcrTime
     rect := rx1 "," ry1 "," rx2 "," ry2 ":" words ":" scale
     if rect = gLastOcrRect && A_TickCount - gLastOcrTime < 350
@@ -297,7 +299,7 @@ ReadOcrRows(rx1, ry1, rx2, ry2,words := false,scale := 2) {
         gOcrPid := pid
         deadline := A_TickCount + 8000
         while ProcessExist(pid) && A_TickCount < deadline {
-            if !gRunning {
+            if !(keepReading ? keepReading() : gRunning) {
                 ProcessClose pid
                 return rows
             }

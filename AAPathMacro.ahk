@@ -34,6 +34,9 @@ global gInputEpoch := 0
 global CAMERA_TILT_PIXELS := 420
 global BUTTONS_FILE := A_ScriptDir "\button_positions.ini"
 global gRunning := false
+; True from F6 until F7: the session is on even when the run loop has ended by
+; itself. Disconnect handling is gated on this, never on gRunning.
+global gSessionArmed := false
 global IDLE_KEEPALIVE_MS := 300000,gIdleKeepAliveAt := 0
 global gAttached := false
 global gMacroHwnd := 0
@@ -45,6 +48,7 @@ global gUnitControls := []
 global gStatus := 0
 global gActivityLog := 0
 
+#Include MatchState.ahk
 #Include UnitSettings.ahk
 #Include Placement.ahk
 #Include PlacementArea.ahk
@@ -795,8 +799,8 @@ EnsureRouteAndSpawn() {
     global gMapModel,gCameraOverheadReady,gPathToggleClicked,THREE_PATH_STAND
     ; F opens the manager only after every unit is placed. One left open from
     ; the last match hides the weather and Level Modifiers, so it is closed
-    ; now (one F, only after two readings confirm it is open).
-    EndUnitManagerPhase()
+    ; now (one F, only after two readings confirm it is open). The manager's
+    ; own state was cleared by ResetMatchState at Vote Start.
     CloseUnitManagerIfOpen("Unit manager left open from the last match; press F once to close it before placement.")
     gCameraOverheadReady := false,gPathToggleClicked := false
     ; New match: the vision forgets the last map's path colour (yellow on Sand Village).
@@ -1078,7 +1082,7 @@ ClearCardChoice() {
 }
 
 ClearCardChoiceAction() {
-    global gRunning,gCardSelection,gUnitManagerPhase,gUnitManagerClosedForCards
+    global gRunning,gCardSelection,gUnitManagerClosedForCards
     if !HasCardChoice() {
         if !gCardSelection {
             if gUnitManagerClosedForCards && WaitForCardChoiceClosed()
@@ -1542,10 +1546,9 @@ NavigateForPlacement() {
 
 RunMacro() {
     global gRunning, gPlacements, gMatchReported,gAwaitingReplayMap,gEndHandling
-    global gMatchWeather,gMapModel,gUnitManagerPhase,gQueueMode,gAwaitingLobby
+    global gMatchWeather,gMapModel,gQueueMode,gAwaitingLobby
     SaveUnitSettings()
     ResetIdleKeepAlive()
-    EndUnitManagerPhase()
     plan := ReadUnitPlan()
     returningToLobby := gAwaitingLobby
     if returningToLobby
@@ -1568,6 +1571,7 @@ RunMacro() {
                 Notify("Match already running. A fresh Vote Start is required for a new build.")
                 return
             }
+            SetPhase("Lobby")
             submittedAt := TryStartFromLobby(returningToLobby)
             if !submittedAt && (!gRunning || !gQueueMode) {
                 if gRunning
@@ -1576,7 +1580,7 @@ RunMacro() {
             }
         }
         if returningToLobby && gRunning
-            ResetEndGameFlow()
+            ResetMatchState()
         Notify("Waiting for Vote Start before any map preparation.")
         if gQueueMode {
             if (!voteVisible && !submittedAt) || !WaitForQueuedMatch(submittedAt) {
@@ -1592,11 +1596,10 @@ RunMacro() {
     }
     ; Only a fresh Vote Start releases the old endgame state. The map is
     ; scanned anew below, even when Replay takes us to another map layout.
-    ResetEndGameFlow()
+    ResetMatchState()
+    SetPhase("Preparing")
     Notify("Vote Start detected. Drawing minimap, setting overhead view, then navigating.")
     gMatchReported := false
-    ResetCardSelection()
-    ResetMatchCardContext()
     ReadMatchConditions()
     if !EnsureRouteAndSpawn()
         return SitOutMatch("Minimap preparation stopped. The Activity tab and minimap-debug.png show the missing signal.")
@@ -1622,9 +1625,8 @@ RunMacro() {
         }
     }
     Log("Starting ordered placement from the player along one side of the illuminated path.")
+    SetPhase("Placing")
     PreparePlacementMemory()
-    gPlacements := []
-    ResetPlacementSearch()
     LoadRememberedHillMisses()
     BeginPlacementRun()
     buildResult := PlaceConfiguredBuild(plan)
@@ -1652,7 +1654,7 @@ RunMacro() {
         }
         RefreshMatchModifiers()
         RefreshMatchWave()
-        if gUnitManagerPhase {
+        if UnitManagerActive() {
             MaintainUnitManager()
             UpgradePriorityPass()
             ; Every target reached: close the manager once and keep it closed.
@@ -1674,14 +1676,14 @@ RunMacro() {
     }
 }
 
-StartMacro(*) {
-    global gRunning, WINDOW_W, WINDOW_H,gUnitPreviewActive
-    global gMatchMode,gQueueMode
-    if gRunning
-        return
+; The steps every run start shares (F6 and the restart after a reconnect):
+; Roblox found, sized, attached and focused, the mode read, the run flag on.
+; Returns false, with a status message, when Roblox is not ready.
+PrepareRunStart() {
+    global gRunning,gUnitPreviewActive,gMatchMode,gQueueMode
     if !GetClient(&cx, &cy, &cw, &ch) {
         Notify("Open Roblox before starting.")
-        return
+        return false
     }
     ResizeRoblox()
     ; Refresh the attachment at every start, so dragging the Roblox window
@@ -1691,11 +1693,21 @@ StartMacro(*) {
     WinActivate "ahk_id " hwnd
     if !WinWaitActive("ahk_id " hwnd,,2) {
         Notify("Bring Roblox to the foreground before starting.")
-        return
+        return false
     }
     gQueueMode := gMatchMode.Text="Queue"
     gRunning := true
     gUnitPreviewActive := true
+    return true
+}
+
+StartMacro(*) {
+    global gRunning,gSessionArmed,gQueueMode
+    if gRunning
+        return
+    if !PrepareRunStart()
+        return
+    gSessionArmed := true
     BeginSessionLog()
     Notify("Running in " (gQueueMode?"Queue":"Solo") " mode. F7 stops immediately.")
     SetTimer CheckDisconnect, 3000
@@ -1719,6 +1731,8 @@ TestRoutePreparation(*) {
     gRunning := true
     try {
         ResizeRoblox()
+        ResetMatchState()
+        SetPhase("Preparing")
         if EnsureRouteAndSpawn() && NavigateAlongRoute()
             Notify("Route test complete. Player aligned with the route; no units placed.")
         else
@@ -1727,6 +1741,7 @@ TestRoutePreparation(*) {
         Notify("Route test stopped: " err.Message)
     } finally {
         gRunning := false
+        SetPhase("Idle")
         ReleaseMovementKeys()
     }
 }
@@ -1747,6 +1762,7 @@ RunMacroSafely() {
     finally {
         if gRunning {
             gRunning := false
+            SetPhase("Idle")
             ReleaseMovementKeys()
         }
         gMacroThreadActive := false
@@ -1754,7 +1770,8 @@ RunMacroSafely() {
 }
 
 StopMacro(*) {
-    global gReconnecting,gReconnectButton
+    global gReconnecting,gReconnectButton,gSessionArmed
+    gSessionArmed := false
     gReconnecting := false,gReconnectButton := false
     SetTimer CheckDisconnect, 0
     SetTimer ReconnectAndRestart, 0
@@ -1764,13 +1781,14 @@ StopMacro(*) {
 }
 
 ; Everything F7 does to the running action: inputs released, waits and OCR
-; cut short, the manager phase ended.
+; cut short, the phase back to Idle.
 AbandonCurrentAction() {
     global gRunning, gOcrPid, gInputEpoch
     gInputEpoch += 1
     gRunning := false
     ResetIdleKeepAlive()
-    EndUnitManagerPhase()
+    SetPhase("Idle")
+    ResetUnitManagerState()
     if gOcrPid && ProcessExist(gOcrPid) {
         try ProcessClose gOcrPid
     }
@@ -1789,26 +1807,19 @@ IsDisconnectGrey(color) {
 }
 
 CheckDisconnect() {
-    global gRunning,gReconnecting,gReconnectButton,gOcrPid,gInputEpoch,gMacroThreadActive
-    if gReconnecting || gOcrPid || !HasDisconnectPanel()
+    global gSessionArmed,gRunning,gReconnecting,gReconnectButton,gOcrPid,gInputEpoch,gMacroThreadActive
+    ; Gated on the session (F6 until F7), not on the run loop: if the run loop
+    ; ended by itself while F6 is still on, Reconnect must still work. This
+    ; function never writes gRunning; the OCR read is told to stop on F7 only.
+    if !gSessionArmed || gReconnecting || gOcrPid || !HasDisconnectPanel()
         return
-    ; F7 cancels this timer, so it only runs while the F6 session is on. If the
-    ; run loop ended by itself (gRunning false, no run thread), Reconnect must
-    ; still work. The OCR read stops while gRunning is false, so it is held true
-    ; for the read and restored if no dialog is confirmed.
     runEnded := !gRunning
-    if runEnded {
-        if gMacroThreadActive
-            return
-        gRunning := true
-    }
-    epoch := gInputEpoch
-    button := FindReconnectButton(&disconnected)
-    if !button || !gRunning || epoch!=gInputEpoch {
-        if runEnded && epoch=gInputEpoch
-            gRunning := false
+    if runEnded && gMacroThreadActive
         return
-    }
+    epoch := gInputEpoch
+    button := FindReconnectButton(&disconnected,() => gSessionArmed)
+    if !button || !gSessionArmed || epoch!=gInputEpoch
+        return
     if runEnded
         Log("The run loop had ended without F7; the Disconnected dialog is still handled.")
     gReconnecting := true,gReconnectButton := button
@@ -1818,14 +1829,16 @@ CheckDisconnect() {
 }
 
 ; Read individual words so Leave and Reconnect on the same line stay separate.
-FindReconnectButton(&disconnected) {
+; keepReading (optional) is the OCR keep-going predicate; the default keeps
+; reading while the run is live (gRunning).
+FindReconnectButton(&disconnected,keepReading := 0) {
     global REF_W,REF_H
     disconnected := false
     hwnd := FindRoblox()
     if !hwnd || !GetClient(&cx,&cy,&cw,&ch)
         return false
     titleY := 0,button := false
-    for word in ReadOcrRows(220,185,580,425,true) {
+    for word in ReadOcrRows(220,185,580,425,true,2,keepReading) {
         switch NormalizeWords(word.text) {
         case "disconnected": titleY := word.y
         case "reconnect": button := word
@@ -1895,9 +1908,13 @@ ReconnectAndRestart() {
                 Log("Reconnect click " clicks " sent. Waiting for the lobby.")
             }
         } else if !disconnected && ReadVisibleLobbyPlay() && gRunning && gReconnecting {
+            ; The restart takes the same steps as F6 (Roblox sized, attached,
+            ; focused). If Roblox is not ready yet, keep waiting in this loop.
+            if !PrepareRunStart()
+                continue
             gReconnecting := false
-            ResetEndGameFlow()
-            ResetCardSelection()
+            ResetMatchState()
+            SetPhase("Lobby")
             Notify("Reconnected: back in the lobby after " clicks " Reconnect click(s). Restarting from Play.")
             SetTimer RunMacroSafely, -10
             return

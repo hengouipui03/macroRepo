@@ -4,6 +4,14 @@ global PLACEMENT_LAYOUT_FILE := A_ScriptDir "\placement_layouts.ini"
 global gRunRecording := false,gRunMap := "",gLayoutValidation := Map()
 global gUpgradeSelectedId := 0
 
+; Per-match state of the placed-unit record (called by ResetMatchState).
+ResetPlacedUnits() {
+    global gPlacements
+    gPlacements := []
+    ResetUpgradeSelection()
+    ResetPlacementArea()
+}
+
 BeginPlacementRun() {
     global gRunRecording,gRunMap,gMapModel,gLayoutValidation
     gRunRecording := true,gRunMap := gMapModel ? gMapModel.id : "",gLayoutValidation := Map()
