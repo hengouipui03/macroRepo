@@ -38,7 +38,7 @@ for name in ["PlacementFailureLimitReached", "ResetPlacementFailureStreak", "Rec
 logic += "\n" + function("Placement.ahk", "TryPlacementPoints")
 logic += "\n" + function("Placement.ahk", "PlaceConfiguredBuildAction")
 logic += "\n" + function("Placement.ahk", "MissingBuildPlacements")
-for name in ["SlotTargetCount", "CapSlot", "ManagerLookupGivesUp", "MarkUnitUnreachable", "NoteManagerOpenFailure", "NoteManagerTileFound"]:
+for name in ["SlotTargetCount", "CapSlot", "ManagerLookupNeedsRecheck", "MarkUnitUnreachable", "NoteManagerOpenFailure", "NoteManagerTileFound"]:
     logic += "\n" + function("BuildLimits.ahk", name)
 logic += "\n" + function("PlacementArea.ahk", "AcceptCurrentPlacementArea")
 logic = logic.replace("A_TickCount", "testNow")
@@ -61,7 +61,7 @@ global MANAGER_LOOKUP_LIMIT := 6,YEN_WAIT_ROUND_LIMIT := 30,MANAGER_OPEN_FAIL_LI
 global BUILD_COPY_ATTEMPT_LIMIT := 40,BUILD_RELOCATE_WAIT_LIMIT := 20,HILL_RETRY_LIMIT := 12,CARD_RESUME_LIMIT := 5,gPathVisionErrors := 0,PATH_VISION_ERROR_LIMIT := 6
 global gPendingPlacement := 0,gPlacementAttemptClicked := false,spotValid := false,slotSelections := 0,placementClicks := 0
 global gPlacementAreaFailures := Map(),gRunViewMoved := false,gFailedPlacementSpots := [],gPlacementBlockedEdges := [],gPlacementEdgeMisses := Map(),gPlacementProfile := ""
-global blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
+global gKnownPortraits := Map(),rechecks := 0,blockedUnit := 0,gHillPlacementUnavailable := false,schedulerMode := false,stopAt := 0,modelFails := 0,hillBlocked := false
 global blockReason := "scroll"
 global moveCalls := 0,shiftReads := 0,trackingOkay := true,cameraShifts := [{dx:0,dy:30},{dx:0,dy:0}]
 global gPlacementRelocateRetryAt := 0,PLACEMENT_FAILURE_LIMIT := 5,gConsecutivePlacementFailures := 0
@@ -360,26 +360,25 @@ try {
     schedulerMode := false,gRunning := true,hillBlocked := false
 
     ; Manager lookups that keep failing ("the bottom row disagrees with the
-    ; record", "reached the top without #N"): retried at the same priority at
-    ; most MANAGER_LOOKUP_LIMIT times, then the unit is skipped as unreachable,
-    ; not unfinished; the found units go on in priority order.
+    ; record", "reached the top without #N"): after MANAGER_LOOKUP_LIMIT tries
+    ; the record is checked against the manager; the unit is never skipped and
+    ; lower priorities keep waiting. Once its tile is found it goes first.
     for reason in ["mismatch","missing"] {
         a := Unit(1,1),b := Unit(2,1),c := Unit(3,1),gPlacements := [a,b,c],levels[1] := 0,levels[2] := 0,levels[3] := 0,clicks := 0
-        blockedUnit := 1,blockReason := reason,gPendingPlacement := 0,gLookupMisses := Map()
+        blockedUnit := 1,blockReason := reason,gPendingPlacement := 0,gLookupMisses := Map(),rechecks := 0
         ResetUpgradeSelection()
-        passes := 0
-        while !(a.HasProp("unreachable") && a.unreachable) && passes<60 {
-            Assert(levels[2]=0 && levels[3]=0,reason ": a lower priority ran before the limit was used up")
+        Loop 200 {
             UpgradePriorityPass()
-            testNow += 2100,passes += 1
+            testNow += 2100
         }
-        Assert(a.HasProp("unreachable") && a.unreachable && !a.complete && gLookupMisses[1]=MANAGER_LOOKUP_LIMIT,reason ": the unit was not given up after exactly " MANAGER_LOOKUP_LIMIT " misses")
-        Assert(UpgradeQueue().Length=2 && UpgradeQueue()[1].id=2,reason ": an unreachable unit still blocked the queue")
-        Loop 12 {
+        Assert(rechecks>=1 && !(a.HasProp("unreachable") && a.unreachable) && !a.complete,reason ": the record was not rechecked, or the unit was skipped")
+        Assert(levels[2]=0 && levels[3]=0,reason ": a lower priority ran while #1's tile was still being looked for")
+        blockedUnit := 0
+        Loop 24 {
             UpgradePriorityPass()
             testNow += 700
         }
-        Assert(b.complete && c.complete && levels[2]=1 && levels[3]=1 && levels[1]=0,reason ": found units were not upgraded after the missing one was skipped")
+        Assert(a.complete && b.complete && c.complete && levels[1]=1 && levels[2]=1 && levels[3]=1,reason ": the units were not upgraded in priority order once #1 was found")
     }
     blockedUnit := 0,blockReason := "scroll"
 
@@ -401,7 +400,7 @@ try {
     Assert(result="complete" && placeTries=YEN_WAIT_ROUND_LIMIT && gSlotCaps.Has(1),"a Yen wait that never ended was not bounded by YEN_WAIT_ROUND_LIMIT (" placeTries " waits, " result ")")
     yenShortMode := false,gSlotCaps := Map()
     ResetPlacementFailureStreak()
-    FileAppend "PASS: manager lookup limit skips the unreachable unit and the found units go on, bounded build loop; checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; tile upgrades: exact targets, slow bars, Yen waits, grey Max, wrong-portrait refusal, MAX targets keep clicking without a counter, a passing grey frame or one wrong level never completes a unit, escalating back-off; build order kept (same unit retried; only Hill-only without Hill lets later units go first); no duplicate purchases; stop handling.`n","*"
+    FileAppend "PASS: manager lookup limit rechecks the record and never skips the unit, bounded build loop; checkpoint 1 then 2 then 3 after five misses; final checkpoint keeps placing; failed travel retains destination; old coordinates do not block manager upgrades; tile upgrades: exact targets, slow bars, Yen waits, grey Max, wrong-portrait refusal, MAX targets keep clicking without a counter, a passing grey frame or one wrong level never completes a unit, escalating back-off; build order kept (same unit retried; only Hill-only without Hill lets later units go first); no duplicate purchases; stop handling.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message " (line " err.Line ")`n" err.Stack,"*"
@@ -425,6 +424,12 @@ Log(message,*) {
 }
 ClearCardChoice(*) => true
 SaveUpgradeDiagnostic(*) => 0
+; The end-of-build manager scan is covered by CheckpointManagerTests.py.
+VerifyBuildWithManager(*) => true
+RecheckRecordForLookup(item,*) {
+    global rechecks,gLookupMisses
+    rechecks += 1,gLookupMisses[item.id] := 0
+}
 PlacementShortOfYen(*) => false
 WaitForPlacementYen(*) => yenShortMode
 TeleportBackToSpawn(*) {

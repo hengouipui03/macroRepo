@@ -1,6 +1,6 @@
 ﻿"""Existing models and card overlays must never count as fresh purchases; the
-unit panel confirms a purchase and the F unit manager is the fallback when the
-panel never shows."""
+unit panel confirms a purchase only straight after the macro's own click (no
+card in between), and the exact F unit manager count decides otherwise."""
 import subprocess
 from UpgradeRegressionTests import ROOT,RUNTIME,function
 
@@ -121,6 +121,20 @@ try {
     hidePanels := false
     ResetPlacementFailureStreak()
 
+    ; The logged phantom: a card came after the purchase click, and a unit
+    ; panel was open once it closed. That panel proves nothing; the spot is
+    ; empty, so the manager count decides "absent" and nothing is recorded.
+    gPlacements := [],registrations := 0,buys := 1,models := Map(),modelMode := true,panel := true,cards := false
+    stale := Pending(1,1),stale.clickEpoch := gCardInterruptEpoch-1,gPendingPlacement := stale
+    managerHolds := false,managerChecks := 0,gFailedPlacementSpots := []
+    Assert(!FinishPlacement(unit,stale) && registrations=0,"a panel left open across a card was accepted as the purchase")
+    Assert(!RecoverPendingPlacement(unit) && registrations=0 && managerChecks=1 && !gPendingPlacement,"a stale panel recorded a unit instead of letting the manager count decide")
+    ; The same, but the unit really went down: the reselect probe finds it.
+    models[400 "," 330] := true,panel := true,managerChecks := 0
+    stale := Pending(1,1),stale.clickEpoch := gCardInterruptEpoch-1,gPendingPlacement := stale
+    Assert(RecoverPendingPlacement(unit) && registrations=1 && managerChecks=0,"a real unit was not confirmed by a fresh reselect after a card")
+    modelMode := false,models := Map(),ResetPlacementFailureStreak()
+
     gMapModel := {checkpointIndex:3},gPlacements := [],registrations := 0,buys := 0,models := Map(),panel := false
     unit := {slot:1,name:"Unit 1",count:1,enabled:true},gConsecutivePlacementFailures := 5
     Assert(!PlacementFailureLimitReached() && TryPlacementCandidateAction(unit,point) && buys=1,"checkpoint 3 did not keep placing after five misses")
@@ -132,7 +146,7 @@ try {
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard overwrote an unresolved purchase")
     gPendingPlacement := 0,attempt.pendingCopy := 2
     Assert(!PlacementPurchaseReady(attempt),"last-moment purchase guard accepted the wrong copy number")
-    FileAppend "PASS: five actual rejected purchases counted once each; sixth buy blocked after rescan; side panel alone confirms a bound purchase; no UPG OCR; all 16 startup purchases across six slots advance; F manager fallback when the panel never shows; target four never buys five; existing-model/card/duplicate guards; delayed panel recovery and interruptions.`n","*"
+    FileAppend "PASS: five actual rejected purchases counted once each; sixth buy blocked after rescan; side panel alone confirms a bound purchase; no UPG OCR; all 16 startup purchases across six slots advance; F manager count when the panel never shows; a panel left open across a card is not proof; target four never buys five; existing-model/card/duplicate guards; delayed panel recovery and interruptions.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack,"*"
@@ -144,10 +158,10 @@ Assert(condition,message) {
 }
 Pending(slot,copy) => {x:400,y:330,pendingSlot:slot,pendingCopy:copy}
 IsEndGameBlocking(*) => false
-ManagerHoldsUnrecordedUnit(*) {
+ManagerPurchaseVerdict(*) {
     global managerChecks
     managerChecks += 1
-    return managerHolds
+    return managerHolds?"placed":"absent"
 }
 HasCardChoice(*) => cards
 HasUnitPanel(*) => panel
@@ -169,6 +183,11 @@ PlacementClickRef(x,y,guard := false,purchase := 0) {
         if !PlacementPurchaseReady(purchase)
             return false
         gPendingPlacement := purchase,gPlacementAttemptClicked := true
+    }
+    ; Same stamp as the real PlacementClickRef: clicks on the pending spot.
+    if gPendingPlacement && Abs(x-gPendingPlacement.x)<1 && Abs(y-gPendingPlacement.y)<1
+        gPendingPlacement.clickEpoch := gCardInterruptEpoch
+    if purchase {
         buys += 1,purchased := true
         if !rejectPurchase
             models[x "," y] := true

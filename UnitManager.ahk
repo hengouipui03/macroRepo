@@ -1,7 +1,7 @@
 ﻿; Select recorded purchase #N from the F manager's two-column row order.
 ; F is pressed to OPEN the manager only after every configured unit has been
-; placed (the one exception: the short purchase check in
-; ManagerHoldsUnrecordedUnit, during placement). It then stays open while
+; placed (the one exception: the exact count in PlacementManagerScan, during
+; placement). It then stays open while
 ; upgrades remain. It is closed while a card
 ; is chosen (reopened right after, top-priority unit reselected) and once
 ; every upgrade target is reached. A manager left open from the last match is
@@ -16,8 +16,8 @@ global UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
 global gUnitManagerClosedForCards := false
 ; The last tile found for a purchase, valid only while the list has not moved.
 global gManagerTile := 0,gSlotPortraits := Map()
-; True only while ManagerHoldsUnrecordedUnit looks for a purchase whose unit
-; panel never showed: F may open the manager in the Placing phase then.
+; True only while PlacementManagerScan counts the manager during placement:
+; F may open the manager in the Placing phase then.
 global gManagerPurchaseCheck := false
 
 ; All of this module's per-match state. Called by ResetMatchState, and by
@@ -386,7 +386,7 @@ LocateManagedUnit(purchaseId) {
         return UnitManagerFail("mismatch")
     }
     cell := ManagedUnitCell(purchaseId,bottomCount)
-    pitch := Number(state["pitch"]),last := Number(state["last"]),offset := 0
+    pitch := Number(state["pitch"]),last := Number(state["last"]),offset := 0,still := 0
     limit := Ceil(gPlacements.Length/2)*8+10
     Loop limit {
         if !gRunning
@@ -401,48 +401,162 @@ LocateManagedUnit(purchaseId) {
             NoteManagerTileFound()
             return {state:state,entry:entry}
         }
-        oldLast := Number(state["last"])
-        if !ScrollUnitManager("Up",1)
-            return UnitManagerFail(HasCardChoice()?"card":"scroll")
-        next := ReadUnitManager()
-        if !next || next["open"]!="1" || !next.Has("last")
-            return UnitManagerFail(HasCardChoice()?"card":"manager")
-        delta := Mod(Number(next["last"])-oldLast+pitch*4,pitch)
-        if delta<1 {
+        if !(step := ManagerNotch("Up",state))
+            return UnitManagerFail(HasCardChoice()?"card":gUnitManagerFailure)
+        state := step.state
+        ; A list still settling looks exactly like its top: only two notches
+        ; in a row without movement mean the list really ended.
+        if step.delta<1 {
+            if ++still<2
+                continue
             Log("Reached the top of the unit manager without purchase #" purchaseId "; the manager shows fewer units than recorded. No tile clicked.")
             return UnitManagerFail("missing")
         }
-        ; One notch must move less than one row; never guess after a large jump.
-        if delta>pitch*.75 {
-            Log("Unit manager scroll did not yield a reliable next row; no tile clicked.")
-            return UnitManagerFail("scroll")
-        }
-        offset += delta,state := next
+        still := 0,offset += step.delta
     }
     return UnitManagerFail("scroll")
 }
 
-; The unit panel is the primary proof of a purchase. When it never showed, the
-; F manager is the fallback: one more unit than recorded flips the parity of
-; its bottom row. F is opened for this check only and closed again.
-ManagerHoldsUnrecordedUnit() {
-    global gPlacements,gRunning,gManagerPurchaseCheck
-    if !gRunning || !InPhase("Placing") || HasCardChoice() || IsEndGameBlocking()
+; One scroll notch and how far the rows moved (reference px, 0 = not at all).
+; A notch that seems not to have moved is read again after a short pause:
+; Roblox animates the scroll, and a slow frame must not look like the list
+; end. Returns {state,delta}, or false with gUnitManagerFailure set.
+ManagerNotch(direction,state) {
+    pitch := Number(state["pitch"]),oldLast := Number(state["last"])
+    if !ScrollUnitManager(direction,1)
+        return UnitManagerFail("scroll")
+    Loop 2 {
+        next := ReadUnitManager()
+        if !next || next["open"]!="1" || !next.Has("last")
+            return UnitManagerFail("manager")
+        moved := direction="Up"?Number(next["last"])-oldLast:oldLast-Number(next["last"])
+        delta := Mod(moved+pitch*4,pitch)
+        if delta>=1 || A_Index=2 || !ActionPause(250)
+            break
+    }
+    ; One notch must move less than one row; never guess after a large jump.
+    if delta>pitch*.75 {
+        Log("Unit manager scroll did not yield a reliable next row; no tile clicked.")
+        return UnitManagerFail("scroll")
+    }
+    return {state:next,delta:delta}
+}
+
+; The manager's rows on screen, top to bottom, each with its tiles left to
+; right. Rows whose tiles are cut off at the panel edge carry no tiles.
+ManagerRows(state) {
+    pitch := Number(state["pitch"]),rows := []
+    for text in StrSplit(state["entries"],";") {
+        if !(entry := ParseUnitManagerEntry(text))
+            continue
+        row := 0
+        for candidate in rows
+            if Abs(candidate.y-entry.row)<pitch*.22
+                row := candidate
+        if !row {
+            row := {y:entry.row,tiles:[]}
+            at := rows.Length+1
+            for index,other in rows
+                if entry.row<other.y {
+                    at := index
+                    break
+                }
+            rows.InsertAt(at,row)
+        }
+        row.tiles.InsertAt(entry.column=0?1:row.tiles.Length+1,entry)
+    }
+    return rows
+}
+
+; Every tile in the F manager, oldest purchase first (#1 = index 1), or
+; false when the list could not be read end to end. This is the ground truth
+; for what is placed: a unit on the map is always listed here.
+; The list is read from its top (newest, top-left) down to its bottom; each
+; end counts only after two notches without movement, and the bottom row must
+; agree with the total (one tile for an odd count, two for an even one).
+ScanManagerTiles() {
+    global gRunning,gPlacements
+    if !gRunning || !(state := EnsureUnitManagerOpen())
         return false
-    Log("The unit panel was not seen after the purchase; checking the F manager for the unit.")
-    gManagerPurchaseCheck := true
-    found := false
+    if !ScrollUnitManager("Up",Max(6,Ceil((gPlacements.Length+1)/2)*6+6))
+        return false
+    ; No tile row at all (nothing listed, or a frame not ready) is not a count.
+    state := ReadUnitManager()
+    if !state || state["open"]!="1" || !state.Has("last")
+        return false
+    still := 0
+    Loop 10 {
+        if !gRunning || UnitManagerBlocked() || !(step := ManagerNotch("Up",state))
+            return false
+        state := step.state,still := step.delta<1?still+1:0
+        if still>=2
+            break
+    }
+    if still<2
+        return false
+    pitch := Number(state["pitch"]),reading := [],lowest := -1
+    for row in ManagerRows(state) {
+        if !row.tiles.Length
+            continue
+        for entry in row.tiles
+            reading.Push(entry)
+        lowest := row.y
+    }
+    still := 0
+    Loop Max(10,Ceil((gPlacements.Length+1)/2)*8+10) {
+        if !gRunning || UnitManagerBlocked() || !(step := ManagerNotch("Down",state))
+            return false
+        state := step.state
+        if step.delta<1 {
+            if ++still>=2
+                break
+            continue
+        }
+        still := 0,lowest -= step.delta
+        ; Only rows below the last one already counted are new.
+        for row in ManagerRows(state) {
+            if !row.tiles.Length || row.y<=lowest+pitch*.5
+                continue
+            for entry in row.tiles
+                reading.Push(entry)
+            lowest := row.y
+        }
+    }
+    if still<2
+        return false
+    seen := state.Has("lastcount")?Integer(state["lastcount"]):0
+    if seen!=(Mod(reading.Length,2)?1:2) {
+        Log("Unit manager scan read " reading.Length " tiles, but its bottom row shows " seen "; scan not trusted.")
+        return false
+    }
+    tiles := [],index := reading.Length
+    while index>=1
+        tiles.Push(reading[index--])
+    return tiles
+}
+
+; Opens F during placement for one exact scan (ScanManagerTiles), then closes
+; it again. Two tries; false when the list could not be read end to end.
+; keepOpen leaves a successfully read manager open (upgrades start next).
+PlacementManagerScan(keepOpen := false) {
+    global gRunning,gManagerPurchaseCheck
+    if !gRunning || HasCardChoice() || IsEndGameBlocking()
+        return false
+    gManagerPurchaseCheck := true,tiles := false
     try {
-        if (state := EnsureUnitManagerOpen()) && (state := ResetUnitManagerBottom(state)) {
-            seen := state.Has("lastcount")?Integer(state["lastcount"]):0
-            found := seen && seen!=(Mod(gPlacements.Length,2)?1:2)
+        Loop 2 {
+            if tiles := ScanManagerTiles()
+                break
+            if !gRunning || HasCardChoice() || IsEndGameBlocking() || !ActionPause(400)
+                break
         }
     } finally {
-        CloseUnitManagerIfOpen("Unit manager check done; press F once to close it.")
+        if !(keepOpen && tiles)
+            CloseUnitManagerIfOpen("Unit manager check done; press F once to close it.")
         gManagerPurchaseCheck := false
         ResetUnitManagerState()
     }
-    return found
+    return tiles
 }
 
 ClickManagerPoint(x,y) {

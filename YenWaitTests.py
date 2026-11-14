@@ -118,7 +118,7 @@ MemoryRead(section,key,fallback := "") {
 }
 Log(*) => 0
 IsEndGameBlocking(*) => false
-ManagerHoldsUnrecordedUnit(*) => false
+ManagerPurchaseVerdict(*) => "absent"
 HasCardChoice(*) => false
 ClearCardChoice(*) => true
 ActionPause(ms,*) {

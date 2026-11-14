@@ -107,6 +107,7 @@ global gPlacements := [],managerVisible := false,scroll := 180,panel := false,wa
 global gUnitManagerOpen := false,gUnitManagerConfirmed := false,gPhase := "Upgrading",MATCH_PHASES := ["Idle","Lobby","Preparing","Placing","Upgrading","Watching","Ended"],gUnitManagerLastF := 0,gUnitManagerCheckAt := 0
 global gUnitManagerUnconfirmedF := 0,gUnitManagerLockUntil := 0,gUnitManagerFailure := "",UNIT_MANAGER_F_COOLDOWN_MS := 2500,UNIT_MANAGER_CHECK_MS := 3000
 global fPresses := 0,blindVision := false,gManagerTile := 0,gSlotPortraits := Map(),gUnitManagerClosedForCards := false
+global listed := 0,allowOverscroll := false,gManagerPurchaseCheck := false
 NoteManagerTileFound() {
 }
 try {
@@ -157,7 +158,26 @@ try {
     }
     Assert(fPresses-before<=2 && managerVisible,"misread manager state toggled F repeatedly")
     blindVision := false
-    FileAppend "PASS: newest-first layout: even count #1 bottom-right/#2 bottom-left, odd count #1 alone bottom-left; upward by row; bottom reset; one-notch upward scrolling; 20/19/9/1-unit layouts; no skipped purchases; one F for the whole match; no F before placement; reopen once; misread F guard.`n","*","UTF-8"
+    ; The exact scan: every tile, oldest first, top to bottom and back.
+    allowOverscroll := true
+    for total in [20,19,9,7,1] {
+        gPlacements := [],listed := 0
+        Loop total
+            gPlacements.Push({id:A_Index})
+        tiles := ScanManagerTiles()
+        Assert(tiles && tiles.Length=total,"the scan counted " (tiles?tiles.Length:"nothing") " of " total " tiles")
+    }
+    ; The logged case: 7 recorded, the manager lists 5. The scan says 5, and
+    ; the lookup reports "missing" only after the list really stopped moving.
+    gPlacements := []
+    Loop 7
+        gPlacements.Push({id:A_Index})
+    listed := 5,gManagerTile := 0
+    tiles := ScanManagerTiles()
+    Assert(tiles && tiles.Length=5,"the scan did not see the manager's 5 tiles for 7 recorded")
+    Assert(!LocateManagedUnit(7) && gUnitManagerFailure="missing","a purchase the manager does not list was not reported missing")
+    listed := 0,allowOverscroll := false
+    FileAppend "PASS: newest-first layout: even count #1 bottom-right/#2 bottom-left, odd count #1 alone bottom-left; upward by row; bottom reset; one-notch upward scrolling; 20/19/9/1-unit layouts; no skipped purchases; one F for the whole match; no F before placement; reopen once; misread F guard; exact scan of 20/19/9/7/1 tiles; 7 recorded vs 5 listed reported missing.`n","*","UTF-8"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack "`n","*","UTF-8"
@@ -179,7 +199,8 @@ VisionRequest(command) {
         return false
     if !managerVisible || blindVision
         return Map("status","ok","open","0")
-    entries := "",first := -1,last := -1,totalRows := Ceil(gPlacements.Length/2)
+    count := listed?listed:gPlacements.Length
+    entries := "",first := -1,last := -1,totalRows := Ceil(count/2)
     Loop totalRows {
         row := A_Index-1,y := 140+row*100-scroll
         if y>=110 && y<450 {
@@ -189,7 +210,7 @@ VisionRequest(command) {
             if y+30-30>=100 && y+30+30<=450 {
                 Loop 2 {
                     col := A_Index-1
-                    candidateId := gPlacements.Length-(row*2+col)
+                    candidateId := count-(row*2+col)
                     if candidateId>=1
                         entries .= (entries=""?"":";") col "," (col=0?570:710) "," (y+30) "," y
                 }
@@ -210,10 +231,10 @@ SendEvent(key) {
     if RegExMatch(key,"Wheel(Up|Down)\s+(\d+)",&match) {
         count := Integer(match[2])
         if match[1]="Down" {
-            downs += 1,scroll := Min(Max(0,(Ceil(gPlacements.Length/2)-3)*100+20),scroll+30*count)
+            downs += 1,scroll := Min(Max(0,(Ceil((listed?listed:gPlacements.Length)/2)-3)*100+20),scroll+30*count)
         } else {
-            Assert(count=1,"upward selection scrolling skipped more than one notch")
-            ups += 1,scroll := Max(0,scroll-30)
+            Assert(count=1 || allowOverscroll,"upward selection scrolling skipped more than one notch")
+            ups += 1,scroll := Max(0,scroll-30*count)
         }
     }
 }

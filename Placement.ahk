@@ -555,7 +555,7 @@ PlacementSearchDiagnostic(reason) {
 
 
 PlacementClickRef(rx,ry,guardCards := false,purchase := 0,allowUnitPanel := false) {
-    global gRunning,gPendingPlacement,gPlacementAttemptClicked,UNIT_ACTION_MS
+    global gRunning,gPendingPlacement,gPlacementAttemptClicked,UNIT_ACTION_MS,gCardInterruptEpoch
     if !gRunning || !ToScreen(rx,ry,&sx,&sy)
         return false
     hwnd := FindRoblox()
@@ -577,6 +577,10 @@ PlacementClickRef(rx,ry,guardCards := false,purchase := 0,allowUnitPanel := fals
             return false
         gPendingPlacement := purchase,gPlacementAttemptClicked := true
     }
+    ; A unit panel proves this purchase only when it follows the macro's own
+    ; click on the pending spot with no card in between (FinishPlacement).
+    if gPendingPlacement && Abs(rx-gPendingPlacement.x)<1 && Abs(ry-gPendingPlacement.y)<1
+        gPendingPlacement.clickEpoch := gCardInterruptEpoch
     SendEvent "{LButton down}"
     try return ActionPause(UNIT_ACTION_MS,false)
     finally {
@@ -781,11 +785,22 @@ CountSlotPlacements(slot) {
 ; Records a purchase proven by the unit panel (or, when the panel never
 ; showed, by the F unit manager: managerConfirmed).
 FinishPlacement(unit,point,managerConfirmed := false) {
-    global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses,gLastYenRead,gPlacements
+    global gPlacementYenWait,gPendingPlacement,gLastPlacedIndex,gPlacementPreferredSide,gPlacementEdgeMisses,gLastYenRead,gPlacements,gCardInterruptEpoch
     if !point || CandidateOccupied(point.x,point.y)
         return false
     if HasCardChoice() || (!managerConfirmed && !HasUnitPanel())
         return false
+    ; A panel that was already up, or that is still up after a card, may be
+    ; any unit's panel: it is not proof (that is how a card turned a missed
+    ; purchase into a recorded unit). RecoverPendingPlacement then reselects
+    ; the spot, and the exact F manager count decides.
+    if !managerConfirmed && (!point.HasProp("clickEpoch") || point.clickEpoch!=gCardInterruptEpoch) {
+        if !point.HasProp("stalePanelLogged") {
+            point.stalePanelLogged := true
+            Log(unit.name ": a unit panel is open, but not straight after this purchase click (card in between); it does not prove the purchase.")
+        }
+        return false
+    }
     point.panelSeen := true
     if !point.HasProp("pendingSlot") || point.pendingSlot!=unit.slot
         || point.pendingCopy!=CountSlotPlacements(unit.slot)+1 {
@@ -908,8 +923,9 @@ TrySelectUnitAt(point,timeout := 450,learn := false) {
 
 ; Settles a purchase click whose panel did not show at once. Never buys again:
 ; the spot is only re-selected (preview dropped first) to look for its panel;
-; when the panel never shows, the F unit manager decides
-; (ManagerHoldsUnrecordedUnit). Otherwise it is a failed purchase.
+; when the panel never shows, the exact F manager count decides
+; (ManagerPurchaseVerdict): one more unit = placed, the same count = the spot
+; would not take the unit (a failed purchase).
 RecoverPendingPlacement(unit) {
     global gRunning,gPendingPlacement,gCardInterruptEpoch
     point := gPendingPlacement
@@ -917,11 +933,9 @@ RecoverPendingPlacement(unit) {
         || point.pendingCopy!=CountSlotPlacements(unit.slot)+1 || HasCardChoice() || CandidateOccupied(point.x,point.y)
         return false
     before := CountSlotPlacements(unit.slot),epoch := gCardInterruptEpoch
-    if HasUnitPanel() {
-        point.panelSeen := true
-        if FinishPlacement(unit,point)
-            return true
-    }
+    ; FinishPlacement accepts this panel only if it follows the purchase click.
+    if HasUnitPanel() && FinishPlacement(unit,point)
+        return true
     ; Reselect only: an unreadable purchase must not be replaced by another buy.
     Loop 2 {
         if !CloseUnitPanel() || !CancelUnitPreview()
@@ -939,17 +953,18 @@ RecoverPendingPlacement(unit) {
         if !gRunning || HasCardChoice() || IsEndGameBlocking() || epoch!=gCardInterruptEpoch || gPendingPlacement!=point
             return false
     }
-    if point.HasProp("panelSeen") && point.panelSeen {
-        Log(unit.name ": purchase panel was seen; reselect this unit to confirm it without another purchase.")
+    ; Two completed selection-only probes found no model after the purchase wait.
+    ; The unit panel never showed, so the F manager count decides.
+    verdict := ManagerPurchaseVerdict(unit,point)
+    if verdict="placed"
+        return FinishPlacement(unit,point,true)
+    gPendingPlacement := 0
+    if verdict="unknown" {
+        ; Nothing proves the spot bad: keep it, and let the end-of-build
+        ; count settle whether a unit went down here.
+        Log(unit.name ": the F manager could not be counted; this purchase is not recorded and the spot is kept.")
         return false
     }
-    ; Two completed selection-only probes found no model after the purchase wait.
-    ; The unit panel never showed, so the F manager decides before this is a miss.
-    if ManagerHoldsUnrecordedUnit() {
-        Log(unit.name ": no unit panel was seen, but the F manager lists the new unit; recording it.")
-        return FinishPlacement(unit,point,true)
-    }
-    gPendingPlacement := 0
     RecordFailedPlacement(unit,point)
     ; Short of Yen: the spot itself was never tested, so it stays usable.
     if !point.HasProp("yenShort") || !point.yenShort {
@@ -1532,8 +1547,13 @@ PlaceConfiguredBuildAction(plan) {
         if !gRunning
             return "stopped"
         missing := MissingBuildPlacements(plan)
-        if missing=""
-            return "complete"
+        ; Complete only once the F manager agrees; units it shows were never
+        ; placed are dropped from the record and placed again by this loop.
+        if missing="" {
+            if VerifyBuildWithManager()
+                return "complete"
+            continue
+        }
         if !pendingLogAt || A_TickCount>=pendingLogAt {
             Notify("Placement pending: " missing ". Upgrades (F manager) start once every unit is placed.")
             pendingLogAt := A_TickCount+10000

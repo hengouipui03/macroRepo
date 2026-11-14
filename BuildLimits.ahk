@@ -1,12 +1,17 @@
 ﻿; Bounds for the build and for the unit manager: a slot held below its
 ; configured count when placement gives up on it (CapSlot), unit manager
-; lookups that keep failing (the unit is then skipped as unreachable) and an
-; F that will not open (upgrades pause for a cooldown, then try again).
+; lookups that keep failing (the record is then checked against the manager),
+; record repairs per match, and an F that will not open (upgrades pause for a
+; cooldown, then try again).
 
 ; Failed unit manager lookups for one purchase ("bottom row does not match",
-; "reached the top without it", portrait mismatch, scroll trouble) per match
-; before that unit is given up as unreachable.
+; "reached the top without it", portrait mismatch, scroll trouble) before the
+; record is checked against the manager (RecheckRecordForLookup). The unit is
+; never skipped for this: lower priorities keep waiting for it.
 global MANAGER_LOOKUP_LIMIT := 6
+; Times per match the record may lose units the F manager does not list.
+global RECORD_REPAIR_LIMIT := 2
+global gRecordRepairs := 0
 ; Consecutive lookups that failed only because F would not open (no card,
 ; no other reason) before upgrades pause for the cooldown below. The match is
 ; never given up: after the cooldown the same bounded attempts start again,
@@ -21,9 +26,9 @@ global gSlotCaps := Map()
 
 ; Per-match state (called by ResetMatchState).
 ResetBuildLimits() {
-    global gLookupMisses,gOpenFailures,gManagerCooldownUntil,gSlotCaps
+    global gLookupMisses,gOpenFailures,gManagerCooldownUntil,gSlotCaps,gRecordRepairs
     gLookupMisses := Map(),gOpenFailures := 0,gManagerCooldownUntil := 0
-    gSlotCaps := Map()
+    gSlotCaps := Map(),gRecordRepairs := 0
 }
 
 ; How many of this unit placement works towards: the configured count, or
@@ -46,20 +51,17 @@ CapSlot(unit,limit,reason) {
         DiscordWarn(text)
 }
 
-; Counts one failed tile lookup for this purchase. Once MANAGER_LOOKUP_LIMIT
-; is reached the unit is given up as unreachable (MarkUnitUnreachable) and
-; true is returned, so lower priorities are not held back by it.
-ManagerLookupGivesUp(item,reason) {
+; Counts one failed tile lookup for this purchase; true once
+; MANAGER_LOOKUP_LIMIT is reached (the caller then checks the record against
+; the manager, which also resets the count).
+ManagerLookupNeedsRecheck(item) {
     global gLookupMisses,MANAGER_LOOKUP_LIMIT
     gLookupMisses[item.id] := gLookupMisses.Get(item.id,0)+1
-    if gLookupMisses[item.id]<MANAGER_LOOKUP_LIMIT
-        return false
-    MarkUnitUnreachable(item,"the unit manager lookup failed " MANAGER_LOOKUP_LIMIT " times (" reason ")")
-    return true
+    return gLookupMisses[item.id]>=MANAGER_LOOKUP_LIMIT
 }
 
-; A unit the manager cannot reach is not unfinished: the upgrade queue skips
-; it so lower priorities are not held back by it.
+; A unit whose upgrade stays stuck (UPGRADE_DEFER_LIMIT) is not unfinished:
+; the upgrade queue skips it. Lookup failures never lead here.
 MarkUnitUnreachable(item,why) {
     item.unreachable := true
     Log("#" item.id " " item.name ": " why "; skipping it and continuing with the units that are found.")

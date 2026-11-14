@@ -1521,6 +1521,19 @@ RunMacro() {
                 MaintainUnitManager()
                 UpgradePriorityPass()
             }
+            ; The record check removed units the manager never listed: they
+            ; were not placed, so placement runs again for them.
+            if gRunning && MissingBuildPlacements(plan)!="" && !HasCardChoice() && !IsEndGameBlocking() {
+                CloseUnitManagerIfOpen("Units missing from the F manager will be placed; press F once to close it.")
+                ResetUnitManagerState()
+                SetPhase("Placing")
+                buildResult := PlaceConfiguredBuild(plan)
+                if buildResult!="complete"
+                    return buildResult="replay"?"replay":EndRun("Placement ended without a complete build (result '" buildResult "').")
+                Notify("Build placed: " gPlacements.Length " units. Watching upgrades/end screen.")
+                BeginUnitManagerPhase()
+                continue
+            }
             ; Every target reached: close the manager once and keep it closed.
             if gRunning && !UpgradeQueue().Length && !HasCardChoice() && !IsEndGameBlocking() {
                 CloseUnitManagerIfOpen("All upgrade targets reached; press F once to close the unit manager.")
