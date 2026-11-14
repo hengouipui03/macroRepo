@@ -1630,6 +1630,17 @@ TestRoutePreparation(*) {
     }
 }
 
+; Where a run-ending error came from: the variable or value it names, the
+; file and line, and the call chain, so one log is enough to find it.
+ErrorDetails(err) {
+    text := "Error detail:"
+    try text .= " what=" err.What
+    try text .= " | extra=" err.Extra
+    try text .= " | at " err.File ":" err.Line
+    try text .= "`n" err.Stack
+    return text
+}
+
 RunMacroSafely() {
     global gRunning,gMacroThreadActive
     gMacroThreadActive := true
@@ -1643,6 +1654,7 @@ RunMacroSafely() {
     }
     catch as err {
         Notify("Stopped: " err.Message)
+        Log(ErrorDetails(err))
         EndRun("error: " err.Message)
     }
     finally {

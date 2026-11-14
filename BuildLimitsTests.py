@@ -65,7 +65,7 @@ try {
     ResetBuildLimits()
     Assert(!gLookupMisses.Count && !gOpenFailures && !gSlotCaps.Count && !ManagerCooldownActive(),"ResetBuildLimits left state behind")
     Assert(SlotTargetCount(unit)=5,"a cap survived the per-match reset")
-    FileAppend "PASS: slot caps (one line, one Discord warning), lookup limit per purchase skips the unreachable unit, F cooldown bounded and non-blocking, per-match reset.`n","*"
+    FileAppend "PASS: slot caps (one line, one Discord warning), lookup limit per purchase asks for a record recheck and never skips the unit, F cooldown bounded and non-blocking, per-match reset.`n","*"
     ExitApp 0
 } catch as err {
     FileAppend "FAIL: " err.Message "`n" err.Stack,"*"

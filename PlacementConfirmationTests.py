@@ -133,7 +133,8 @@ try {
     models[400 "," 330] := true,panel := true,managerChecks := 0
     stale := Pending(1,1),stale.clickEpoch := gCardInterruptEpoch-1,gPendingPlacement := stale
     Assert(RecoverPendingPlacement(unit) && registrations=1 && managerChecks=0,"a real unit was not confirmed by a fresh reselect after a card")
-    modelMode := false,models := Map(),ResetPlacementFailureStreak()
+    ; Leave the fixture as the tests below expect it (model mode, no rejected spots).
+    models := Map(),gFailedPlacementSpots := [],ResetPlacementFailureStreak()
 
     gMapModel := {checkpointIndex:3},gPlacements := [],registrations := 0,buys := 0,models := Map(),panel := false
     unit := {slot:1,name:"Unit 1",count:1,enabled:true},gConsecutivePlacementFailures := 5

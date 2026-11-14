@@ -520,25 +520,25 @@ MatchTilesToRecord(tiles,slots) {
     global gKnownPortraits,PORTRAIT_SAME_LIMIT
     if tiles.Length>=slots.Length
         return {drop:[],extra:tiles.Length-slots.Length}
-    tileRuns := PortraitRuns(tiles),slotRuns := SlotRuns(slots)
-    skip := slotRuns.Length-tileRuns.Length
-    if skip<0 || slotRuns.Length>12
+    tileGroups := PortraitRuns(tiles),slotGroups := SlotRuns(slots)
+    skip := slotGroups.Length-tileGroups.Length
+    if skip<0 || slotGroups.Length>12
         return false
     found := 0,drop := []
-    Loop (1<<slotRuns.Length) {
+    Loop (1<<slotGroups.Length) {
         mask := A_Index-1,bits := 0,value := mask
         while value
             bits += value&1,value >>= 1
         if bits!=skip
             continue
         ok := true,candidate := [],t := 1
-        for index,run in slotRuns {
+        for index,run in slotGroups {
             if mask&(1<<(index-1)) {
                 Loop run.size
                     candidate.Push(run.first+A_Index-1)
                 continue
             }
-            tileRun := tileRuns[t++]
+            tileRun := tileGroups[t++]
             if tileRun.size>run.size
                 || (gKnownPortraits.Has(run.slot) && (tileRun.sig="" || PortraitDistance(tileRun.sig,gKnownPortraits[run.slot])>=PORTRAIT_SAME_LIMIT)) {
                 ok := false
