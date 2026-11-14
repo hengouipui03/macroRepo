@@ -1,13 +1,15 @@
-﻿; Result modal -> Next -> Replay -> wait for a fresh Vote Start.
+﻿; [Reward popups] -> Result modal -> Next -> Replay -> wait for a fresh Vote Start.
 global gEndHandling := false,gAwaitingReplayMap := false,gAwaitingLobby := false,gEndResult := ""
 global gEndNextClickAt := 0,gEndScreenAt := 0,gEndScreenCache := 0
-global gEndRewardsDone := false,gEndRewardSweepAt := 0
+global gEndRewardsDone := false,gEndRewardSweepAt := 0,gEndRewardOcrQuietUntil := 0
+; Reference-space band of the reward popup's "(Click anywhere to continue)".
+global END_REWARD_CAPTION := {x1:320,y1:498,x2:480,y2:518}
 
 ResetEndGameFlow() {
-    global gEndHandling,gAwaitingReplayMap,gAwaitingLobby,gEndResult,gEndNextClickAt,gEndScreenAt,gEndScreenCache,gEndRewardsDone,gEndRewardSweepAt
+    global gEndHandling,gAwaitingReplayMap,gAwaitingLobby,gEndResult,gEndNextClickAt,gEndScreenAt,gEndScreenCache,gEndRewardsDone,gEndRewardSweepAt,gEndRewardOcrQuietUntil
     gEndHandling := false,gAwaitingReplayMap := false,gAwaitingLobby := false,gEndResult := ""
     gEndNextClickAt := 0,gEndScreenAt := 0,gEndScreenCache := 0
-    gEndRewardsDone := false,gEndRewardSweepAt := 0
+    gEndRewardsDone := false,gEndRewardSweepAt := 0,gEndRewardOcrQuietUntil := 0
 }
 
 EndEmptyScreen() => {stage:"none",result:"",x:0,y:0}
@@ -30,7 +32,58 @@ EndScreenColours(frame) {
     if UnitPanelColourHits(frame,240,95,400,150,IsUiGreen)>=12
         && UnitPanelColourHits(frame,400,95,565,150,IsUiYellow)>=12
         return "replay"
+    if EndRewardCaptionLikely(frame)
+        return "reward"
     return "none"
+}
+
+; End-game reward popups (Sky Portal, secret portal, ...) come before the
+; result screen and always carry the caption "(Click anywhere to continue)"
+; under the item name. Cheap gate: white text with a dark outline in that
+; caption band: 4-4.6% of samples on a real popup, ~2% when the unit hotbar's
+; "Lv." labels sit there, under 0.5% in other gameplay. OCR of the caption
+; confirms it before anything is clicked.
+IsCaptionWhite(color) {
+    RGB(color,&r,&g,&b)
+    return Min(r,g,b)>=215
+}
+
+IsCaptionOutline(color) {
+    RGB(color,&r,&g,&b)
+    return Max(r,g,b)<=70
+}
+
+EndRewardCaptionLikely(frame) {
+    global END_REWARD_CAPTION
+    band := END_REWARD_CAPTION
+    ; Sample real pixels (step 2): the caption strokes are thinner than the
+    ; 4-unit reference grid used by the other end-screen colour checks.
+    x1 := Max(2,Round(band.x1*frame.scaleX)-frame.left),x2 := Min(frame.width-3,Round(band.x2*frame.scaleX)-frame.left)
+    y1 := Max(2,Round(band.y1*frame.scaleY)-frame.top),y2 := Min(frame.height-3,Round(band.y2*frame.scaleY)-frame.top)
+    total := 0,outlined := 0,y := y1
+    while y<=y2 {
+        x := x1
+        while x<=x2 {
+            total += 1
+            if IsCaptionWhite(frame.At(x,y))
+                && (IsCaptionOutline(frame.At(x-2,y)) || IsCaptionOutline(frame.At(x+2,y))
+                || IsCaptionOutline(frame.At(x,y-2)) || IsCaptionOutline(frame.At(x,y+2)))
+                outlined += 1
+            x += 2
+        }
+        y += 2
+    }
+    return total && outlined/total>=0.03
+}
+
+ParseEndRewardRows(rows) {
+    ; Any spot dismisses the popup; this one is clear of the HUD buttons,
+    ; side popups and (later) the result modal's Next.
+    for row in rows {
+        if RegExMatch(NormalizeWords(row.text),"click\s*anywhere|to\s*continue")
+            return {stage:"reward",result:"",x:400,y:460}
+    }
+    return EndEmptyScreen()
 }
 
 ParseEndScreenRows(rows,geometry) {
@@ -63,12 +116,12 @@ ParseEndScreenRows(rows,geometry) {
 }
 
 ReadEndScreen(force := false) {
-    global gEndScreenAt,gEndScreenCache
+    global gEndScreenAt,gEndScreenCache,gEndRewardOcrQuietUntil
     if !force && gEndScreenCache && A_TickCount-gEndScreenAt<300
         return gEndScreenCache
     geometry := WindowGeometry(),screen := EndEmptyScreen()
     if geometry {
-        kind := EndScreenColours(RefPixels(100,60,780,455))
+        kind := EndScreenColours(RefPixels(100,60,780,522))
         if kind="next"
             screen := ParseEndScreenRows(ReadOcrRows(250,365,400,435),geometry)
         else if kind="replay" {
@@ -77,6 +130,12 @@ ReadEndScreen(force := false) {
             for row in ReadOcrRows(400,90,565,150)
                 rows.Push(row)
             screen := ParseEndScreenRows(rows,geometry)
+        } else if kind="reward" && A_TickCount>=gEndRewardOcrQuietUntil {
+            screen := ParseEndRewardRows(ReadOcrRows(300,490,500,525))
+            ; A gameplay scene that only looks like the caption must not
+            ; start an OCR read on every end-screen check.
+            if screen.stage="none"
+                gEndRewardOcrQuietUntil := A_TickCount+3000
         }
     }
     gEndScreenCache := screen,gEndScreenAt := A_TickCount
@@ -159,6 +218,7 @@ DismissEndRewards() {
 
 TryEndState() {
     global gRunning,gEndHandling,gAwaitingReplayMap,gEndResult,gEndNextClickAt,gEndRewardsDone,gEndRewardSweepAt,gMatchReported
+    global gEndScreenAt,gEndScreenCache
     global gAwaitingLobby,gQueueMode
     if gAwaitingReplayMap || gAwaitingLobby
         return true
@@ -176,7 +236,17 @@ TryEndState() {
     deadline := A_TickCount+60000
     while gRunning && A_TickCount<deadline {
         screen := ReadEndScreen()
-        if screen.stage="next" {
+        if screen.stage="reward" {
+            ; Reward popups come before Victory/Defeat; close each one and
+            ; let the loop carry on to the result screen.
+            if ClickEndGameButton(screen) {
+                Log("Endgame: end-game reward popup shown; clicked to continue.")
+                gEndScreenAt := 0,gEndScreenCache := 0
+                if !ActionPause(600)
+                    return false
+                continue
+            }
+        } else if screen.stage="next" {
             if gEndResult="" {
                 gEndResult := screen.result!=""?screen.result:ReadEndOutcome()
                 Log("Result: " StrUpper(gEndResult) "; visible Next starts the endgame flow.")
