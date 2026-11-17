@@ -1,15 +1,15 @@
 ﻿; [Reward popups] -> Result modal -> Next -> Replay -> wait for a fresh Vote Start.
 global gEndHandling := false,gAwaitingReplayMap := false,gAwaitingLobby := false,gEndResult := ""
 global gEndNextClickAt := 0,gEndScreenAt := 0,gEndScreenCache := 0
-global gEndRewardsDone := false,gEndRewardSweepAt := 0,gEndRewardOcrQuietUntil := 0
+global gEndRewardOcrQuietUntil := 0
 ; Reference-space band of the reward popup's "(Click anywhere to continue)".
 global END_REWARD_CAPTION := {x1:320,y1:498,x2:480,y2:518}
 
 ResetEndGameFlow() {
-    global gEndHandling,gAwaitingReplayMap,gAwaitingLobby,gEndResult,gEndNextClickAt,gEndScreenAt,gEndScreenCache,gEndRewardsDone,gEndRewardSweepAt,gEndRewardOcrQuietUntil
+    global gEndHandling,gAwaitingReplayMap,gAwaitingLobby,gEndResult,gEndNextClickAt,gEndScreenAt,gEndScreenCache,gEndRewardOcrQuietUntil
     gEndHandling := false,gAwaitingReplayMap := false,gAwaitingLobby := false,gEndResult := ""
     gEndNextClickAt := 0,gEndScreenAt := 0,gEndScreenCache := 0
-    gEndRewardsDone := false,gEndRewardSweepAt := 0,gEndRewardOcrQuietUntil := 0
+    gEndRewardOcrQuietUntil := 0
 }
 
 EndEmptyScreen() => {stage:"none",result:"",x:0,y:0}
@@ -116,7 +116,7 @@ ParseEndScreenRows(rows,geometry) {
 }
 
 ReadEndScreen(force := false) {
-    global gEndScreenAt,gEndScreenCache,gEndRewardOcrQuietUntil
+    global gEndScreenAt,gEndScreenCache,gEndRewardOcrQuietUntil,gEndHandling
     if !force && gEndScreenCache && A_TickCount-gEndScreenAt<300
         return gEndScreenCache
     geometry := WindowGeometry(),screen := EndEmptyScreen()
@@ -124,13 +124,16 @@ ReadEndScreen(force := false) {
         kind := EndScreenColours(RefPixels(100,60,780,522))
         if kind="next"
             screen := ParseEndScreenRows(ReadOcrRows(250,365,400,435),geometry)
-        else if kind="replay" {
+        if screen.stage="none" && (kind="replay" || gEndHandling) {
             ; Focused crops are important: full-screen OCR can miss Replay.
+            ; Once endgame is confirmed, do not let a missed colour gate
+            ; hide the exit buttons (or fail their pre-click recheck).
             rows := ReadOcrRows(240,90,400,150).Clone()
             for row in ReadOcrRows(400,90,565,150)
                 rows.Push(row)
             screen := ParseEndScreenRows(rows,geometry)
-        } else if kind="reward" && A_TickCount>=gEndRewardOcrQuietUntil {
+        }
+        if screen.stage="none" && (kind="reward" || gEndHandling) && A_TickCount>=gEndRewardOcrQuietUntil {
             screen := ParseEndRewardRows(ReadOcrRows(300,490,500,525))
             ; A gameplay scene that only looks like the caption must not
             ; start an OCR read on every end-screen check.
@@ -181,43 +184,8 @@ ReadEndOutcome() {
     return "unknown"
 }
 
-EndRewardClickAllowed() {
-    global gRunning,gEndHandling,gAwaitingReplayMap,gAwaitingLobby
-    return gRunning && gEndHandling && !gAwaitingReplayMap && !gAwaitingLobby && !HasVoteStart()
-}
-
-DismissEndRewards() {
-    global gRunning,gEndRewardsDone,gEndRewardSweepAt,gEndScreenAt,gEndScreenCache
-    hwnd := FindRoblox()
-    if !gRunning || !hwnd
-        return false
-    if !WinActive("ahk_id " hwnd) {
-        WinActivate "ahk_id " hwnd
-        if !WinWaitActive("ahk_id " hwnd,,1)
-            return false
-    }
-    if !CancelUnitPreview()
-        return false
-    Loop 5 {
-        if !gRunning
-            return false
-        if HasVoteStart()
-            return true
-        ; Below the result modal, away from Next, Replay, Return to lobby,
-        ; the minimap and the bottom unit bar. Never repeat a menu choice.
-        if !ClickRef(400,460,EndRewardClickAllowed)
-            return HasVoteStart()
-        if A_Index<5 && !ActionPause(300)
-            return false
-    }
-    gEndRewardsDone := true,gEndRewardSweepAt := A_TickCount
-    gEndScreenAt := 0,gEndScreenCache := 0
-    Log("Endgame: five reward-dismissal clicks completed (300ms between clicks).")
-    return true
-}
-
 TryEndState() {
-    global gRunning,gEndHandling,gAwaitingReplayMap,gEndResult,gEndNextClickAt,gEndRewardsDone,gEndRewardSweepAt,gMatchReported
+    global gRunning,gEndHandling,gAwaitingReplayMap,gEndResult,gEndNextClickAt,gMatchReported
     global gEndScreenAt,gEndScreenCache
     global gAwaitingLobby,gQueueMode
     if gAwaitingReplayMap || gAwaitingLobby
@@ -257,13 +225,10 @@ TryEndState() {
                 if ClickEndGameButton(screen) {
                     Log("Endgame: clicked visible Next; waiting for the match exit buttons.")
                     gEndNextClickAt := A_TickCount+2000
-                    if !DismissEndRewards()
-                        return false
+                    gEndScreenAt := 0,gEndScreenCache := 0
                 }
             }
         } else if screen.stage="replay" {
-            if !gEndRewardsDone && !DismissEndRewards()
-                return false
             ; The Next screen may have been missed, or its result unreadable:
             ; report before leaving. Next seen (result recorded) = defeat,
             ; Replay without Next = win, unless OCR reads the outcome here.
@@ -280,11 +245,6 @@ TryEndState() {
                 Log(gQueueMode?"Endgame: Return to lobby selected. Waiting for lobby Play.":"Endgame: Replay selected. Waiting for the next Vote Start.")
                 return true
             }
-        } else if gEndRewardsDone && A_TickCount-gEndRewardSweepAt>=5000 {
-            ; Rewards may arrive late after Next. The endgame latch keeps
-            ; these extra dismissals out of live placement/upgrade phases.
-            if !DismissEndRewards()
-                return false
         }
         if HasVoteStart() {
             gAwaitingReplayMap := true
