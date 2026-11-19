@@ -60,16 +60,46 @@ except Exception:
 class ScreenSource:
     """dxcam (Desktop Duplication) on the primary monitor, mss elsewhere."""
 
+    # dxcam can kill the whole process with no Python error on some PCs
+    # (graphics driver / GPU setup). It is first tried in a throwaway child
+    # process; only if that child creates it and grabs a frame is dxcam used
+    # here, otherwise every grab goes through mss.
+    DXCAM_PROBE = ("import dxcam\n"
+                   "d=dxcam.create(output_color='BGR')\n"
+                   "for _ in range(3):\n"
+                   "    d.grab(region=(0,0,min(640,d.width),min(480,d.height)))\n"
+                   "print('dxcam-ok')\n")
+
     def __init__(self):
         self.dx = None
         self.mss = None
-        try:
-            import dxcam
-            self.dx = dxcam.create(output_color="BGR")
-            self.dx_w, self.dx_h = self.dx.width, self.dx.height
-        except Exception:
-            self.dx = None
+        if self.dxcam_survives():
+            try:
+                import dxcam
+                self.dx = dxcam.create(output_color="BGR")
+                self.dx_w, self.dx_h = self.dx.width, self.dx.height
+            except Exception:
+                self.dx = None
         self.name = "dxcam" if self.dx else "mss"
+
+    @classmethod
+    def dxcam_survives(cls):
+        import subprocess, tempfile
+        try:
+            # Run from the temp folder so no file beside the macro can shadow
+            # dxcam; -E keeps PYTHONPATH out, user-site packages stay visible.
+            result = subprocess.run([sys.executable, "-E", "-c", cls.DXCAM_PROBE], cwd=tempfile.gettempdir(),
+                                    capture_output=True, text=True, timeout=10,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            return False
+        return result.returncode == 0 and "dxcam-ok" in result.stdout
+
+    @staticmethod
+    def new_mss():
+        import mss
+        # mss.mss() is deprecated in newer releases in favour of mss.MSS().
+        return getattr(mss, "MSS", mss.mss)()
 
     def grab(self, left, top, width, height):
         region = (left, top, left + width, top + height)
@@ -82,8 +112,7 @@ class ScreenSource:
             if self.usable(frame, width, height):
                 return np.ascontiguousarray(frame)
         if self.mss is None:
-            import mss
-            self.mss = mss.mss()
+            self.mss = self.new_mss()
         for attempt in range(2):
             try:
                 shot = self.mss.grab({"left": left, "top": top, "width": width, "height": height})
@@ -93,8 +122,7 @@ class ScreenSource:
             except Exception:
                 pass
             self.mss.close()
-            import mss
-            self.mss = mss.mss()
+            self.mss = self.new_mss()
         raise RuntimeError("screen capture is blank/unavailable; no path or placement decision made")
 
     @staticmethod

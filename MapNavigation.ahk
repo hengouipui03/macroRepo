@@ -800,6 +800,10 @@ VisionRequest(line) {
         }
         gVision.StdIn.WriteLine(line)
         reply := gVision.StdOut.ReadLine()
+        ; Python answers every request with a line (errors come back as
+        ; "fail"), so an empty reply means the process died mid-request.
+        if reply=""
+            throw Error("MinimapVision.py stopped without replying to '" StrSplit(line," ")[1] "'")
     } catch as err {
         gVisionFailed := true,gVisionRetryAt := A_TickCount+10000
         try gVision.Terminate()
