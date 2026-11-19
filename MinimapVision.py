@@ -881,9 +881,12 @@ class World:
         # colour test at about 30x19 px against the sell X's 40x31. Keep only
         # sell-X-sized marks: one stray icon added a fake row, broke the row
         # pitch, and left every tile's segments unreadable.
+        # The sell-X size is the MEDIAN mark, not the largest: animated red
+        # portraits (Phoenix flames, ~37x47 vs the X's 40x31) once became the
+        # "largest X" and removed every real X, so the bottom row was lost.
         if buttons:
-            mw=max(s[2] for s in buttons);mh=max(s[3] for s in buttons)
-            buttons=[s for s in buttons if s[2]>=mw*.8 and s[3]>=mh*.8]
+            mw=float(np.median([s[2] for s in buttons]));mh=float(np.median([s[3] for s in buttons]))
+            buttons=[s for s in buttons if abs(s[2]-mw)<=mw*.2 and abs(s[3]-mh)<=mh*.2]
         dark=np.max(image[top:bottom,int(w*.66):],axis=2)<85
         if not buttons or not dark.size or dark.mean()<.35:return {"open":1,"ready":0}
         bw=float(np.median([s[2] for s in buttons]));bh=float(np.median([s[3] for s in buttons]))

@@ -98,6 +98,12 @@ assert [c[10] for c in cells if c[6]=='0']==['0']*5,'Upg buttons at 688 Yen were
 odd=reference.copy();odd[600:711,1140:]=20
 state,cells=tiles(odd)
 assert state['lastcount']==1 and cells[-1][0]=='0',('odd unit count: #1 must be the lone bottom-LEFT tile',state)
+flames=mv.read_image(str(root/'unit-manager-phoenix-flames.jpg'));world.static=flames
+state=world.unit_manager(0,0,flames.shape[1],flames.shape[0])
+rows=sorted({float(e.split(',')[3]) for e in state['entries'].split(';')})
+assert state['lastcount']==1 and len(rows)==3,('Phoenix flame portraits must not replace the sell X marks',state)
+assert abs(float(state['last'])-rows[-1])<1 and float(state['last'])>500,('bottom row must be the lone #1 tile',state)
 print('PASS: tile segments (bright = done; dark body, with or without white outline = not done), Max read from the short word on a grey button, Upg affordability (bright vs dimmed), Upg click point, portrait colours, odd-count bottom row.')
 print('PASS: red portrait element icons are not sell X marks (real Nightmare Train frame reads every bar).')
 print('PASS: bottom-row portrait click patches remain clear; physical left/right columns; reference/client-crop/resize; disabled buttons and closed-manager rejection.')
+print('PASS: animated red portraits (Phoenix flames) larger than the sell X do not hide the real rows.')
